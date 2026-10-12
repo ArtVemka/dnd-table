@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' http: https: ws: wss:; font-src 'self' data:;"
+    />
+    <title>Лист персонажа</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="sheet-window">
+    <div id="toasts" class="toasts"></div>
+
+    <header class="sheet-window__bar">
+      <div class="sheet-window__titles">
+        <div id="sheet-title" class="sheet-window__title">Лист персонажа</div>
+        <div id="sheet-sub" class="sheet-window__sub muted">подключаемся к столу…</div>
+      </div>
+      <div class="sheet-window__actions">
+        <span id="sheet-conn" class="badge badge--muted">—</span>
+        <button id="btn-refresh-sheet" class="btn btn--tiny" type="button">Обновить</button>
+      </div>
+    </header>
+
+    <main class="sheet-window__body">
+      <div id="sheet-root" class="panel panel--tab is-active"></div>
+    </main>
+
+    <script src="vendor/socket.io.min.js"></script>
+    <script src="dnd5e.js"></script>
+    <script src="sheet.js"></script>
+    <script src="local-table.js"></script>
+    <script src="sheet-window.js"></script>
+  </body>
+</html>

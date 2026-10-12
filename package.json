@@ -1,0 +1,55 @@
+{
+  "name": "dnd-table",
+  "version": "0.9.0-b",
+  "private": true,
+  "description": "Portable desktop application for D&D 5e",
+  "author": {
+    "name": "D&D Table"
+  },
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "node scripts/copy-vendor.js",
+    "dist": "electron-builder --win dir",
+    "dist:portable": "node scripts/make-portable.js"
+  },
+  "dependencies": {
+    "@number0/iroh": "^1.1.0",
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^26.15.3",
+    "socket.io-client": "^4.8.3"
+  },
+  "build": {
+    "appId": "ru.dndstol.app",
+    "productName": "D&D Стол",
+    "directories": {
+      "output": "dist-final",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "preload-sheet.js",
+      "package.json",
+      "server/**/*",
+      "renderer/**/*",
+      "scripts/copy-vendor.js"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+data/
+*.log
+test-output.txt
+verify.log
+
+# Результаты сборки и папка для отправки
+dist/
+dist-final/
+release/
+
+# Портативный режим: маркер и папка данных не коммитятся
+portable.txt

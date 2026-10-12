@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' http: https: ws: wss:; font-src 'self' data:;"
+    />
+    <title>D&amp;D Стол</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="toasts" class="toasts"></div>
+
+    <!-- ================= Экран 1: главный ================= -->
+    <section id="screen-home" class="screen screen--centered is-active">
+      <div class="home">
+        <div class="home__brand">
+          <div class="home__logo">D&amp;D</div>
+          <h1 class="home__title">Стол</h1>
+          <p class="home__subtitle">
+            D&amp;D 5e (2014) · игра по локальной или виртуальной сети
+          </p>
+        </div>
+
+        <div class="home__groups">
+          <div class="home__group">
+            <h2 class="home__group__title">Мастеру</h2>
+            <div class="home__cards">
+              <button id="btn-go-create" class="card" type="button">
+                <span class="card__icon">✚</span>
+                <span class="card__title">Создать новую кампанию</span>
+                <span class="card__text">Стать ДМ и поднять стол на этом компьютере</span>
+              </button>
+
+              <button id="btn-go-load" class="card" type="button">
+                <span class="card__icon">▤</span>
+                <span class="card__title">Загрузить кампанию</span>
+                <span class="card__text">Продолжить сохранённую игру</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="home__group">
+            <h2 class="home__group__title">Игроку</h2>
+            <div class="home__cards">
+              <button id="btn-go-join" class="card" type="button">
+                <span class="card__icon">⇥</span>
+                <span class="card__title">Подключиться к столу</span>
+                <span class="card__text">Войти по адресу ДМ или по его P2P-билету</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="home__footer">
+          <span id="home-datadir" class="muted">…</span>
+          <button id="btn-open-datadir" class="btn btn--ghost btn--tiny" type="button">Открыть папку данных</button>
+          <button id="btn-settings-home" class="btn btn--ghost btn--tiny" type="button">⚙ Настройки</button>
+        </div>
+        <p class="muted home__notice">
+          Приложение не создаёт сеть и не поднимает VPN. Оно только использует уже существующую
+          локальную сеть или виртуальную сеть (Hamachi, Radmin VPN, ZeroTier) либо проброс порта
+          через Porthole (Local Port Sharing).
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= Экран 2: создание кампании ================= -->
+    <section id="screen-create" class="screen screen--centered">
+      <div class="dialog">
+        <button class="btn btn--ghost dialog__back" data-back type="button">← Назад</button>
+        <h2 class="dialog__title">Новая кампания</h2>
+        <p class="dialog__text">
+          Кампания сохраняется на этом компьютере: файл состояния и все загруженные изображения.
+        </p>
+        <label class="field">
+          <span class="field__label">Название кампании</span>
+          <input id="create-name" class="field__input" type="text" maxlength="60" placeholder="Например, «Проклятие Страда»" />
+        </label>
+        <div class="dialog__actions">
+          <button id="btn-create-start" class="btn btn--accent" type="button">Создать и запустить стол</button>
+        </div>
+        <div id="create-status" class="status"></div>
+      </div>
+    </section>
+
+    <!-- ================= Экран 3: загрузка кампании ================= -->
+    <section id="screen-load" class="screen screen--centered">
+      <div class="dialog dialog--wide">
+        <button class="btn btn--ghost dialog__back" data-back type="button">← Назад</button>
+        <h2 class="dialog__title">Сохранённые кампании</h2>
+        <div id="campaign-list" class="campaign-list"></div>
+        <div id="load-selected" class="load-selected" hidden>
+          <div class="load-selected__info">
+            <div class="load-selected__name" id="load-selected-name"></div>
+            <div class="muted" id="load-selected-meta"></div>
+          </div>
+          <button id="btn-start-loaded" class="btn btn--accent" type="button">Запустить стол</button>
+        </div>
+        <div id="load-status" class="status"></div>
+      </div>
+    </section>
+
+    <!-- ================= Экран 5: подключение игрока ================= -->
+    <section id="screen-join" class="screen screen--centered">
+      <div class="dialog">
+        <button class="btn btn--ghost dialog__back" data-back type="button">← Назад</button>
+        <h2 class="dialog__title">Подключение к столу</h2>
+        <p class="dialog__text">
+          Введите адрес, который показал ДМ, например <code>http://192.168.1.10:32100</code>
+        </p>
+        <label class="field">
+          <span class="field__label">Адрес сервера</span>
+          <input id="join-address" class="field__input" type="text" placeholder="http://192.168.1.10:32100" />
+        </label>
+        <label class="field">
+          <span class="field__label">Ваше имя</span>
+          <input id="join-name" class="field__input" type="text" maxlength="40" placeholder="Как вас видеть за столом" />
+        </label>
+        <div class="dialog__actions">
+          <button id="btn-join" class="btn btn--accent" type="button">Подключиться</button>
+        </div>
+        <div id="join-status" class="status"></div>
+
+        <div class="join-p2p">
+          <div class="join-p2p__divider">— или по P2P, без общей сети и VPN —</div>
+          <label class="field">
+            <span class="field__label">P2P-билет от ДМ</span>
+            <input id="join-p2p-ticket" class="field__input" type="text" placeholder="endpoint…" />
+          </label>
+          <div class="dialog__actions">
+            <button id="btn-join-p2p" class="btn btn--accent" type="button">Подключиться по P2P</button>
+          </div>
+        </div>
+
+        <p class="muted">
+          Ваш локальный идентификатор игрока хранится на этом компьютере. Если вы переподключитесь,
+          лист персонажа восстановится автоматически.
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= Экраны 4 и 6: общий стол ================= -->
+    <section id="screen-table" class="screen screen--table">
+      <header class="topbar">
+        <div class="topbar__left">
+          <button id="btn-leave" class="btn btn--ghost" type="button">← Выйти</button>
+          <button id="btn-panel-left" class="btn btn--ghost btn--tiny" type="button">◀ Участники</button>
+          <div class="topbar__titles">
+            <div id="table-campaign" class="topbar__title">Кампания</div>
+            <div id="table-sub" class="topbar__sub muted">—</div>
+          </div>
+        </div>
+        <div class="topbar__right">
+          <span id="conn-badge" class="badge badge--muted">—</span>
+          <span id="role-badge" class="badge">—</span>
+          <button id="btn-panel-right" class="btn btn--ghost btn--tiny" type="button">Панель ▸</button>
+          <button id="btn-settings-table" class="btn btn--ghost btn--tiny" type="button">⚙ Настройки</button>
+          <button id="btn-save-campaign" class="btn btn--accent" type="button">Сохранить кампанию</button>
+          <button id="btn-stop-host" class="btn btn--danger" type="button">Остановить стол</button>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="col col--left">
+          <div class="panel">
+            <div class="panel__title">Участники</div>
+            <div id="players-root"></div>
+          </div>
+
+          <div class="panel" id="addresses-panel">
+            <div class="panel__title panel__title--row">
+              <span>Адреса для подключения</span>
+              <button id="addresses-toggle" class="btn btn--ghost btn--tiny" type="button" aria-expanded="true">Скрыть ▾</button>
+            </div>
+            <div id="addresses-summary" class="addr-summary muted" hidden></div>
+            <div id="addresses-root"></div>
+            <p class="hint">
+              Если игроки не могут подключиться, проверьте, что все находятся в одной локальной или
+              виртуальной сети, и разрешите приложение в брандмауэре.
+            </p>
+          </div>
+        </aside>
+
+        <main class="col col--center">
+          <div id="map-root" class="panel panel--map"></div>
+        </main>
+
+        <aside class="col col--right">
+          <div class="tabs">
+            <button class="tabs__btn is-active" data-tab="chat" type="button">
+              <span class="tabs__icon">💬</span><span class="tabs__label">Чат</span>
+            </button>
+            <button class="tabs__btn" data-tab="dice" type="button">
+              <span class="tabs__icon">🎲</span><span class="tabs__label">Кубики</span>
+            </button>
+            <button class="tabs__btn" data-tab="sheet" type="button">
+              <span class="tabs__icon">📄</span><span class="tabs__label">Лист</span>
+            </button>
+            <button class="tabs__btn" data-tab="tokens" type="button">
+              <span class="tabs__icon">⬤</span><span class="tabs__label">Фишки</span>
+            </button>
+          </div>
+          <div class="panel panel--tab is-active" id="tab-chat"></div>
+          <div class="panel panel--tab" id="tab-dice"></div>
+          <div class="panel panel--tab" id="tab-sheet"></div>
+          <div class="panel panel--tab" id="tab-tokens"></div>
+        </aside>
+      </div>
+    </section>
+
+    <script src="vendor/socket.io.min.js"></script>
+    <script src="dnd5e.js"></script>
+    <script src="sheet.js"></script>
+    <script src="table.js"></script>
+    <script src="local-table.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

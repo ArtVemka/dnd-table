@@ -1011,9 +1011,12 @@
         const row = el('div', 'addr');
         const info = el('div', 'addr__info');
         info.appendChild(el('div', 'addr__url', entry.url));
-        info.appendChild(el('div', 'addr__meta muted', entry.label && entry.kind !== 'lan' && entry.kind !== 'virtual'
-          ? `${entry.label} · ${entry.iface}`
-          : entry.iface || entry.label));
+        // У локального адреса поля iface нет. Раньше оно подставлялось
+        // безусловно, и в подписи появлялось «На этом компьютере · undefined».
+        const meta = entry.iface && entry.kind !== 'lan' && entry.kind !== 'virtual'
+          ? (entry.label ? `${entry.label} · ${entry.iface}` : entry.iface)
+          : (entry.iface || entry.label || '');
+        info.appendChild(el('div', 'addr__meta muted', meta));
         row.appendChild(info);
 
         const copy = el('button', 'btn btn--tiny', 'Скопировать адрес');

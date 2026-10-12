@@ -11,7 +11,7 @@
   "scripts": {
     "start": "electron .",
     "postinstall": "node scripts/copy-vendor.js",
-    "dist": "electron-builder --win dir",
+    "dist": "electron-builder --dir",
     "dist:portable": "node scripts/make-portable.js"
   },
   "dependencies": {

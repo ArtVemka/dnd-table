@@ -70,6 +70,18 @@ jobs:
       - name: Собрать приложение
         run: npm run dist
 
+      - name: Проверить результат сборки
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "dist-final содержит:"
+          ls -la dist-final || true
+          for d in dist-final/*/; do
+            echo "--- ${d}: $(find "$d" -type f | wc -l) файлов"
+            ls -la "$d" | head -5
+          done
+          echo "exe найден: $(find dist-final -maxdepth 2 -name '*.exe' -o -maxdepth 2 -name 'DND-Table' | head -3)"
+
       - name: Собрать переносимый комплект
         run: npm run dist:portable
 

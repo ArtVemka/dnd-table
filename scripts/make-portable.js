@@ -177,6 +177,30 @@ function assertAppNotRunning() {
   }
 }
 
+/**
+ * Рекурсивное копирование папки.
+ *
+ * Раньше здесь стоял fs.cpSync — на Windows-раннере GitHub Actions он отрабатывал
+ * без ошибки, но не переносил ни одного файла, и падение приходило позже и
+ * совсем в другом месте. Копируем сами: так любая проблема видна сразу, а
+ * счётчик перенесённых файлов попадает в отчёт сборки.
+ */
+function copyDir(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  let copied = 0;
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copied += copyDir(from, to);
+    } else if (entry.isFile()) {
+      fs.copyFileSync(from, to);
+      copied += 1;
+    }
+  }
+  return copied;
+}
+
 function copyApp() {
   if (!fs.existsSync(distUnpacked)) {
     throw new Error(`Нет папки ${distUnpacked}. Сначала выполните: npm run dist`);
@@ -187,15 +211,13 @@ function copyApp() {
   fs.mkdirSync(releaseApp, { recursive: true });
   // Копируем файлы поверх, НЕ удаляя папку: внутри лежит data с кампаниями,
   // картами и картинками фишек. Обновление сборки не должно их терять.
-  fs.cpSync(distUnpacked, releaseApp, { recursive: true, force: true });
-  // Раньше копирование молча могло ничего не перенести, и падение приходило
-  // позже и совсем в другом месте. Проверяем сразу и называем настоящую причину.
-  const copied = fs.readdirSync(releaseApp);
-  if (!copied.length) {
+  const copied = copyDir(distUnpacked, releaseApp);
+  if (!copied) {
     throw new Error(
       `Копирование ничего не перенесло из ${distUnpacked} — папка сборки пуста или недоступна.`
     );
   }
+  return copied;
 }
 
 const DATA_NOTE = 'Сюда игра складывает кампании и все загруженные картинки.\r\n'
@@ -346,7 +368,7 @@ function main() {
   const campaignsDir = path.join(releaseApp, 'data', 'campaigns');
   const campaignsBefore = fs.existsSync(campaignsDir) ? fs.readdirSync(campaignsDir).length : 0;
 
-  copyApp();
+  const copiedFiles = copyApp();
   preparePortableBits();
   makeZip();
 
@@ -356,6 +378,7 @@ function main() {
 
   console.log('\nГотово к отправке\n');
   console.log(`  Папка:  ${releaseApp}`);
+  console.log(`  Файлов перенесено из сборки: ${copiedFiles}`);
   console.log(`  Игра:   ${path.join(releaseApp, exeName)}`);
   console.log(`  Архив:  ${zipPath} (${zipSize} МБ)`);
   console.log(`  Данные: ${path.join(releaseApp, 'data')} — поедут вместе с папкой`);

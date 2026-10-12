@@ -426,8 +426,11 @@ async function main() {
 
   p1.log.mapUpdated.length = 0;
   emit(dm, 'selectMap', { type: 'battle', mapId: secondBattle.items[0].id });
+  // Ждём именно события с activeId нужной карты. Если брать «последнее с
+  // activeId», можно поймать ещё не долетевшее событие загрузки пещеры —
+  // проверка прошла бы раньше, чем сервер применил selectMap, и упала бы.
   const switched = await waitFor(
-    () => p1.log.mapUpdated.filter((item) => item.type === 'battle' && item.activeId).pop(),
+    () => p1.log.mapUpdated.filter((item) => item.activeId === secondBattle.items[0].id).pop(),
     'переключение карты во вкладке'
   );
   check('ДМ переключается между картами вкладки, игроки видят выбранную', () => {

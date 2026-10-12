@@ -1,0 +1,157 @@
+name: Сборка
+
+# Собирает переносимые комплекты игры под Windows и Linux и, если сборка
+# запушена на теге, прикрепляет их к релизу на GitHub.
+#
+# Используются только официальные actions GitHub и gh из стандартного образа
+# runner: никаких сторонних action'ов в сборку не попадает.
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            artifact: windows-x64
+          - name: Linux x64
+            os: ubuntu-latest
+            artifact: linux-x64
+
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+
+      - name: Подготовить Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Установить зависимости
+        run: npm ci
+
+      # Проверки сервера идут до сборки и останавливают прогон, если код сломан.
+      # В наборе есть гонка по картам: проверка может сработать раньше, чем сервер
+      # применит событие. Поэтому одна попытка на повтор — иначе сборка падает
+      # случайно, и к красным билдам привыкают.
+      - name: Проверить сервер
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in 1 2; do
+            if node test/integration.js; then
+              echo "Проверки пройдены с попытки ${attempt}"
+              exit 0
+            fi
+            echo "Попытка ${attempt} не удалась, повторяем"
+            sleep 5
+          done
+          echo "::error::Проверки сервера не прошли даже со второй попытки"
+          exit 1
+
+      - name: Собрать приложение
+        run: npm run dist
+
+      - name: Собрать переносимый комплект
+        run: npm run dist:portable
+
+      - name: Переименовать архив под платформу
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          # Ищем архив по маске, а не по имени: в нём кириллица, и её
+          # потеря при передаче скрипта в bash ломала бы путь.
+          shopt -s nullglob
+          archives=(release/*.zip)
+          if [ ${#archives[@]} -ne 1 ]; then
+            echo "Ожидался ровно один архив, найдено: ${#archives[@]}" >&2
+            exit 1
+          fi
+          mv "${archives[0]}" "release/DND-Table-${version}-${{ matrix.artifact }}.zip"
+          ls -la release/*.zip
+
+      - name: Прикрепить артефакт сборки
+        uses: actions/upload-artifact@v4
+        with:
+          name: dnd-table-${{ matrix.artifact }}
+          path: release/DND-Table-*.zip
+          retention-days: 30
+
+  release:
+    name: Опубликовать релиз
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+
+      - name: Подготовить Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Оба комплекта собираются параллельно, а релиз создаётся один раз
+      # после них обоих — иначе задания начали бы гонку за один и тот же тег.
+      - name: Забрать собранные комплекты
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dnd-table-*
+          merge-multiple: true
+
+      - name: Опубликовать релиз
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if gh release view "v${version}" >/dev/null 2>&1; then
+            echo "Релиз v${version} уже существует"
+          else
+            gh release create "v${version}" \
+              --title "D&D Стол ${version}" \
+              --notes-file - <<'NOTES'
+          ## D&D Стол
+
+          Переносимая версия: установка не нужна, распакуйте архив целиком
+          и запустите игру. Кампании, карты и картинки складываются в папку
+          `data` рядом с игрой — перенос папки целиком переносит всю сессию.
+
+          ### Как скачать
+
+          | Файл | Система |
+          |---|---|
+          | `DND-Table-*-windows-x64.zip` | Windows 64 бита |
+          | `DND-Table-*-linux-x64.zip` | Linux 64 бита |
+
+          ### Про сеть
+
+          Игра не создаёт сеть и не поднимает VPN. Участники должны быть в
+          одной локальной или виртуальной сети (Hamachi, Radmin VPN, ZeroTier),
+          либо на столе у ДМ должен быть проброс порта. Альтернатива — P2P по
+          билету iroh-endpoint из панели адресов на экране стола.
+          NOTES
+            dist/*.zip
+          fi
+          gh release view "v${version}" --json assets --jq '.assets[].name'

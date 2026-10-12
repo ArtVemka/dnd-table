@@ -25,25 +25,30 @@ const root = path.join(__dirname, '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const appName = packageJson.build.productName;
 const outputDir = (packageJson.build && packageJson.build.directories && packageJson.build.directories.output) || 'dist';
-const distUnpacked = path.join(root, outputDir, 'win-unpacked');
+// electron-builder называет папку сборки по платформе: win-unpacked, linux-unpacked…
+const unpackedDirName = process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`;
+const distUnpacked = path.join(root, outputDir, unpackedDirName);
 const releaseDir = path.join(root, 'release');
 
 const releaseApp = path.join(releaseDir, appName);
 const zipPath = path.join(releaseDir, `${appName}.zip`);
 
+const launchHint = process.platform === 'win32'
+  ? `   Дважды щёлкните «${appName}.exe». Установка не нужна, права администратора тоже.`
+  : `   Откройте папку и запустите файл «${appName}» (в некоторых файловых менеджерах\n   он называется «${appName}.AppImage»). Сделайте его исполняемым, если он не запускается:\n   правый клик → «Свойства» → «Разрешить выполнение как программы».`;
+
 const READ_ME = `D&D Стол — как играть
 ========================================================
 
 1. ЗАПУСК
-   Дважды щёлкните «${appName}.exe».
-   Установка не нужна, права администратора тоже.
+   ${launchHint}
 
-   ЭТУ ПАПКУ НУЖНО РАСПАКОВАТЬ ЦЕЛИКОМ, а не вытаскивать из неё один exe:
+   ЭТУ ПАПКУ НУЖНО РАСПАКОВАТЬ ЦЕЛИКОМ, а не вытаскивать из неё один файл:
    рядом с ним лежат служебные папки, без них игра не запустится.
 
 2. ДАННЫЕ
    Всё, что вы создадите — кампании, карты, картинки фишек — сохраняется в
-   подпапку data внутри этой же папки. Ничего не пишется в Windows.
+   подпапку data внутри этой же папки. Ничего не пишется в систему.
    Хотите перенести игру на другой компьютер — просто скопируйте папку целиком.
 
 3. КАК СОБРАТЬСЯ ЗА СТОЛОМ
@@ -124,9 +129,22 @@ const READ_ME = `D&D Стол — как играть
 Версия игры: 0.9b.
 `;
 
+/**
+ * Ищет запускаемый файл игры в папке сборки. На Windows это «<name>.exe», на
+ * Linux и macOS — файл с тем же именем, но без расширения.
+ */
 function findExe(dir) {
-  const name = fs.readdirSync(dir).find((file) => file.toLowerCase().endsWith('.exe'));
-  if (!name) throw new Error(`В ${dir} нет exe`);
+  const entries = fs.readdirSync(dir).filter((file) => {
+    if (process.platform === 'win32') return file.toLowerCase().endsWith('.exe');
+    // В папке сборки Linux лежит ровно один файл без расширения — сама игра.
+    try {
+      return fs.statSync(path.join(dir, file)).isFile();
+    } catch {
+      return false;
+    }
+  });
+  const name = entries.find((file) => path.parse(file).name === appName) || entries[0];
+  if (!name) throw new Error(`В ${dir} нет запускаемого файла игры`);
   return name;
 }
 
@@ -135,7 +153,7 @@ function findExe(dir) {
  * иначе часть файлов не заменится и останется «полусобранное» состояние.
  */
 function assertAppNotRunning() {
-  const exePath = path.join(releaseApp, `${appName}.exe`);
+  const exePath = path.join(releaseApp, `${appName}${process.platform === 'win32' ? '.exe' : ''}`);
   if (!fs.existsSync(exePath)) return;
   try {
     const handle = fs.openSync(exePath, 'r+');
@@ -197,14 +215,22 @@ function sleepSync(ms) {
 function compressArchive(attempts = 3, delayMs = 5000) {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      execFileSync('powershell.exe', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        // -ErrorAction Stop: без него PowerShell сообщает о занятом файле, но
-        // возвращает код 0, и на выходе получается молча испорченный архив.
-        `Compress-Archive -LiteralPath '${releaseApp}' -DestinationPath '${zipPath}' -CompressionLevel Optimal -Force -ErrorAction Stop`
-      ], { stdio: 'inherit' });
+      if (process.platform === 'win32') {
+        execFileSync('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          // -ErrorAction Stop: без него PowerShell сообщает о занятом файле, но
+          // возвращает код 0, и на выходе получается молча испорченный архив.
+          `Compress-Archive -LiteralPath '${releaseApp}' -DestinationPath '${zipPath}' -CompressionLevel Optimal -Force -ErrorAction Stop`
+        ], { stdio: 'inherit' });
+      } else {
+        // На Linux и macOS PowerShell нет — упаковываем системным zip.
+        execFileSync('zip', ['-r', '-q', '-9', zipPath, appName], {
+          cwd: releaseDir,
+          stdio: 'inherit'
+        });
+      }
       return;
     } catch (error) {
       if (attempt >= attempts) throw error;
@@ -254,12 +280,16 @@ function verifyZip() {
   const checkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-zip-check-'));
   const problems = [];
   try {
-    execFileSync('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${checkDir}' -Force`
-    ], { stdio: 'ignore' });
+    if (process.platform === 'win32') {
+      execFileSync('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${checkDir}' -Force`
+      ], { stdio: 'ignore' });
+    } else {
+      execFileSync('unzip', ['-q', '-o', zipPath, '-d', checkDir], { stdio: 'ignore' });
+    }
 
     const unpacked = path.join(checkDir, appName);
     if (!fs.existsSync(unpacked)) {
@@ -267,8 +297,10 @@ function verifyZip() {
       return problems;
     }
     const exeName = findExe(unpacked);
-    if (exeName !== `${appName}.exe`) {
-      problems.push(`имя exe испортилось: «${exeName}» вместо «${appName}.exe»`);
+    // На Windows игра запускается из .exe, на Linux — из одноимённого файла без
+    // расширения, поэтому сверяем только имя, а не суффикс.
+if (path.parse(exeName).name !== appName) {
+      problems.push(`имя запускаемого файла испортилось: «${exeName}» вместо «${appName}»`);
     }
     for (const required of ['portable.txt', 'ПРОЧТИ МЕНЯ.txt', 'resources', 'locales', 'data']) {
       if (!fs.existsSync(path.join(unpacked, required))) problems.push(`в архиве нет «${required}»`);

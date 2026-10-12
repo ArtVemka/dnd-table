@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld('desktop', {
   onIrohPeerLeft: (callback) => subscribe('iroh:peer-left', callback),
   onIrohPeersUpdate: (callback) => subscribe('iroh:peers-update', callback),
 
+  // Импорт внешнего приключения (Foundry VTT)
+  pickAdventureFile: () => ipcRenderer.invoke('adventure:pickFile'),
+  inspectAdventure: (filePath) => ipcRenderer.invoke('adventure:inspect', filePath),
+  importAdventure: (filePath, include) => ipcRenderer.invoke('adventure:import', filePath, include),
+
   // Лист персонажа в отдельном окне
   openSheetWindow: (request) => ipcRenderer.invoke('sheet:openWindow', request),
 

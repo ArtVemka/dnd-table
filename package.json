@@ -12,7 +12,9 @@
     "start": "electron .",
     "postinstall": "node scripts/copy-vendor.js",
     "dist": "electron-builder --dir",
-    "dist:portable": "node scripts/make-portable.js"
+    "dist:portable": "node scripts/make-portable.js",
+    "test": "node test/integration.js && node test/importer.js",
+    "test:importer": "node test/importer.js"
   },
   "dependencies": {
     "@number0/iroh": "^1.1.0",

@@ -2119,3 +2119,90 @@ code {
   flex: 1;
   min-height: 0;
 }
+
+/* --------------------------------------------------- Импорт приключения */
+
+/* Отдельный класс, а не .modal-overlay: окно импорта живёт в статическом HTML,
+   а окно настроек создаётся скриптом. С общим классом поиск «первого оверлея»
+   находил бы не то окно. */
+.import-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: rgba(8, 6, 4, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: toast-in 0.15s ease;
+}
+
+.addr-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow: auto;
+  margin: 12px 0;
+}
+
+.import-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.import-row input[type='checkbox'] {
+  margin-top: 3px;
+  flex: none;
+}
+
+.import-row.is-disabled {
+  opacity: 0.55;
+}
+
+.import-row__text {
+  min-width: 0;
+}
+
+.import-row__name {
+  font-size: 13px;
+}
+
+.import-row__meta,
+.import-row__note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.import-row__note {
+  color: var(--accent);
+}
+
+.import-warnings {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--warn, #d9a441);
+}
+
+.import-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-right: auto;
+  cursor: pointer;
+}

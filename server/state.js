@@ -11,7 +11,7 @@
 
 const crypto = require('crypto');
 
-const CAMPAIGN_FORMAT_VERSION = 1;
+const CAMPAIGN_FORMAT_VERSION = 2;
 
 const LIMITS = {
   maxNameLength: 40,
@@ -25,7 +25,16 @@ const LIMITS = {
   minAbility: 1,
   maxAbility: 30,
   /** Сколько карт можно держать в одной вкладке (общая / локация / рисунок). */
-  maxMapsPerType: 20
+  maxMapsPerType: 20,
+  /** Импортированное приключение: сколько записей каждого вида. */
+  maxAdventureNotes: 300,
+  maxAdventureItems: 500,
+  maxAdventureTables: 200,
+  maxAdventureActors: 200,
+  maxAdventureTitle: 120,
+  maxAdventureText: 20000,
+  // Ссылка на картинку: /files/<имя> или путь из архива импорта.
+  maxAdventureImageRef: 2048
 };
 
 const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
@@ -168,6 +177,56 @@ function sanitizeText(value, maxLength) {
 }
 
 /**
+ * Приводит импортированное приключение к виду, который безопасно отдать
+ * интерфейсу. Всё прогоняется через те же ограничения, что и остальной
+ * текст: неизвестные поля не сохраняются, длинные строки обрезаются.
+ *
+ * Старые кампании формата 1 секции adventure не содержат — для них возвращается
+ * null, миграция данных при этом не нужна.
+ * @param {unknown} input
+ * @returns {object|null}
+ */
+function normalizeAdventure(input) {
+  if (!input || typeof input !== 'object') return null;
+  const raw = /** @type {Record<string, any>} */ (input);
+  const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
+
+  return {
+    id: String(raw.id || ''),
+    name: sanitizeText(raw.name, LIMITS.maxAdventureTitle) || 'Приключение',
+    source: sanitizeText(raw.source, 40) || 'неизвестно',
+    importedAt: raw.importedAt || new Date().toISOString(),
+    notes: list(raw.notes, LIMITS.maxAdventureNotes).map((item, index) => ({
+      id: String((item && item.id) || `note-${index}`),
+      title: sanitizeText(item && item.title, LIMITS.maxAdventureTitle) || 'Заметка',
+      text: sanitizeText(item && item.text, LIMITS.maxAdventureText),
+      sourceId: String((item && item.sourceId) || '')
+    })),
+    items: list(raw.items, LIMITS.maxAdventureItems).map((item, index) => ({
+      id: String((item && item.id) || `item-${index}`),
+      name: sanitizeText(item && item.name, LIMITS.maxAdventureTitle) || 'Предмет',
+      type: sanitizeText(item && item.type, 60),
+      sourceId: String((item && item.sourceId) || '')
+    })),
+    tables: list(raw.tables, LIMITS.maxAdventureTables).map((item, index) => ({
+      id: String((item && item.id) || `table-${index}`),
+      name: sanitizeText(item && item.name, LIMITS.maxAdventureTitle) || 'Таблица',
+      formula: sanitizeText(item && item.formula, 200),
+      description: sanitizeText(item && item.description, LIMITS.maxAdventureText),
+      sourceId: String((item && item.sourceId) || '')
+    })),
+    actors: list(raw.actors, LIMITS.maxAdventureActors).map((item, index) => ({
+      id: String((item && item.id) || `actor-${index}`),
+      name: sanitizeText(item && item.name, LIMITS.maxAdventureTitle) || 'Персонаж',
+      // Картинки импорта — это ссылки вида /files/<имя>. Не строка сюда не попадает:
+      // приводить 42 к «42» зачем, а вот тихо испорченная ссылка мешает потом.
+      image: typeof item?.image === 'string' ? sanitizeText(item.image, LIMITS.maxAdventureImageRef) : '',
+      sourceId: String((item && item.sourceId) || '')
+    }))
+  };
+}
+
+/**
  * Приводит произвольный объект листа к валидной структуре D&D 5e 2014.
  * Всё, что не проходит проверку, заменяется значением по умолчанию.
  * @param {unknown} input
@@ -252,6 +311,13 @@ class RoomState {
     this.diceHistory = [];
     /** @type {object[]} */
     this.chatHistory = [];
+    /**
+     * Импортированное внешнее приключение: журнал, предметы, таблицы, NPC.
+     * null, пока приключение не импортировано (в том числе у кампаний
+     * старого формата, где такой секции просто не было).
+     * @type {object|null}
+     */
+    this.adventure = null;
     this.dirty = false;
     if (campaign && campaign.state) this.hydrate(campaign.state);
   }
@@ -304,6 +370,7 @@ class RoomState {
     this.chatHistory = Array.isArray(data.chatHistory)
       ? data.chatHistory.slice(-LIMITS.maxChatHistory)
       : [];
+    this.adventure = normalizeAdventure(data.adventure);
   }
 
   /**
@@ -391,6 +458,7 @@ class RoomState {
       tokens: this.tokens,
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory),
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory),
+      adventure: this.adventure,
       savedAt: new Date().toISOString()
     };
   }
@@ -515,6 +583,10 @@ class RoomState {
         updatedAt: this.campaign?.updatedAt || null,
         version: this.campaign?.version || CAMPAIGN_FORMAT_VERSION
       },
+      // Журнал и справочники приключения нужны мастеру. Игроку отдаём null:
+      // отдельного экрана для них пока нет, а лишние данные на клиенте
+      // только мешают.
+      adventure: isDm ? this.adventure : null,
       players: this.playerList(),
       sheets,
       maps: this.maps,
@@ -560,6 +632,7 @@ module.exports = {
   newMapId,
   newTokenId,
   normalizeSheet,
+  normalizeAdventure,
   proficiencyBonus,
   sanitizeText
 };

@@ -1652,6 +1652,114 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * Импорт внешнего приключения
+   * ------------------------------------------------------------------ */
+
+  /** Кэш предпросмотра: между показом и применением файл перечитывать незачем. */
+  let adventurePreview = null;
+  let adventureFilePath = '';
+
+  function closeImportDialog() {
+    adventurePreview = null;
+    $('#import-overlay').hidden = true;
+  }
+
+  function renderImportPreview(preview) {
+    const summary = $('#import-summary');
+    const counts = preview.counts.map((item) => `${item.label.toLowerCase()} — ${item.count}`).join(', ');
+    summary.textContent = preview.selectable
+      ? `«${preview.sourceTitle}»: найдено ${preview.total}, выбрать можно ${preview.selectable}. ${counts}.`
+      : `«${preview.sourceTitle}»: подходящих документов нет.`;
+
+    const warnings = $('#import-warnings');
+    warnings.innerHTML = '';
+    for (const text of preview.warnings) {
+      warnings.appendChild(el('li', 'import-row__note', text));
+    }
+    for (const item of preview.skipped) {
+      warnings.appendChild(el('li', '', `${item.name || 'без названия'} — ${item.reason}`));
+    }
+    warnings.hidden = !warnings.childElementCount;
+
+    const list = $('#import-list');
+    list.innerHTML = '';
+    for (const plan of preview.plans) {
+      const row = el('label', `import-row${plan.selectable ? '' : ' is-disabled'}`);
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = Boolean(plan.selected);
+      check.disabled = !plan.selectable;
+      check.dataset.sourceId = plan.sourceId;
+
+      const text = el('div', 'import-row__text');
+      text.appendChild(el('div', 'import-row__name', plan.name || 'Без названия'));
+      if (plan.targetLabel) text.appendChild(el('div', 'import-row__meta', plan.targetLabel));
+      if (plan.note) text.appendChild(el('div', 'import-row__note', plan.note));
+
+      row.appendChild(check);
+      row.appendChild(text);
+      list.appendChild(row);
+    }
+
+    $('#import-all').checked = true;
+    $('#import-all').disabled = preview.selectable === 0;
+    $('#import-apply').disabled = preview.selectable === 0;
+  }
+
+  async function openImportDialog() {
+    toast('Выберите файл приключения…', 'info', 2000);
+    const picked = await desktop.pickAdventureFile();
+    if (picked.canceled) return;
+    if (!picked.ok) return toast(picked.error || 'Не удалось открыть файл', 'error');
+
+    const result = await desktop.inspectAdventure(picked.filePath);
+    if (!result.ok) return toast(result.error || 'Не удалось прочитать файл', 'error');
+    adventurePreview = result.preview;
+    adventureFilePath = picked.filePath;
+    renderImportPreview(adventurePreview);
+    $('#import-overlay').hidden = false;
+  }
+
+  async function applyImport() {
+    if (!adventurePreview) return;
+    const include = [...document.querySelectorAll('#import-list input[type=checkbox]')]
+      .filter((input) => !input.disabled && input.checked)
+      .map((input) => input.dataset.sourceId);
+    if (!include.length) return toast('Не выбрано ни одной сущности', 'error');
+
+    const apply = $('#import-apply');
+    apply.disabled = true;
+    apply.textContent = 'Импортируем…';
+    const result = await desktop.importAdventure(adventureFilePath, include);
+    apply.textContent = 'Импортировать';
+    apply.disabled = false;
+
+    if (!result.ok) {
+      if (!result.canceled) toast(result.error || 'Не удалось импортировать', 'error');
+      return;
+    }
+    closeImportDialog();
+    toast(result.report.summary, 'ok');
+    for (const item of result.report.skipped.slice(0, 3)) {
+      toast(`Пропущено: ${item.name || 'без названия'} — ${item.reason}`, 'info', 6000);
+    }
+  }
+
+  function bindImportUi() {
+    $('#btn-import-adventure').addEventListener('click', openImportDialog);
+    $('#import-cancel').addEventListener('click', closeImportDialog);
+    $('#import-apply').addEventListener('click', applyImport);
+    $('#import-all').addEventListener('change', (event) => {
+      for (const input of document.querySelectorAll('#import-list input[type=checkbox]')) {
+        if (!input.disabled) input.checked = event.target.checked;
+      }
+    });
+    $('#import-overlay').addEventListener('click', (event) => {
+      if (event.target === $('#import-overlay')) closeImportDialog();
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
    * Старт
    * ------------------------------------------------------------------ */
 
@@ -1661,6 +1769,7 @@
   }
 
   bindUi();
+  bindImportUi();
   updateConnBadge(false);
   initHome().catch((error) => toast(`Ошибка запуска: ${error.message}`, 'error'));
 

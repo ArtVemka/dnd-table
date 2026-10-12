@@ -180,6 +180,11 @@
               Если игроки не могут подключиться, проверьте, что все находятся в одной локальной или
               виртуальной сети, и разрешите приложение в брандмауэре.
             </p>
+            <div class="addr-actions">
+              <button id="btn-import-adventure" class="btn btn--ghost btn--tiny" type="button">
+                Импортировать приключение…
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -209,6 +214,23 @@
         </aside>
       </div>
     </section>
+
+    <div class="import-overlay" id="import-overlay" hidden>
+      <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-labelledby="import-title">
+        <h2 class="dialog__title" id="import-title">Импорт приключения</h2>
+        <p class="muted" id="import-summary">…</p>
+        <ul class="import-warnings" id="import-warnings" hidden></ul>
+        <div class="import-list" id="import-list"></div>
+        <div class="dialog__actions">
+          <label class="import-all">
+            <input type="checkbox" id="import-all" checked />
+            <span>Выбрать всё</span>
+          </label>
+          <button class="btn btn--ghost" id="import-cancel" type="button">Отмена</button>
+          <button class="btn btn--accent" id="import-apply" type="button">Импортировать</button>
+        </div>
+      </div>
+    </div>
 
     <script src="vendor/socket.io.min.js"></script>
     <script src="dnd5e.js"></script>

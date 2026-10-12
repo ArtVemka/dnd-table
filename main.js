@@ -3,12 +3,14 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 
 const { CampaignStore } = require('./server/campaign');
 const { createTableServer } = require('./server/socket');
 const { RoomState } = require('./server/state');
+const { decodeImage } = require('./server/image');
 const irohManager = require('./server/iroh-manager');
+const importer = require('./server/importer');
 const { copyVendor } = require('./scripts/copy-vendor');
 const packageJson = require('./package.json');
 
@@ -550,6 +552,170 @@ function registerIpc() {
   ipcMain.handle('sheet:context', async (event, id) => {
     const entry = sheetWindows.get(String(id || ''));
     return entry ? entry.context : null;
+  });
+
+  // --------------------------------------------------------------------------
+  // Импорт внешнего приключения
+  // --------------------------------------------------------------------------
+
+  /** Разрешённые расширения файлов импорта. */
+  const ADVENTURE_EXTENSIONS = ['.json', '.zip'];
+
+  /** Максимальный размер файла импорта. */
+  const ADVENTURE_MAX_BYTES = 400 * 1024 * 1024;
+
+  /**
+   * Проверяет путь, присланный renderer'ом.
+   *
+   * Renderer — наш собственный код, но проверять всё равно нужно: иначе
+   * расширение файла и его размер остаются на слове.
+   * @param {unknown} filePath
+   * @returns {{ok: true, data: Buffer}|{ok: false, error: string}}
+   */
+  function readAdventureFile(filePath) {
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      return { ok: false, error: 'Файл не выбран.' };
+    }
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return { ok: false, error: 'Файл не найден или недоступен.' };
+    }
+    if (!stat.isFile()) return { ok: false, error: 'Это не файл.' };
+    const extension = path.extname(filePath).toLowerCase();
+    if (!ADVENTURE_EXTENSIONS.includes(extension)) {
+      return { ok: false, error: `Поддерживаются только файлы ${ADVENTURE_EXTENSIONS.join(' и ')}.` };
+    }
+    if (stat.size > ADVENTURE_MAX_BYTES) {
+      return { ok: false, error: 'Файл слишком большой: больше 400 МБ.' };
+    }
+    return { ok: true, data: fs.readFileSync(filePath) };
+  }
+
+  /**
+ * Меняет data-URL картинок на ссылки на файлы кампании.
+ *
+ * Ядро импорта ничего не знает про файловую систему и отдаёт картинки как
+ * data URL. Если сохранить их как есть, в campaign.json попадёт base64 —
+ * файл станет нечитаемым и раздуется. Поэтому файловые операции делает
+ * main-процесс, как и при обычной загрузке карты.
+ *
+ * @param {object} patch
+ * @param {string} campaignId
+ * @returns {Promise<object>} Тот же patch, но с путими вида /files/<имя>.
+ */
+  async function materializeImages(patch, campaignId) {
+    /** @type {Map<string, string>} */
+    const cache = new Map();
+    const convert = async (dataUrl) => {
+      if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return dataUrl;
+      if (cache.has(dataUrl)) return cache.get(dataUrl);
+      const decoded = decodeImage(dataUrl);
+      if (!decoded) return null;
+      const fileName = await store.saveImage(campaignId, decoded.buffer, decoded.ext);
+      const url = `/files/${fileName}`;
+      cache.set(dataUrl, url);
+      return url;
+    };
+
+    for (const slot of Object.values(patch.maps || {})) {
+      for (const item of slot.items || []) {
+        item.url = await convert(item.url);
+      }
+    }
+    for (const token of patch.tokens || []) {
+      token.imageUrl = await convert(token.imageUrl);
+    }
+    for (const actor of (patch.adventure && patch.adventure.actors) || []) {
+      actor.image = await convert(actor.image);
+    }
+    for (const item of (patch.adventure && patch.adventure.items) || []) {
+      item.image = await convert(item.image);
+    }
+    return patch;
+  }
+
+  /**
+   * Диалог выбора файла. Отдельным шагом, чтобы чтение и импорт можно было
+   * проверять тестами, не открывая системное окно.
+   */
+  ipcMain.handle('adventure:pickFile', async () => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    const picked = await dialog.showOpenDialog({
+      title: 'Выберите файл приключения',
+      properties: ['openFile'],
+      filters: [{ name: 'Приключения Foundry', extensions: ['json', 'zip'] }]
+    });
+    if (picked.canceled || !picked.filePaths.length) return { ok: false, canceled: true };
+    return { ok: true, filePath: picked.filePaths[0] };
+  });
+
+  ipcMain.handle('adventure:inspect', async (event, filePath) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    const read = readAdventureFile(filePath);
+    if (!read.ok) return read;
+    try {
+      const preview = await importer.inspect({ data: read.data, path: filePath }, { campaignMaps: host.room.maps });
+      return { ok: true, preview };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
+  /**
+   * Применяет импорт к текущему столу.
+   *
+   * Частичного импорта быть не может: сначала строится патч целиком, и только
+   * потом разом раскладывается по столу. Если что-то пошло не так, стол остаётся
+   * как был.
+   * @param {string[]} include
+   */
+  ipcMain.handle('adventure:import', async (event, filePath, include) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    const selected = Array.isArray(include) ? include.map(String) : [];
+    if (!selected.length) return { ok: false, error: 'Не выбрано ни одной сущности.' };
+
+    const read = readAdventureFile(filePath);
+    if (!read.ok) return read;
+
+    try {
+      const { patch, report } = await importer.runImport(
+        { data: read.data, path: filePath },
+        { include: selected },
+        { campaignMaps: host.room.maps }
+      );
+      await materializeImages(patch, host.room.campaign.id);
+
+      // Приключение — часть кампании, поэтому её формат тоже меняется.
+      host.room.campaign.version = 2;
+      // Единственное место, где патч трогает стол. До этого момента ничего
+      // измениться не могло.
+      host.room.maps = patch.maps;
+      host.room.adventure = patch.adventure;
+      if (patch.tokens.length) host.room.tokens.push(...patch.tokens);
+      host.room.markDirty();
+
+      // Рассылаем ровно то же событие, что и сервер при загрузке карты вручную,
+      // иначе клиенты продолжат видеть старые вкладки.
+      for (const type of Object.keys(patch.maps)) {
+        const slot = patch.maps[type];
+        host.server.io.emit('mapUpdated', {
+          type,
+          items: slot.items,
+          activeId: slot.activeId,
+          activeMap: host.room.activeMap
+        });
+      }
+      // Новые фишки рассылаем по одному событию на каждую — так же, как при
+      // создании фишки руками, поэтому клиенту не нужен отдельный обработчик
+      // массового обновления.
+      for (const token of patch.tokens) host.server.io.emit('tokenCreated', token);
+      await persistCampaign({ notify: true });
+      return { ok: true, report };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
   });
 
   ipcMain.handle('shell:openDataDir', async () => {

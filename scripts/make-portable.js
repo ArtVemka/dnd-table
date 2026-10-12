@@ -25,6 +25,11 @@ const root = path.join(__dirname, '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const appName = packageJson.build.productName;
 /**
+ * Версия для текстов: из 0.10.0-b получается 0.10b. Раньше она была вписана
+ * руками и со временем разошлась с package.json.
+ */
+const versionLabel = String(packageJson.version || '0.0.0').replace(/^(\d+\.\d+)\.0-/, '$1');
+/**
  * Имя запускаемого файла. На Windows это название продукта, на Linux — то,
  * что задано в build.linux.executableName: кириллица вместе с «&» и пробелами
  * там превращается в неожиданные имена, и скрипт перестаёт находить игру.
@@ -140,7 +145,7 @@ const READ_ME = `D&D Стол — как играть
    никуда не сохраняются. Лист персонажа — сохраняется.
 
 Правила: D&D 5e, базовые правила 2014 года.
-Версия игры: 0.9b.
+Версия игры: ${versionLabel}.
 `;
 
 /**

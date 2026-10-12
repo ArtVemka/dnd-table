@@ -1305,10 +1305,12 @@
 
       rightButton.click();
       assert(layout.classList.contains('is-right-collapsed'), 'правая панель не свернулась');
-      const labels = [...document.querySelectorAll('.tabs__label')];
-      assert(labels.length === 4, `подписей вкладок: ${labels.length}`);
+      // Считаем видимые подписи: вкладка справочника приключения появляется
+      // только после импорта, и проверка не должна ломаться на её отсутствии.
+      const labels = [...document.querySelectorAll('.tabs__btn:not([hidden]) .tabs__label')];
+      assert(labels.length === 4, `видимых подписей вкладок: ${labels.length}`);
       assert(labels.every((node) => getComputedStyle(node).display === 'none'), 'подписи вкладок остались видны');
-      assert(document.querySelectorAll('.tabs__icon').length === 4, 'иконки вкладок пропали');
+      assert(document.querySelectorAll('.tabs__icon').length === 5, 'иконки вкладок пропали');
 
       document.querySelector('.tabs__btn[data-tab="dice"]').click();
       assert(!layout.classList.contains('is-right-collapsed'), 'панель не развернулась по клику на иконку');
@@ -1446,7 +1448,11 @@
       assert(overlay, 'окно настроек не открылось');
       const text = overlay.textContent;
       assert(text.includes('Версия'), 'нет версии приложения');
-      assert(text.includes('0.9b'), `версия в настройках: ${text.replace(/\s+/g, ' ').slice(0, 90)}`);
+      // Версию ожидаемую подставляет packaged-smoke из package.json:
+      // зашитая здесь строка ломалась бы при каждой смене версии.
+      const expectedVersion = window.__EXPECTED_VERSION__;
+      assert(expectedVersion, 'не передалась ожидаемая версия приложения');
+      assert(text.includes(expectedVersion), `версия в настройках: ${text.replace(/\s+/g, ' ').slice(0, 90)}`);
       assert(text.includes('Папка данных'), 'нет папки данных');
       assert(text.includes('Язык интерфейса'), 'нет раздела языка');
       assert(text.includes('Сетка на карте'), 'нет настройки сетки');

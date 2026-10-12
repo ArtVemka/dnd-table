@@ -36,6 +36,8 @@
     socket: null,
     role: null,
     playerId: null,
+    /** Справочник импортированного приключения; приходит только мастеру. */
+    adventure: null,
     room: {
       players: [],
       sheets: {},
@@ -526,6 +528,8 @@
         chatHistory: state.chatHistory || []
       };
       app.campaign = state.campaign || app.campaign;
+      // Приключение приходит только мастеру; игроку сервер шлёт null.
+      app.adventure = state.adventure || null;
       // Тренировочный стол — не настоящая игра: адрес и имя в нём запоминать
       // нечего, иначе они подменят данные игрока за настоящим столом.
       if (app.role === 'player' && !app.training) {
@@ -942,9 +946,163 @@
     chatPanel.renderAll(app.room.chatHistory);
     dicePanel.renderAll(app.room.diceHistory);
     tokenPanel.render(app.room.tokens, app.room.players, ctx);
+    renderAdventurePanel();
     updateTableHeader();
     updateRoleUi();
     refreshSheetView(true);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Справочник приключения
+   *
+   * Импорт кладёт сюда заметки, персонажей, предметы и таблицы из файла
+   * Foundry. Это справка для мастера, а не игровые объекты: её нельзя
+   * раздать игрокам, поэтому вкладка живёт только у ДМ.
+   * ------------------------------------------------------------------ */
+
+  /** Что показывать в справочнике и под каким заголовком. */
+  const ADVENTURE_SECTIONS = [
+    { key: 'notes', label: 'Заметки', icon: '📜', one: 'заметка', few: 'заметки', many: 'заметок' },
+    { key: 'actors', label: 'Персонажи', icon: '🧝', one: 'персонаж', few: 'персонажа', many: 'персонажей' },
+    { key: 'items', label: 'Предметы', icon: '🎒', one: 'предмет', few: 'предмета', many: 'предметов' },
+    { key: 'tables', label: 'Таблицы', icon: '🎲', one: 'таблица', few: 'таблицы', many: 'таблиц' }
+  ];
+
+  /**
+   * Склоняет слово по числу: 1 заметка, 2 заметки, 5 заметок.
+   * @param {number} count
+   * @param {string} one
+   * @param {string} few
+   * @param {string} many
+   * @returns {string}
+   */
+  function plural(count, one, few, many) {
+    const mod100 = Math.abs(count) % 100;
+    const mod10 = mod100 % 10;
+    if (mod100 >= 11 && mod100 <= 14) return many;
+    if (mod10 === 1) return one;
+    if (mod10 >= 2 && mod10 <= 4) return few;
+    return many;
+  }
+
+  function renderAdventurePanel() {
+    const button = document.querySelector('.tabs__btn[data-tab="adventure"]');
+    const panel = $('#tab-adventure');
+    if (!button || !panel) return;
+
+    const adventure = app.role === 'dm' ? app.adventure : null;
+    const total = adventure
+      ? ADVENTURE_SECTIONS.reduce((sum, section) => sum + (adventure[section.key] || []).length, 0)
+      : 0;
+    // Пустой справочник занимал бы вкладку впустую: прячем её, пока есть что читать.
+    button.hidden = total === 0;
+    if (!button.hidden) {
+      button.querySelector('.tabs__label').textContent = total ? `Приключение · ${total}` : 'Приключение';
+    }
+    if (!adventure) {
+      panel.innerHTML = '';
+      return;
+    }
+
+    panel.innerHTML = '';
+
+    const header = el('div', 'adv-head');
+    header.appendChild(el('div', 'adv-head__name', adventure.name || 'Приключение'));
+    const summary = ADVENTURE_SECTIONS
+      .filter((section) => (adventure[section.key] || []).length)
+      .map((section) => {
+        const total = adventure[section.key].length;
+        return `${total} ${plural(total, section.one, section.few, section.many)}`;
+      })
+      .join(' · ');
+    header.appendChild(el('div', 'adv-head__meta', summary));
+    panel.appendChild(header);
+
+    const query = el('input', 'adv-search');
+    query.type = 'search';
+    query.placeholder = 'Поиск по приключению';
+    query.addEventListener('input', () => fillAdventureSections(panel, adventure, query.value.trim()));
+    panel.appendChild(query);
+
+    fillAdventureSections(panel, adventure, '');
+  }
+
+  /**
+   * Перерисовывает разделы справочника, оставляя поиск и заголовок на месте.
+   * @param {HTMLElement} panel
+   * @param {object} adventure
+   * @param {string} query
+   */
+  function fillAdventureSections(panel, adventure, query) {
+    for (const old of panel.querySelectorAll('.adv-section')) old.remove();
+    const needle = query.toLowerCase();
+    let found = 0;
+
+    for (const section of ADVENTURE_SECTIONS) {
+      const items = adventure[section.key] || [];
+      const visible = needle
+        ? items.filter((item) => `${item.title || ''} ${item.name || ''} ${item.text || ''} ${item.description || ''}`
+          .toLowerCase()
+          .includes(needle))
+        : items;
+      if (!visible.length) continue;
+      found += visible.length;
+
+      const block = el('section', 'adv-section');
+      block.appendChild(el('h3', 'adv-section__title', `${section.icon} ${section.label} · ${visible.length}`));
+      for (const item of visible) block.appendChild(renderAdventureItem(section.key, item));
+      panel.appendChild(block);
+    }
+
+    if (!found) {
+      panel.appendChild(el('p', 'muted adv-empty', 'Ничего не найдено.'));
+    }
+  }
+
+  /**
+   * @param {string} kind
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function renderAdventureItem(kind, item) {
+    const card = el('article', 'adv-item');
+    const title = item.title || item.name || 'Без названия';
+    card.appendChild(el('div', 'adv-item__title', title));
+
+    if (kind === 'notes') {
+      const text = item.text || 'Пустая заметка';
+      card.appendChild(el('div', 'adv-item__text', text.length > 220 ? `${text.slice(0, 220)}…` : text));
+      // Длинную заметку разворачиваем по клику, иначе она не помещается в панель.
+      if (text.length > 220) {
+        const more = el('button', 'adv-item__more', 'Читать целиком');
+        const body = card.querySelector('.adv-item__text');
+        more.addEventListener('click', () => {
+          const open = body.classList.toggle('is-open');
+          body.textContent = open ? text : `${text.slice(0, 220)}…`;
+          more.textContent = open ? 'Свернуть' : 'Читать целиком';
+        });
+        card.appendChild(more);
+      }
+    } else if (kind === 'actors') {
+      const row = el('div', 'adv-item__row');
+      if (item.image) {
+        const pic = document.createElement('img');
+        pic.className = 'adv-item__img';
+        pic.src = item.image;
+        pic.alt = '';
+        row.appendChild(pic);
+      }
+      row.appendChild(el('span', 'muted', 'Лист персонажа не заполняется — заведите его вручную.'));
+      card.appendChild(row);
+    } else if (kind === 'tables') {
+      if (item.description) card.appendChild(el('div', 'adv-item__text', item.description));
+      if (!item.formula && !item.description) {
+        card.appendChild(el('div', 'muted adv-item__text', 'В файле не оказалось результатов.'));
+      }
+    } else if (item.type) {
+      card.appendChild(el('div', 'adv-item__type', item.type));
+    }
+    return card;
   }
 
   function updateRoleUi() {
@@ -1740,6 +1898,12 @@
     }
     closeImportDialog();
     toast(result.report.summary, 'ok');
+    // Справочник приключения наполняется сразу: отдельного события со снимком
+    // стола нет, поэтому обновляем его из ответа импорта.
+    if (result.adventure) {
+      app.adventure = result.adventure;
+      renderAdventurePanel();
+    }
     for (const item of result.report.skipped.slice(0, 3)) {
       toast(`Пропущено: ${item.name || 'без названия'} — ${item.reason}`, 'info', 6000);
     }

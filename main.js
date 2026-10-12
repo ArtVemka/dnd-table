@@ -712,7 +712,9 @@ function registerIpc() {
       // массового обновления.
       for (const token of patch.tokens) host.server.io.emit('tokenCreated', token);
       await persistCampaign({ notify: true });
-      return { ok: true, report };
+      // Приключение отдаём сразу: отдельного события со снимком стола нет,
+      // а мастеру нужно увидеть, что именно перенеслось.
+      return { ok: true, report, adventure: host.room.adventure };
     } catch (error) {
       return { ok: false, error: error.message };
     }

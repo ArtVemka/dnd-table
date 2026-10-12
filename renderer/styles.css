@@ -2206,3 +2206,89 @@ code {
   margin-right: auto;
   cursor: pointer;
 }
+
+/* ------------------------------------------- Справочник приключения */
+
+.adv-head {
+  padding: 0 0 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--border-strong);
+}
+
+.adv-head__name {
+  font-family: var(--font-title);
+  font-size: 15px;
+}
+
+.adv-head__meta,
+.adv-item__type {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.adv-search {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.adv-section {
+  margin-bottom: 12px;
+}
+
+.adv-section__title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.adv-item {
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.adv-item__title {
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+
+.adv-item__text {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+.adv-item__more {
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.adv-item__row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+
+.adv-item__img {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+.adv-empty {
+  font-size: 12px;
+  padding: 6px 2px;
+}

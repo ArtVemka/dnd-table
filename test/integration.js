@@ -400,6 +400,9 @@ async function main() {
     assert.strictEqual(room.maps.battle.items.length, 0);
   });
 
+  // Перед каждой загрузкой чистим журнал: иначе waitFor ниже может удовлетвориться
+  // событием от предыдущей операции, и следующая проверка прочитает сервер слишком рано.
+  dm.log.mapUpdated.length = 0;
   emit(dm, 'uploadMap', { type: 'battle', image: PNG_1PX, name: 'battle.png' });
   const battleMap = await waitFor(
     () => dm.log.mapUpdated.filter((item) => item.type === 'battle' && item.items.length).pop(),

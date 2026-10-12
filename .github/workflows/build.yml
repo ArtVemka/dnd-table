@@ -131,22 +131,16 @@ jobs:
           pattern: dnd-table-*
           merge-multiple: true
 
-      - name: Опубликовать релиз
+      # Описа��ие готовим отдельным шагом и передаём файлом: heredoc в той же
+      # команде ломался о перенос строки перед --notes-file, и gh создавал
+      # релиз вовсе без вложений.
+      - name: Подготовить описание релиза
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
-          if gh release view "v${version}" >/dev/null 2>&1; then
-            echo "Релиз v${version} уже существует"
-          else
-            gh release create "v${version}" \
-              --title "D&D Стол ${version}" \
-              --notes-file - <<'NOTES'
+          cat > notes.md <<'EOF'
           ## D&D Стол
 
-          Переносимая версия: установка не нужна, распакуйте архив целиком
+          Переносимая версия: установка не нужна. Распакуйте архив целиком
           и запустите игру. Кампании, карты и картинки складываются в папку
           `data` рядом с игрой — перенос папки целиком переносит всю сессию.
 
@@ -159,11 +153,30 @@ jobs:
 
           ### Про сеть
 
-          Игра не создаёт сеть и не поднимает VPN. Участники должны быть в
-          одной локальной или виртуальной сети (Hamachi, Radmin VPN, ZeroTier),
-          либо на столе у ДМ должен быть проброс порта. Альтернатива — P2P по
+          Игра не создаёт сеть и не поднимает VPN. Участники должны быть в одной
+          локальной или виртуальной сети (Hamachi, Radmin VPN, ZeroTier), либо
+          на столе у ДМ должен быть проброс порта. Альтернатива — P2P по
           билету iroh-endpoint из панели адресов на экране стола.
-          NOTES
-            dist/*.zip
-          fi
+          EOF
+          cat notes.md
+
+      - name: Опубликовать релиз
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          echo "Готовы к отправке файлы:"
+          ls -la dist/*.zip
+          gh release view "v${version}" >/dev/null 2>&1 && {
+            echo "Релиз v${version} уже существует — добавляем файлы"
+            gh release upload "v${version}" dist/*.zip --clobber
+          } || {
+            gh release create "v${version}" \
+              --title "D&D Стол ${version}" \
+              --notes-file notes.md \
+              dist/*.zip
+          }
+          echo "=== файлы релиза ==="
           gh release view "v${version}" --json assets --jq '.assets[].name'

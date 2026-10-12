@@ -24,6 +24,14 @@ const root = path.join(__dirname, '..');
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const appName = packageJson.build.productName;
+/**
+ * Имя запускаемого файла. На Windows это название продукта, на Linux — то,
+ * что задано в build.linux.executableName: кириллица вместе с «&» и пробелами
+ * там превращается в неожиданные имена, и скрипт перестаёт находить игру.
+ */
+const exeBase = process.platform === 'win32'
+  ? appName
+  : ((packageJson.build.linux && packageJson.build.linux.executableName) || appName);
 const outputDir = (packageJson.build && packageJson.build.directories && packageJson.build.directories.output) || 'dist';
 // electron-builder называет папку сборки по платформе: win-unpacked, linux-unpacked…
 const unpackedDirName = process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`;
@@ -34,8 +42,8 @@ const releaseApp = path.join(releaseDir, appName);
 const zipPath = path.join(releaseDir, `${appName}.zip`);
 
 const launchHint = process.platform === 'win32'
-  ? `   Дважды щёлкните «${appName}.exe». Установка не нужна, права администратора тоже.`
-  : `   Откройте папку и запустите файл «${appName}» (в некоторых файловых менеджерах\n   он называется «${appName}.AppImage»). Сделайте его исполняемым, если он не запускается:\n   правый клик → «Свойства» → «Разрешить выполнение как программы».`;
+  ? `   Дважды щёлкните «${exeBase}.exe». Установка не нужна, права администратора тоже.`
+  : `   Откройте папку и запустите файл «${exeBase}»: двойной клик, либо в терминале\n   ./${exeBase} — если файловый менеджер не запускает его сам. Если он не стартует,\n   сделайте его исполняемым: правый клик → «Свойства» → «Разрешить выполнение\n   как программу».`;
 
 const READ_ME = `D&D Стол — как играть
 ========================================================
@@ -143,8 +151,12 @@ function findExe(dir) {
       return false;
     }
   });
-  const name = entries.find((file) => path.parse(file).name === appName) || entries[0];
-  if (!name) throw new Error(`В ${dir} нет запускаемого файла игры`);
+  const name = entries.find((file) => path.parse(file).name === exeBase);
+  if (!name) {
+    // Раньше здесь был запасной вариант «первый файл по алфавиту» — он молча
+    // подставлял LICENSE.electron.txt и прятал настоящую проблему.
+    throw new Error(`В ${dir} нет файла «${exeBase}». Есть: ${entries.join(', ') || '—'}`);
+  }
   return name;
 }
 
@@ -299,8 +311,8 @@ function verifyZip() {
     const exeName = findExe(unpacked);
     // На Windows игра запускается из .exe, на Linux — из одноимённого файла без
     // расширения, поэтому сверяем только имя, а не суффикс.
-if (path.parse(exeName).name !== appName) {
-      problems.push(`имя запускаемого файла испортилось: «${exeName}» вместо «${appName}»`);
+if (path.parse(exeName).name !== exeBase) {
+      problems.push(`имя запускаемого файла испортилось: «${exeName}» вместо «${exeBase}»`);
     }
     for (const required of ['portable.txt', 'ПРОЧТИ МЕНЯ.txt', 'resources', 'locales', 'data']) {
       if (!fs.existsSync(path.join(unpacked, required))) problems.push(`в архиве нет «${required}»`);

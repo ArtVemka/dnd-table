@@ -55,6 +55,7 @@
       "icon": "build/icon.png",
       "category": "Game",
       "synopsis": "D&D 5e (2014) portable table top",
+      "executableName": "DND-Table",
       "target": [
         {
           "target": "dir",

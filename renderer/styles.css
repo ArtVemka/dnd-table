@@ -1956,6 +1956,16 @@ code {
   word-break: break-all;
 }
 
+/* Список адресов растёт вместе с числом сетевых интерфейсов и портов, а вместе
+   с ним уезжал вниз и вынесенный под ним блок с кнопкой импорта: на экране
+   900 px её просто не было видно. Поэтому адреса прокручиваются внутри
+   панели, а кнопка остаётся на виду под ними. */
+#addresses-root {
+  max-height: 34vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 #addresses-panel.is-collapsed #addresses-root,
 #addresses-panel.is-collapsed .hint {
   display: none;

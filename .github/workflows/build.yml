@@ -67,8 +67,10 @@ jobs:
           echo "::error::Проверки сервера не прошли даже со второй попытки"
           exit 1
 
-      - name: Собрать приложение
-        run: npm run dist
+      - name: Собрать переносимый комплект
+        # dist:portable сам собирает приложение и пакует его, поэтому отдельного
+        # шага «npm run dist» нет: раньше приложение собиралось дважды за прогон.
+        run: npm run dist:portable
 
       - name: Проверить результат сборки
         shell: bash
@@ -81,9 +83,6 @@ jobs:
             ls -la "$d" | head -5
           done
           echo "exe найден: $(find dist-final -maxdepth 2 -name '*.exe' -o -maxdepth 2 -name 'DND-Table' | head -3)"
-
-      - name: Собрать переносимый комплект
-        run: npm run dist:portable
 
       - name: Переименовать архив под платформу
         shell: bash
@@ -131,7 +130,7 @@ jobs:
           pattern: dnd-table-*
           merge-multiple: true
 
-      # Описа��ие готовим отдельным шагом и передаём файлом: heredoc в той же
+      # Описание готовим отдельным шагом и передаём файлом: heredoc в той же
       # команде ломался о перенос строки перед --notes-file, и gh создавал
       # релиз вовсе без вложений.
       - name: Подготовить описание релиза

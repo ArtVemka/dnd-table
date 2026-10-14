@@ -27,9 +27,15 @@ const BUILD_CONFIG = JSON.parse(
 /** Версия приложения в том виде, в каком её показывает окно настроек:
  *  из 0.10.0-b получается 0.10b. Проверки получают её отсюда, а не из
  *  зашитой строки — иначе каждая смена версии ломала бы их. */
-const EXPECTED_VERSION_LABEL = String(
-  (JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version || '0.0.0')
-).replace(/^(\d+\.\d+)\.0-/, '$1');
+/** Та же версия, что и в приложении: читаем из package.json, как и BUILD_CONFIG. */
+const PACKAGE_VERSION = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+).version;
+/** Подпись, которую покажет окно настроек: «0.12.0-b» → «0.12b». */
+const EXPECTED_VERSION_LABEL = (() => {
+  const [core] = String(PACKAGE_VERSION || '0.0.0').split('-');
+  return `${core.replace(/\.0$/, '')}b`;
+})();
 const OUTPUT_DIR = (BUILD_CONFIG.directories && BUILD_CONFIG.directories.output) || 'dist';
 const DIST_UNPACKED = path.join(__dirname, '..', OUTPUT_DIR, 'win-unpacked');
 

@@ -56,8 +56,17 @@ const AUTOSAVE_INTERVAL_MS = 60 * 1000;
  * считает приложением переданный файл и отдаёт версию самого Electron.
  */
 const APP_VERSION = String(packageJson.version || '0.0.0');
-/** Ярлык для интерфейса: «0.9.0-b» показываем как «0.9b». */
-const APP_VERSION_LABEL = APP_VERSION.replace(/^(\d+\.\d+)\.0-/, '$1');
+/**
+ * Ярлык для интерфейса: «0.9.0-b» показываем как «0.9b».
+ *
+ * Правило не заточено под одну запись с нулём: отбрасываем ноль только в
+ * конце номера и убираем хвост сборки. Иначе с переходом на «0.12.1-b» в
+ * настройках начало бы показываться «0.12.1-b» вместо «0.12.1b».
+ */
+const APP_VERSION_LABEL = (() => {
+  const [core] = APP_VERSION.split('-');
+  return `${core.replace(/\.0$/, '')}b`;
+})();
 
 /** @type {BrowserWindow|null} */
 let mainWindow = null;

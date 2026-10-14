@@ -32,7 +32,10 @@ const appName = packageJson.build.productName;
  * Версия для текстов: из 0.10.0-b получается 0.10b. Раньше она была вписана
  * руками и со временем разошлась с package.json.
  */
-const versionLabel = String(packageJson.version || '0.0.0').replace(/^(\d+\.\d+)\.0-/, '$1');
+const versionLabel = (() => {
+  const [core] = String(packageJson.version || '0.0.0').split('-');
+  return `${core.replace(/\.0$/, '')}b`;
+  })();
 /**
  * Имя запускаемого файла. На Windows это название продукта, на Linux — то,
  * что задано в build.linux.executableName: кириллица вместе с «&» и пробелами

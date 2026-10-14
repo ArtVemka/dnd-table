@@ -14,3 +14,8 @@ portable.txt
 
 # Резервная копия кампаний — тоже не коммитится, она только на этом диске
 data-backup/
+
+# Чужие выгрузки Foundry для проверки импорта: их качает
+# scripts/fetch-foundry-sample.js, в репозитории им не место
+test/fixtures/foundry/*.json
+test/fixtures/foundry/*.zip

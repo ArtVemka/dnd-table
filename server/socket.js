@@ -465,7 +465,11 @@ async function createTableServer(options) {
         const url = `/files/${fileName}`;
         for (const token of group) token.imageUrl = url;
         markDirty();
-        for (const token of group) io.emit('tokenUpdated', token);
+        // Одним событием, а не по одному на фишку: клиент на каждое событие
+        // перерисовывает и карту, и список фишек, и весь справочник приключения.
+        // На двухстах фишках одна заливка картинки превращалась в двести
+        // полных перерисовок вместо одной.
+        io.emit('tokensUpdated', { tokens: group });
         onLog(`Картинка «${wanted}» назначена фишкам: ${group.length} шт.`);
       } catch (error) {
         emitError(socket, 'Не получилось сохранить картинку');

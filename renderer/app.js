@@ -614,6 +614,18 @@
       renderAdventurePanel();
     });
 
+    // Массовая картинка приходит пачкой: перерисовываем всё один раз, а не
+    // по разу на каждую фишку.
+    socket.on('tokensUpdated', ({ tokens } = {}) => {
+      if (!Array.isArray(tokens) || !tokens.length) return;
+      const byId = new Map(app.room.tokens.map((token) => [token.id, token]));
+      for (const token of tokens) byId.set(token.id, token);
+      app.room.tokens = [...byId.values()];
+      mapView.render(app.room, viewer());
+      tokenPanel.render(app.room.tokens, app.room.players, viewer());
+      renderAdventurePanel();
+    });
+
     // Массовая картинка в справочнике: сервер присылает обновлённое приключение,
     // потому что пришёл копией, а не дельтой по одному объекту.
     socket.on('adventureUpdated', (adventure) => {
@@ -1078,7 +1090,17 @@
     return many;
   }
 
-  function renderAdventurePanel() {
+  /**
+   * Перестраивает справочник приключения.
+   *
+   * Работает не на каждый вызов, а когда есть смысл: панель умеет держать
+   * до тысячи двух объектов, и её построение на каждое движение фишки было
+   * самой дорогой операцией в интерфейсе. Пока вкладка справочника закрыта,
+   * достаточно обновить видимость кнопки и запомнить, что данные изменились:
+   * построим один раз, когда мастер откроет вкладку.
+   * @param {{force?: boolean}} [options]
+   */
+  function renderAdventurePanel(options) {
     const button = document.querySelector('.tabs__btn[data-tab="adventure"]');
     const panel = $('#tab-adventure');
     if (!button || !panel) return;
@@ -1094,8 +1116,18 @@
     }
     if (!adventure) {
       panel.innerHTML = '';
+      adventurePanelStale = false;
       return;
     }
+
+    // Панель скрыта: не строим её заново, но помечаем содержимое устаревшим.
+    if (!options || !options.force) {
+      if (!panel.classList.contains('is-active')) {
+        adventurePanelStale = true;
+        return;
+      }
+    }
+    adventurePanelStale = false;
 
     panel.innerHTML = '';
 
@@ -1887,6 +1919,9 @@
     for (const panel of document.querySelectorAll('.panel--tab')) {
       panel.classList.toggle('is-active', panel.id === `tab-${name}`);
     }
+    // Пока справочник был закрыт, его данные могли устареть. Догоняем один
+    // раз — при открытии вкладки, а не на каждое событие фишки.
+    if (name === 'adventure' && adventurePanelStale) renderAdventurePanel({ force: true });
   }
 
   /* ------------------------------------------------------------------ *
@@ -2080,6 +2115,8 @@
   /** Кэш предпросмотра: между показом и применением файл перечитывать незачем. */
   let adventurePreview = null;
   let adventureFilePath = '';
+  /** Содержимое справочника устарело, пока вкладка была закрыта. */
+  let adventurePanelStale = false;
 
   function closeImportDialog() {
     adventurePreview = null;

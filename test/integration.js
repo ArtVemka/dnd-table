@@ -59,6 +59,7 @@ async function waitFor(fn, label, timeout = 4000) {
 const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'gridUpdated',
+  'tokensUpdated',
   'diceRollResult', 'chatMessage', 'errorMessage'
 ];
 
@@ -681,6 +682,58 @@ async function main() {
   check('ДМ переименовывает фишку', () => {
     assert.strictEqual(renamed.name, 'Гоблин-вождь');
   });
+
+
+  // Группировка по названию и массовая картинка. Проверяем на каналах: важно,
+  // что сервер положит картинку всем фишкам группы, а не только первой.
+  // Вторая фишка создаётся с другим регистром и лишними пробелами: при
+  // импорте из Foundry такое сплошь и рядом, и группа из-за этого не должна
+  // распасться на две.
+  emit(dm, 'createToken', { name: 'Кобольд', mapType: 'world' });
+  emit(dm, 'createToken', { name: '  кобольд  ', mapType: 'world' });
+  await waitFor(
+    () => room.tokens.filter((item) => item.name.trim().toLowerCase() === 'кобольд').length === 2,
+    'две фишки в группе'
+  );
+
+  dm.log.tokensUpdated.length = 0;
+  emit(dm, 'setTokenGroupImage', { name: 'Кобольд', image: PNG_1PX });
+  const batch = await waitFor(() => dm.log.tokensUpdated[0], 'пачка обновлённых фишек');
+  check('массовая картинка приходит одним событием, а не по событию на фишку', () => {
+    assert.strictEqual(dm.log.tokensUpdated.length, 1, `событий: ${dm.log.tokensUpdated.length}`);
+    assert.strictEqual(batch.tokens.length, 2, `в пачке должно быть обе фишки, а не ${batch.tokens.length}`);
+  });
+
+  const groupImages = await waitFor(
+    () => {
+      const kobolds = room.tokens.filter((item) => item.name.trim().toLowerCase() === 'кобольд');
+      return kobolds.length === 2 && kobolds.every((item) => item.imageUrl) ? kobolds : null;
+    },
+    'картинка на всей группе'
+  );
+  check('картинка встаёт сразу на всю группу фишек', () => {
+    assert.strictEqual(groupImages.length, 2);
+    for (const item of groupImages) assert.match(item.imageUrl, /^\/files\/.+\.png$/);
+    // Обе фишки получают один и тот же файл: это один объект, а не две копии.
+    assert.strictEqual(groupImages[0].imageUrl, groupImages[1].imageUrl);
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'setTokenGroupImage', { name: 'Кого-то нет', image: PNG_1PX });
+  await waitFor(() => dm.log.errorMessage.length > 0, 'ответ про отсутствующую группу');
+  check('группа без фишек отвергается с понятным объяснением', () => {
+    assert.ok(dm.log.errorMessage.some((item) => /Фишек с таким названием нет/.test(item.message)));
+  });
+
+  // Убираем за собой: дальше по файлу идут проверки, которые считают, что в
+  // кампании ровно одна фишка, а мы добавили ещё двух «Кобольдов».
+  const koboldIds = room.tokens
+    .filter((item) => item.name.trim().toLowerCase() === 'кобольд')
+    .map((item) => item.id);
+  for (const id of koboldIds) {
+    emit(dm, 'deleteToken', { tokenId: id });
+  }
+  await waitFor(() => !room.tokens.some((item) => item.name.trim().toLowerCase() === 'кобольд'), 'уборка фишек группы');
 
   dm.log.errorMessage.length = 0;
   emit(dm, 'moveToken', { tokenId: 'no-such-token', x: 0.5, y: 0.5 });

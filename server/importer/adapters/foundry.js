@@ -12,7 +12,7 @@
  * Код из модулей не выполняется: читаются только JSON и картинки.
  */
 
-const { readZip, readZipAssets, normalizeAssetPath } = require('./zip');
+const { readZipJsonAndAssets, normalizeAssetPath } = require('./zip');
 const { importError } = require('../errors');
 
 /**
@@ -265,17 +265,39 @@ function makeAssetResolver(assets) {
   const byName = new Map();
   for (const [name, data] of assets) byName.set(normalizeAssetPath(name), data);
 
+  // Кэш готовых строк по пути. Без него одна и та же карта, на которую
+  // ссылаются сцена и тридцать её токенов, превращалась в тридцать одну
+  // копию base64: на мегабайтной карте это десятки мегабайт мусора.
+  const dataUrls = new Map();
+  // Поиск по «хвосту» пути нужен редко, но он линейный по всем картинкам.
+  // Поэтому индекс строится один раз: полный путь → имя файла.
+  const bySuffix = new Map();
+  for (const name of byName.keys()) {
+    const fileName = name.slice(name.lastIndexOf('/') + 1);
+    if (!bySuffix.has(fileName)) bySuffix.set(fileName, name);
+  }
+
+  /**
+   * @param {string} name имя файла внутри архива
+   * @returns {string} data-URL
+   */
+  const toDataUrl = (name) => {
+    const cached = dataUrls.get(name);
+    if (cached !== undefined) return cached;
+    const data = byName.get(name);
+    if (!data) return '';
+    const url = `data:image/${extensionOf(name)};base64,${data.toString('base64')}`;
+    dataUrls.set(name, url);
+    return url;
+  };
+
   return (path) => {
     const wanted = normalizeAssetPath(path);
     if (!wanted) return '';
-    const direct = byName.get(wanted);
-    if (direct) return `data:image/${extensionOf(wanted)};base64,${direct.toString('base64')}`;
-    for (const [name, data] of byName) {
-      if (name.endsWith(`/${wanted}`) || name === wanted.replace(/^\//, '')) {
-        return `data:image/${extensionOf(name)};base64,${data.toString('base64')}`;
-      }
-    }
-    return '';
+    if (byName.has(wanted)) return toDataUrl(wanted);
+    const fileName = wanted.slice(wanted.lastIndexOf('/') + 1);
+    const byFile = bySuffix.get(fileName);
+    return byFile ? toDataUrl(byFile) : '';
   };
 }
 
@@ -323,11 +345,10 @@ function fromJsonBuffer(buffer) {
  * @returns {{sourceId: string, sourceTitle: string, entities: object[]}}
  */
 function fromZipBuffer(buffer) {
-  const files = readZip(buffer, (name) => name.endsWith('.json'));
+  const { files, assets } = readZipJsonAndAssets(buffer);
   // Картинки лежат рядом с json, а не внутри него: без них сцены приедут
   // пустыми, потому что фон — это отдельный файл в выгрузке.
-  const assets = readZipAssets(buffer);
-  const resolveAsset = makeAssetResolver(assets);
+    const resolveAsset = makeAssetResolver(assets);
   const entities = [];
   let title = 'Модуль Foundry';
 

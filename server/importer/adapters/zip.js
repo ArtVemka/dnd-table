@@ -114,11 +114,41 @@ function readZip(buffer, filter = () => true) {
 }
 
 /**
+ * Читает из архива json и картинки за один проход.
+ *
+ * Раньше для этого звали readZip дважды, и центральный каталог разбирался два
+ * раза: на модуле Foundry с пятью тысячами записей это двойной обход и вдвое
+ * больше аллокаций. Теперь каталог читается один раз, а результат раскладывается
+ * по двум картам: сначала json, с картинками, чтобы при нехватке памяти
+ * пострадали именно они.
+ *
+ * @param {Buffer} buffer
+ * @returns {{files: Map<string, Buffer>, assets: Map<string, Buffer>}}
+ */
+function readZipJsonAndAssets(buffer) {
+  const files = new Map();
+  const assets = new Map();
+  let total = 0;
+  for (const entry of listEntries(buffer)) {
+    if (!JSON_ENTRY.test(entry.name) && !IMAGE_EXTENSIONS.test(entry.name)) continue;
+    const data = entry.read();
+    total += data.length;
+    if (total > MAX_TOTAL_BYTES) throw new Error('Архив распаковывается в слишком большой объём');
+    if (JSON_ENTRY.test(entry.name)) files.set(entry.name, data);
+    else assets.set(entry.name, data);
+  }
+  return { files, assets };
+}
+
+/**
  * Расширения картинок, которые умеет наша игра. Остальное не берём: в
  * выгрузке Foundry рядом с картами лежат шрифты, звуки и json, и тащить их
  * в память незачем.
  */
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|webp|gif)$/i;
+
+/** Расширения документов, из которых мы что-то читаем. */
+const JSON_ENTRY = /\.json$/i;
 
 /**
  * Читает из архива картинки и возвращает их по пути внутри архива.
@@ -145,4 +175,10 @@ function normalizeAssetPath(path) {
   return String(path).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
 }
 
-module.exports = { listEntries, readZip, readZipAssets, normalizeAssetPath, MAX_TOTAL_BYTES };
+module.exports = {
+  listEntries,
+  readZip,
+  readZipJsonAndAssets,
+  normalizeAssetPath,
+  MAX_TOTAL_BYTES
+};

@@ -24,8 +24,14 @@ function validate(entities) {
   for (const entity of entities) {
     counts[entity.kind] = (counts[entity.kind] || 0) + 1;
     if (entity.image) imageBytes += entity.image.bytes;
-    if (!entity.image && (entity.kind === 'scene')) {
-      warnings.push(`У сцены «${entity.name || entity.sourceId}» нет подходящей картинки — она попадёт в игру пустой.`);
+    if (!entity.image && entity.kind === 'scene') {
+      const detail = entity.imageError && entity.imageError.path
+        ? ` (${entity.imageError.path})`
+        : '';
+      const hint = entity.imageError && /файлах Foundry/i.test(entity.imageError.reason || '')
+        ? ' Выгрузите приключение из Foundry через «Экспорт приключения» — тогда карты едут вместе с json.'
+        : '';
+      warnings.push(`У сцены «${entity.name || entity.sourceId}» нет картинки${detail} — она попадёт в игру пустой.${hint}`);
     }
   }
 

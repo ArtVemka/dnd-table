@@ -12,7 +12,7 @@
  * Код из модулей не выполняется: читаются только JSON и картинки.
  */
 
-const { readZip } = require('./zip');
+const { readZip, readZipAssets, normalizeAssetPath } = require('./zip');
 const { importError } = require('../errors');
 
 /**
@@ -56,48 +56,130 @@ function lower(value) {
   return String(value || '').toLowerCase().replace(/[^a-z]/g, '');
 }
 
-/** Приводит текст поля к строке с переносами строк. */
+/**
+ * Приводит текст поля к строке с переносами строк.
+ *
+ * В выгрузках встречаются оба вида: `{html}` и `{content}`. Второй — родной
+ * для заметок Foundry: там лепят `pages[].text.content`, и раньше мы такой
+ * текст теряли, принося в игру пустую заметку.
+ */
 function richText(value) {
-  if (typeof value === 'string') return value;
-  if (value && typeof value === 'object' && typeof value.html === 'string') {
-    return value.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (typeof value === 'string') return stripTags(value);
+  if (!value || typeof value !== 'object') return '';
+  for (const key of ['html', 'content', 'text']) {
+    if (typeof value[key] === 'string' && value[key].trim()) return stripTags(value[key]);
+  }
+  return '';
+}
+
+/** Убирает теги, оставляя читаемый текст. */
+function stripTags(html) {
+  return String(html)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Текст заметки приключения.
+ *
+ * Раньше мы читали только `text.html`, и настоящие выгрузки Foundry
+ * импортировались с пустым текстом: в них лепят `pages`, а внутри страницы —
+ * `text.content`. Читаем оба варианта: `pages` важнее, одиночный `text`
+ * встречается в старых выгрузках и в самодельных файлах.
+ *
+ * @param {any} doc
+ * @returns {string}
+ */
+function journalText(doc) {
+  const pages = Array.isArray(doc && doc.pages) ? doc.pages : [];
+  if (pages.length) {
+    const chunks = pages
+      .map((page) => {
+        const title = String(page && page.name ? page.name.trim() : '');
+        const body = richText(page && page.text);
+        if (!body) return '';
+        return title ? `${title}\n${body}` : body;
+      })
+      .filter(Boolean);
+    if (chunks.length) return chunks.join('\n\n');
+  }
+  return richText(doc && (doc.text ?? doc.description ?? doc.content));
+}
+
+/**
+ * Достаёт картинку документа.
+ *
+ * Поле с картинкой у Foundry не одно, и это главная причина, по которой
+ * настоящие выгрузки приходили с пустыми сценами:
+ *   * `img` — обычные документы (актёры, предметы);
+ *   * `background` — сцена; внутри это объект, где путь лежит в `src`
+ *     (так делают новые версии) или в `data`/`img` (так было раньше);
+ *   * `texture` — токен на сцене, устроен так же, как `background`.
+ *
+ * @param {any} doc
+ * @param {(path: string) => string} [resolveAsset] Возвращает data-URL по пути внутри архива.
+ */
+function documentImage(doc, resolveAsset) {
+  const containers = [doc && doc.img, doc && doc.background, doc && doc.texture, doc && doc.foreground];
+  for (const container of containers) {
+    if (!container) continue;
+    if (typeof container === 'string' && container.trim()) return pick(container.trim(), resolveAsset);
+    if (typeof container === 'object') {
+      for (const key of ['src', 'data', 'img']) {
+        const value = container[key];
+        if (typeof value === 'string' && value.trim()) return pick(value.trim(), resolveAsset);
+      }
+    }
   }
   return '';
 }
 
 /**
- * Достаёт картинку документа: у Foundry это `img` (строка или объект с data).
- * @param {any} doc
+ * Если это путь внутри выгрузки, достаём картинку из архива.
+ * @param {string} value
+ * @param {(path: string) => string} [resolveAsset]
+ * @returns {string}
  */
-function documentImage(doc) {
-  const img = doc && doc.img;
-  if (typeof img === 'string' && img.trim()) return img;
-  if (img && typeof img === 'object' && typeof img.data === 'string') return img.data;
-  const background = doc && doc.background;
-  if (background && typeof background === 'object' && typeof background.data === 'string') return background.data;
-  return '';
+function pick(value, resolveAsset) {
+  if (typeof resolveAsset === 'function' && !/^data:/i.test(value)) {
+    const fromArchive = resolveAsset(value);
+    if (fromArchive) return fromArchive;
+  }
+  return value;
 }
 
 /**
  * Токены сцены: позиция в пикселях, пригодится при маппинге.
  * @param {any} doc
  */
-function sceneTokens(doc) {
+function sceneTokens(doc, resolveAsset) {
   const list = Array.isArray(doc && doc.tokens) ? doc.tokens : [];
   return list
     .filter((token) => token && typeof token === 'object')
-    .map((token) => ({
-      kind: 'actor',
-      sourceId: String(token._id || token.id || token.name || ''),
-      name: String(token.name || token.actorName || ''),
-      image: documentImage(token),
-      raw: {
-        x: Number(token.x) || 0,
-        y: Number(token.y) || 0,
-        width: Number(token.width) || 0,
-        height: Number(token.height) || 0
-      }
-    }));
+    .map((token) => {
+      // В новых версиях Foundry сам токен часто безымянный, а данные актёра
+      // лежат в `delta`. Без этого фишка приезжала бы «без названия».
+      const delta = token.delta && typeof token.delta === 'object' ? token.delta : {};
+      const name = String(token.name || token.displayName || delta.name || '');
+      return {
+        kind: 'actor',
+        sourceId: String(token._id || token.id || name || ''),
+        name,
+        image: documentImage(token, resolveAsset),
+        raw: {
+          x: Number(token.x) || 0,
+          y: Number(token.y) || 0,
+          width: Number(token.width) || 0,
+          height: Number(token.height) || 0,
+          actorId: String(token.actorId || ''),
+          hidden: Boolean(token.hidden)
+        }
+      };
+    });
 }
 
 /**
@@ -105,7 +187,7 @@ function sceneTokens(doc) {
  * @param {any} doc
  * @param {string} [fallbackKind]
  */
-function describeDocument(doc, fallbackKind) {
+function describeDocument(doc, fallbackKind, resolveAsset) {
   const type = lower(doc && (doc.type || doc.documentName)) || lower(fallbackKind);
   const raw = doc && typeof doc === 'object' ? doc : {};
   // Неизвестный тип не превращаем молча в предмет: такой документ попадёт
@@ -117,10 +199,10 @@ function describeDocument(doc, fallbackKind) {
     sourceId: String(raw._id || raw.id || raw.name || ''),
     name: String(raw.name || ''),
     tags: Array.isArray(raw.tags) ? raw.tags : [],
-    image: documentImage(raw),
+    image: documentImage(raw, resolveAsset),
     children: kind === 'scene' ? sceneTokens(raw) : [],
     raw: {
-      text: richText(raw.text ?? raw.description ?? raw.content),
+      text: kind === 'journal' ? journalText(raw) : richText(raw.text ?? raw.description ?? raw.content),
       type: String(raw.type || ''),
       formula: String(raw.formula || ''),
       sceneWidth: Number(raw.width) || 0,
@@ -129,24 +211,28 @@ function describeDocument(doc, fallbackKind) {
   };
 }
 
-/** Разворачивает содержимое Adventure: внутри лежат ссылки на сцены и акты. */
-function describeAdventure(doc) {
+/**
+ * Разворачивает содержимое Adventure: внутри лежат ссылки на сцены и акты.
+ * @param {any} doc
+ * @param {(path: string) => string} [resolveAsset]
+ */
+function describeAdventure(doc, resolveAsset) {
   const out = [];
-  const push = (entry, kind) => {
+  const push = (entry, kind, resolveAsset) => {
     if (!entry) return;
     const item = typeof entry === 'string' ? { _id: entry } : entry;
-    out.push(describeDocument({ ...item, type: kind }, kind));
+    out.push(describeDocument({ ...item, type: kind }, kind, resolveAsset));
   };
 
-  for (const sceneId of Array.isArray(doc.scenes) ? doc.scenes : []) push(sceneId, 'scene');
-  for (const actorId of Array.isArray(doc.actors) ? doc.actors : []) push(actorId, 'actor');
-  for (const itemId of Array.isArray(doc.items) ? doc.items : []) push(itemId, 'item');
-  for (const journalId of Array.isArray(doc.journal) ? doc.journal : []) push(journalId, 'journal');
-  for (const tableId of Array.isArray(doc.rollTables) ? doc.rollTables : []) push(tableId, 'rolltable');
+  for (const sceneId of Array.isArray(doc.scenes) ? doc.scenes : []) push(sceneId, 'scene', resolveAsset);
+  for (const actorId of Array.isArray(doc.actors) ? doc.actors : []) push(actorId, 'actor', resolveAsset);
+  for (const itemId of Array.isArray(doc.items) ? doc.items : []) push(itemId, 'item', resolveAsset);
+  for (const journalId of Array.isArray(doc.journal) ? doc.journal : []) push(journalId, 'journal', resolveAsset);
+  for (const tableId of Array.isArray(doc.rollTables) ? doc.rollTables : []) push(tableId, 'rolltable', resolveAsset);
   // Макросы показываем, чтобы ДМ видел: «есть, но не переносится». Сами макросы
   // не выполняются ни при каком сценарии — это исполняемый код из чужого файла.
-  for (const macroId of Array.isArray(doc.macros) ? doc.macros : []) push(macroId, 'macro');
-  for (const macroId of Array.isArray(doc.macro) ? doc.macro : []) push(macroId, 'macro');
+  for (const macroId of Array.isArray(doc.macros) ? doc.macros : []) push(macroId, 'macro', resolveAsset);
+  for (const macroId of Array.isArray(doc.macro) ? doc.macro : []) push(macroId, 'macro', resolveAsset);
 
   if (!out.length) {
     // Adventure может лежать одним файлом с вложенными документами.
@@ -154,7 +240,7 @@ function describeAdventure(doc) {
       const list = doc && doc[key];
       if (!Array.isArray(list)) continue;
       for (const entry of list) {
-        if (entry && typeof entry === 'object' && entry.type) out.push(describeDocument(entry));
+        if (entry && typeof entry === 'object' && entry.type) out.push(describeDocument(entry, undefined, resolveAsset));
       }
     }
   }
@@ -163,28 +249,45 @@ function describeAdventure(doc) {
 }
 
 /**
- * @param {object} doc
- * @returns {{sourceId: string, sourceTitle: string, entities: object[]}}
+ * Собирает функцию, которая по пути вида `assets/карта.webp` находит картинку
+ * внутри архива и отдаёт её как data-URL.
+ *
+ * Foundry в выгруженном приключении пишет путь относительно папки выгрузки.
+ * Прямо в zip он может оказаться с любым числом ведущих папок, поэтому ищем не
+ * по точному совпадению, а по тому, чем заканчивается путь: это спасает и
+ * `assets/x.webp`, и `adventure/assets/x.webp`.
+ *
+ * @param {Map<string, Buffer>} assets
+ * @returns {(path: string) => string}
  */
-function fromDocument(doc) {
-  const type = lower(doc && (doc.type || doc.documentName));
-  if (type === 'adventure' || (doc && Array.isArray(doc.scenes))) {
-    return {
-      sourceId: String(doc._id || 'adventure'),
-      sourceTitle: String(doc.name || 'Приключение'),
-      entities: describeAdventure(doc)
-    };
-  }
-  const described = describeDocument(doc);
-  return {
-    sourceId: described.sourceId || described.name || 'document',
-    sourceTitle: described.name || 'Документ Foundry',
-    entities: [described]
+function makeAssetResolver(assets) {
+  if (!assets || !assets.size) return () => '';
+  const byName = new Map();
+  for (const [name, data] of assets) byName.set(normalizeAssetPath(name), data);
+
+  return (path) => {
+    const wanted = normalizeAssetPath(path);
+    if (!wanted) return '';
+    const direct = byName.get(wanted);
+    if (direct) return `data:image/${extensionOf(wanted)};base64,${direct.toString('base64')}`;
+    for (const [name, data] of byName) {
+      if (name.endsWith(`/${wanted}`) || name === wanted.replace(/^\//, '')) {
+        return `data:image/${extensionOf(name)};base64,${data.toString('base64')}`;
+      }
+    }
+    return '';
   };
 }
 
+/** @param {string} path */
+function extensionOf(path) {
+  const match = String(path).match(/\.(png|jpe?g|webp|gif)$/i);
+  const ext = (match ? match[1] : 'png').toLowerCase();
+  return ext === 'jpg' ? 'jpeg' : ext;
+}
+
 /**
- * @param {object} doc
+ * @param {Buffer} buffer
  * @returns {{sourceId: string, sourceTitle: string, entities: object[]}}
  */
 function fromJsonBuffer(buffer) {
@@ -221,6 +324,10 @@ function fromJsonBuffer(buffer) {
  */
 function fromZipBuffer(buffer) {
   const files = readZip(buffer, (name) => name.endsWith('.json'));
+  // Картинки лежат рядом с json, а не внутри него: без них сцены приедут
+  // пустыми, потому что фон — это отдельный файл в выгрузке.
+  const assets = readZipAssets(buffer);
+  const resolveAsset = makeAssetResolver(assets);
   const entities = [];
   let title = 'Модуль Foundry';
 
@@ -246,9 +353,9 @@ function fromZipBuffer(buffer) {
       if (lower(entry.type) === 'adventure' || Array.isArray(entry.scenes)) {
         // Если манифеста нет, показываем имя самого приключения, а не служебную заглушку.
         if (!manifest && entry.name) title = String(entry.name);
-        entities.push(...describeAdventure(entry));
+        entities.push(...describeAdventure(entry, resolveAsset));
       }
-      else if (entry.type || entry.documentName) entities.push(describeDocument(entry));
+      else if (entry.type || entry.documentName) entities.push(describeDocument(entry, undefined, resolveAsset));
     }
   }
 

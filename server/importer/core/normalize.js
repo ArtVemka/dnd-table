@@ -47,12 +47,18 @@ function normalizeImage(value) {
   // Foundry внутри слоёв и токенов пишет «data:img» без указания типа.
   let candidate = text;
   if (/^data:img;/i.test(candidate)) {
-    candidate = `data:image/png;base64,${candidate.slice('data:img;base64,'.length)}`;
+    candidate = `data:image/png;base64,${candidate.replace(/^data:img;/i, '').replace(/^base64,/i, '')}`;
   }
   if (/^data:image\/[a-z+]+;/i.test(candidate) && !/^data:image\/(png|jpeg|jpg|webp);/i.test(candidate)) {
     return { error: 'тип изображения не поддерживается' };
   }
-  if (!/^data:/i.test(candidate)) candidate = `data:image/png;base64,${candidate}`;
+  if (!/^data:/i.test(candidate)) {
+    // Настоящая выгрузка Foundry хранит не картинку, а путь к ней в своих
+    // файлах: `modules/…/Amber_Temple.webp`. Если выгрузка пришла архивом,
+    // адаптер уже достал эту картинку и подставил data-URL; значит, путь до
+    // нас дошёл из json, который лежит рядом с файлами Foundry, а не в выгрузке.
+    return { error: 'картинка лежит в файлах Foundry, а в выгрузке её нет', path: candidate };
+  }
 
   const result = decodeImage(candidate);
   if (result.error) return { error: result.error };
@@ -72,6 +78,9 @@ function toEntity(raw) {
     name: String(raw.name || '').slice(0, 200),
     tags: Array.isArray(raw.tags) ? raw.tags.map(String).slice(0, 32) : [],
     image: image && !image.error ? { data: image.data, mime: image.mime, bytes: image.bytes } : null,
+    // Причину, по которой картинка не досталась, сохраняем: без неё
+    // предупреждение в предпросмотре получалось безликим «нет картинки».
+    imageError: image && image.error ? { reason: image.error, path: image.path || '' } : null,
     children: Array.isArray(raw.children) ? raw.children.map(toEntity) : [],
     raw: raw.raw && typeof raw.raw === 'object' ? raw.raw : null
   };

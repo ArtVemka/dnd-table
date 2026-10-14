@@ -17,8 +17,9 @@ function check(name, fn) {
 }
 
 /** Минимальный настоящий PNG. */
-const PNG_DATA_URL =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const PNG_DATA_URL = `data:image/png;base64,${PNG_BASE64}`;
 
 /** Данные, которые картинкой не являются: ни одна сигнатура не совпадает. */
 const FAKE_DATA_URL = `data:image/png;base64,${
@@ -107,17 +108,12 @@ function crc32(buffer) {
 }
 
 /**
- * Собирает минимальный корректный ZIP с одним сжатым файлом.
+ * Собирает корректный ZIP из нескольких файлов.
  * Своя сборка нужна, чтобы тест не зависел от внешних архиваторов.
- * @param {string} name
- * @param {string} content
+ * @param {Record<string, string|Buffer>} entries
  * @returns {Buffer}
  */
-function makeZip(name, content) {
-  const raw = Buffer.from(content, 'utf8');
-  const deflated = zlib.deflateRawSync(raw);
-  const crc = crc32(raw);
-  const nameBuf = Buffer.from(name, 'utf8');
+function makeZipEntries(entries) {
   const u16 = (value) => {
     const b = Buffer.alloc(2);
     b.writeUInt16LE(value, 0);
@@ -128,23 +124,53 @@ function makeZip(name, content) {
     b.writeUInt32LE(value >>> 0, 0);
     return b;
   };
-  const local = Buffer.concat([
-    Buffer.from([0x50, 0x4b, 0x03, 0x04]),
-    u16(20), u16(0), u16(8), u16(0), u16(0),
-    u32(crc), u32(deflated.length), u32(raw.length),
-    u16(nameBuf.length), u16(0), nameBuf, deflated
-  ]);
-  const central = Buffer.concat([
-    Buffer.from([0x50, 0x4b, 0x01, 0x02]),
-    u16(20), u16(20), u16(0), u16(8), u16(0), u16(0),
-    u32(crc), u32(deflated.length), u32(raw.length),
-    u16(nameBuf.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(0), nameBuf
-  ]);
+  const deflate = (content) => {
+    const raw = Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8');
+    const deflated = zlib.deflateRawSync(raw);
+    return { raw, deflated, crc: crc32(raw) };
+  };
+
+  const chunks = [];
+  const centrals = [];
+  let offset = 0;
+
+  for (const [name, content] of Object.entries(entries)) {
+    const { raw, deflated, crc } = deflate(content);
+    const nameBuf = Buffer.from(name, 'utf8');
+    const local = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      u16(20), u16(0), u16(8), u16(0), u16(0),
+      u32(crc), u32(deflated.length), u32(raw.length),
+      u16(nameBuf.length), u16(0), nameBuf, deflated
+    ]);
+    centrals.push(Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x01, 0x02]),
+      u16(20), u16(20), u16(0), u16(8), u16(0), u16(0),
+      u32(crc), u32(deflated.length), u32(raw.length),
+      u16(nameBuf.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset), nameBuf
+    ]));
+    chunks.push(local);
+    offset += local.length;
+  }
+
+  const central = Buffer.concat(centrals);
   const end = Buffer.concat([
     Buffer.from([0x50, 0x4b, 0x05, 0x06]),
-    u16(0), u16(0), u16(1), u16(1), u32(central.length), u32(local.length), u16(0)
+    u16(0), u16(0),
+    u16(centrals.length), u16(centrals.length),
+    u32(central.length), u32(offset), u16(0)
   ]);
-  return Buffer.concat([local, central, end]);
+  return Buffer.concat([...chunks, central, end]);
+}
+
+/**
+ * Собирает минимальный корректный ZIP с одним сжатым файлом.
+ * @param {string} name
+ * @param {string} content
+ * @returns {Buffer}
+ */
+function makeZip(name, content) {
+  return makeZipEntries({ [name]: content });
 }
 
 check('предпросмотр находит документы всех поддерживаемых типов', async () => {
@@ -324,6 +350,151 @@ check('итог импорта склоняет слова по-русски', a
     freshContext()
   );
   assert.match(five.report.summary, /5 заметок\./, 'пять заметок — «заметок»');
+});
+
+/**
+ * Приключение в той форме, в какой его пишет настоящий Foundry.
+ *
+ * Форма взята с настоящей выгрузки, а не придумана: фон сцены лежит в
+ * `background.src`, у токенов картинка в `texture`, текст заметки разложен по
+ * `pages[].text.content`, а у документа приключения нет поля `type` вовсе.
+ * На синтетике всё это выглядело исправным, а на живых файлах молча ломалось.
+ * @param {object} [patch]
+ * @returns {object}
+ */
+function makeRealAdventure(patch = {}) {
+  return Object.assign(
+    {
+      _id: 'real-adventure',
+      name: 'Янтарный храм',
+      actors: [
+        { _id: 'ra1', name: 'Берсерк', type: 'npc', img: 'systems/dnd5e/tokens/humanoid/Berserker.webp' }
+      ],
+      items: [{ _id: 'ri1', name: 'Том понимания', type: 'equipment' }],
+      journal: [
+        {
+          _id: 'rj1',
+          name: 'Янтарный храм',
+          pages: [
+            {
+              _id: 'rp1',
+              name: 'Обзор',
+              type: 'text',
+              text: { format: 1, content: '<p>Тайное общество волшебников построило храм.</p>' }
+            },
+            {
+              _id: 'rp2',
+              name: 'Цена',
+              type: 'text',
+              text: { format: 1, content: '<p>Вопрос стоит воспоминания.</p>' }
+            }
+          ]
+        }
+      ],
+      scenes: [
+        {
+          _id: 'rs1',
+          name: 'Янтарный храм, верхний уровень',
+          width: 2700,
+          height: 3000,
+          backgroundColor: '#000000',
+          background: { src: 'assets/upper_level.png', offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 },
+          grid: { size: 50, type: 1, distance: 5, units: 'ft' },
+          tokens: [
+            {
+              _id: 'rt1',
+              name: 'Берсерк',
+              x: 1350,
+              y: 1500,
+              width: 0.5,
+              height: 0.5,
+              texture: { src: 'assets/berserker.png' }
+            },
+            {
+              _id: 'rt2',
+              name: '',
+              actorId: 'ra1',
+              x: 2000,
+              y: 2000,
+              width: 0.5,
+              height: 0.5,
+              delta: { name: 'Берсерк-2' }
+            }
+          ]
+        }
+      ],
+      tables: [],
+      macros: []
+    },
+    patch
+  );
+}
+
+check('настоящая выгрузка: фон сцены читается из background.src', async () => {
+  const zip = makeZipEntries({
+    'adventure.json': JSON.stringify(makeRealAdventure()),
+    'assets/upper_level.png': Buffer.from(PNG_BASE64, 'base64'),
+    'assets/berserker.png': Buffer.from(PNG_BASE64, 'base64')
+  });
+  const preview = await inspect({ data: zip, path: 'храм.zip' }, freshContext());
+  const scene = preview.plans.find((plan) => plan.kind === 'scene');
+  assert.strictEqual(scene.selectable, true, `сцена должна импортироваться: ${scene.note}`);
+
+  const { patch } = await runImport(
+    { data: zip, path: 'храм.zip' },
+    { include: ['rs1'] },
+    freshContext()
+  );
+  const map = patch.maps.world.items[0];
+  assert.ok(map, 'карта должна появиться');
+  assert.match(map.url, /^data:image\/png;base64,/, 'фон должен достаться из архива как картинка');
+});
+
+check('настоящая выгрузка: текст заметки собирается из pages', async () => {
+  const zip = makeZipEntries({
+    'adventure.json': JSON.stringify(makeRealAdventure()),
+    'assets/upper_level.png': Buffer.from(PNG_BASE64, 'base64')
+  });
+  const { patch } = await runImport(
+    { data: zip, path: 'храм.zip' },
+    { include: ['rj1'] },
+    freshContext()
+  );
+  const note = patch.adventure.notes.find((item) => item.sourceId === 'rj1');
+  assert.ok(note, 'заметка должна импортироваться');
+  assert.match(note.text, /Тайное общество волшебников/, 'текст первой страницы');
+  assert.match(note.text, /воспоминания/, 'текст второй страницы');
+  assert.strictEqual(/<p>/.test(note.text), false, 'теги не должны попасть в текст');
+});
+
+check('настоящая выгрузка: фишки сцены становятся токенами с именем из delta', async () => {
+  const zip = makeZipEntries({
+    'adventure.json': JSON.stringify(makeRealAdventure()),
+    'assets/upper_level.png': Buffer.from(PNG_BASE64, 'base64'),
+    'assets/berserker.png': Buffer.from(PNG_BASE64, 'base64')
+  });
+  const { patch } = await runImport({ data: zip, path: 'храм.zip' }, { include: ['rs1'] }, freshContext());
+  assert.strictEqual(patch.tokens.length, 2, 'две фишки');
+  const named = patch.tokens.find((token) => token.name === 'Берсерк-2');
+  assert.ok(named, 'безымянный токен должен взять имя из delta, а не потеряться');
+  // Правило маппинга: центр фишки = x + половина размера, делённый на размер сцены.
+  // 2000 + 0.25 = 2000.25 от ширины сцены 2700.
+  assert.ok(Math.abs(named.x - 2000.25 / 2700) < 0.001, `x должен быть долей, получено ${named.x}`);
+  assert.ok(Math.abs(named.y - 2000.25 / 3000) < 0.001, `y должен быть долей, получено ${named.y}`);
+});
+
+check('путь в файлы Foundry объясняется внятно, а не молча', async () => {
+  // Так выглядит модуль, конвертированный в приключение: фон лежит в файлах
+  // Foundry, а не в выгрузке. Сцену импортировать нельзя, и ДМ должен понимать почему.
+  const adventure = makeRealAdventure();
+  adventure.scenes[0].background = { src: 'modules/что-то/карта.webp' };
+  const preview = await inspect(asFile(adventure), freshContext());
+  const scene = preview.plans.find((plan) => plan.sourceId === 'rs1');
+  assert.strictEqual(scene.selectable, false, 'сцена без картинки не импортируется');
+  assert.match(scene.note, /Foundry/, 'в подсказке должно быть сказано про файлы Foundry');
+  const warning = preview.warnings.find((text) => text.includes('Янтарный храм'));
+  assert.ok(warning, 'должно быть предупреждение');
+  assert.match(warning, /modules\/что-то\/карта\.webp/, 'предупреждение должно называть файл');
 });
 
 (async () => {

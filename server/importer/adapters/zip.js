@@ -113,4 +113,36 @@ function readZip(buffer, filter = () => true) {
   return result;
 }
 
-module.exports = { listEntries, readZip, MAX_TOTAL_BYTES };
+/**
+ * Расширения картинок, которые умеет наша игра. Остальное не берём: в
+ * выгрузке Foundry рядом с картами лежат шрифты, звуки и json, и тащить их
+ * в память незачем.
+ */
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|webp|gif)$/i;
+
+/**
+ * Читает из архива картинки и возвращает их по пути внутри архива.
+ *
+ * Выгрузка приключения из Foundry — это папка: `adventure.json` плюс `assets/`
+ * с картами. Картинки лежат рядом с json, а не внутри неё, поэтому одной
+ * выгрузкой json импорт не обходится: сцены остаются без фона.
+ *
+ * @param {Buffer} buffer
+ * @returns {Map<string, Buffer>}
+ */
+function readZipAssets(buffer) {
+  return readZip(buffer, (name) => IMAGE_EXTENSIONS.test(name));
+}
+
+/**
+ * Приводит путь внутри архива к виду, по которому его ищет документ.
+ * Foundry пишет `assets/карта.webp`, но встречаются и `./assets/карта.webp`,
+ * и обратные слэши из выгрузок с Windows.
+ * @param {string} path
+ * @returns {string}
+ */
+function normalizeAssetPath(path) {
+  return String(path).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+}
+
+module.exports = { listEntries, readZip, readZipAssets, normalizeAssetPath, MAX_TOTAL_BYTES };

@@ -120,6 +120,103 @@
   --font-title: "Georgia", "Times New Roman", serif;
 }
 
+/*
+ * Живой слой оформления: рамки, анимации и шрифты, связанные с тематикой.
+ *
+ * Каждая тема задаёт один и тот же набор переменных, поэтому базовые стили
+ * панелей и заголовков не меняются. Здесь описаны только характерные черты:
+ *   --frame      ширина и начертание рамки
+ *   --glow       цвет мягкого свечения
+ *   --shadow     палитра тени под панелью
+ *   --radius     скругление (у леса и океана разное)
+ *   --title-glow что происходит с заголовком
+ * Затем идут блоки [data-theme='…'], где описано поведение: рамки с двойной
+ * обводкой, уголки, покачивание, мерцание, волны.
+ */
+
+:root,
+[data-theme='standart'] {
+  --frame: 1px solid;
+  --frame-inner: 0 0;
+  --corner: 0 0;
+  --glow: rgba(200, 117, 80, 0.35);
+  --panel-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --title-glow: none;
+  --title-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  --font: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-title: Georgia, "Times New Roman", serif;
+}
+
+/* Лес: старые книги и почва. Крупные мягкие пятна света, что медленно ползут,
+   рамка чуть неровная, заголовок чуть дышит, как листва на ветру. */
+[data-theme='les'] {
+  --frame: 1px solid;
+  --frame-inner: 0 0;
+  --corner: 10px;
+  --glow: rgba(111, 174, 90, 0.32);
+  --panel-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(111, 174, 90, 0.06);
+  --radius: 14px 6px 14px 6px;
+  --radius-sm: 9px 5px 9px 5px;
+  --title-glow: 0 0 14px rgba(111, 174, 90, 0.35);
+  --title-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
+  --font: "Segoe UI", Candara, "Trebuchet MS", sans-serif;
+  --font-title: Constantia, Cambria, Georgia, serif;
+  --atmosphere: les;
+}
+
+/* Магия: чернила и свет. Двойная обводка, уголки светятся, по фону ползут
+   тусклые искры, заголовок мерцает. */
+[data-theme='magiya'] {
+  --frame: 1px solid;
+  --frame-inner: 0 0 0 3px rgba(155, 124, 232, 0.12);
+  --corner: 14px;
+  --glow: rgba(155, 124, 232, 0.55);
+  --panel-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), 0 0 22px rgba(155, 124, 232, 0.12);
+  --radius: 6px;
+  --radius-sm: 4px;
+  --title-glow: 0 0 16px rgba(155, 124, 232, 0.65);
+  --title-shadow: 0 0 3px rgba(155, 124, 232, 0.5);
+  --font: "Segoe UI", Verdana, Tahoma, sans-serif;
+  --font-title: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  --atmosphere: magiya;
+}
+
+/* Океан: гладкая вода. Панели почти без углов, мягкий блик по верхней кромке,
+   фон дышит волной, заголовок плавно переливается. */
+[data-theme='okean'] {
+  --frame: 1px solid;
+  --frame-inner: 0 0;
+  --corner: 18px;
+  --glow: rgba(78, 163, 196, 0.4);
+  --panel-shadow: 0 12px 34px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(120, 210, 240, 0.12);
+  --radius: 20px;
+  --radius-sm: 14px;
+  --title-glow: 0 0 14px rgba(78, 163, 196, 0.4);
+  --title-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+  --font: "Segoe UI", Corbel, Candara, sans-serif;
+  --font-title: "Segoe UI", Bahnschrift, "Gill Sans", Tahoma, sans-serif;
+  --atmosphere: okean;
+}
+
+/* Трактир: дерево и свечи. Рамка толще и теплее, углы срезаны, фон мерцает
+   неровным светом, будто пламя. */
+[data-theme='traktir'] {
+  --frame: 2px solid;
+  --frame-inner: 0 0 0 2px rgba(208, 138, 60, 0.14);
+  --corner: 4px;
+  --glow: rgba(208, 138, 60, 0.45);
+  --panel-shadow: 0 14px 30px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(224, 181, 82, 0.08);
+  --radius: 4px;
+  --radius-sm: 3px;
+  --title-glow: 0 0 12px rgba(224, 181, 82, 0.35);
+  --title-shadow: 0 2px 4px rgba(0, 0, 0, 0.75);
+  --font: "Segoe UI", Tahoma, Verdana, sans-serif;
+  --font-title: Rockwell, "Bookman Old Style", Georgia, serif;
+  --atmosphere: traktir;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -281,18 +378,21 @@ code {
   text-align: left;
   padding: 22px 20px;
   background: linear-gradient(160deg, var(--surface-2), var(--surface));
-  border: 1px solid var(--border);
+  border: var(--frame) var(--border);
   border-radius: var(--radius);
+  box-shadow: var(--frame-inner);
   color: var(--text);
   cursor: pointer;
   font: inherit;
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
+/* Карточка на главном экране — рамка темы должна быть и здесь: иначе первое,
+ * что видит игрок, выглядит одинаково во всех темах. */
 .card:hover {
   transform: translateY(-3px);
   border-color: var(--accent);
-  box-shadow: var(--shadow);
+  box-shadow: var(--frame-inner), 0 0 18px var(--glow);
 }
 
 .card__icon {
@@ -771,13 +871,54 @@ code {
 
 .panel {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: var(--frame) var(--border);
   border-radius: var(--radius);
+  box-shadow: var(--frame-inner), var(--panel-shadow);
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  position: relative;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/*
+ * Уголки панелей. Идея простая: маленькая линия в углу, цветом темы. В
+ * «Трактире» и «Магии» она светящаяся, в «Лесу» и «Океане» просто тонкая.
+ * Панели без содержимого (карта) лишних уголков не получают.
+ */
+.panel::before,
+.panel::after {
+  content: '';
+  position: absolute;
+  width: var(--corner);
+  height: var(--corner);
+  border: 1px solid var(--glow);
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.panel::before {
+  top: 6px;
+  left: 6px;
+  border-right: 0;
+  border-bottom: 0;
+  border-top-left-radius: var(--radius-sm);
+}
+
+.panel::after {
+  right: 6px;
+  bottom: 6px;
+  border-left: 0;
+  border-top: 0;
+  border-bottom-right-radius: var(--radius-sm);
+}
+
+.panel:hover::before,
+.panel:hover::after {
+  opacity: 0.9;
 }
 
 .panel__title {
@@ -2394,4 +2535,145 @@ code {
 .adv-empty {
   font-size: 12px;
   padding: 6px 2px;
+}
+
+/* ------------------------------------------------- Анимации по темам
+ *
+ * Анимируется только фон и свечение: transform и opacity не заставляют
+ * браузер перерисовывать вёрстку, поэтому карта с кучей фишек не просядет.
+ * Свечение темы подмешивается в рамку панели и заголовок, чтобы оформление
+ * читалось и без анимации — она только украшает.
+ */
+
+@keyframes theme-drift {
+  0%   { transform: translate3d(-2%, -1%, 0) scale(1.05); }
+  50%  { transform: translate3d(2%, 2%, 0) scale(1.12); }
+  100% { transform: translate3d(-2%, -1%, 0) scale(1.05); }
+}
+
+@keyframes theme-sway {
+  0%, 100% { letter-spacing: 0; }
+  50%      { letter-spacing: 0.02em; }
+}
+
+@keyframes theme-flicker {
+  0%, 100% { opacity: 0.5; }
+  38%      { opacity: 0.62; }
+  64%      { opacity: 0.46; }
+}
+
+@keyframes theme-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.7; }
+}
+
+@keyframes theme-shimmer {
+  0%, 100% { opacity: 0.45; transform: translateY(0); }
+  50%      { opacity: 0.85; transform: translateY(-1px); }
+}
+
+/* Подложка-атмосфера. Стоит под всем содержимым и ничего не перехватывает. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+/*
+ * Содержимое приложения поднимаем над атмосферой.
+ *
+ * Без этого подложка с полупрозрачными градиентами ложилась поверх панелей и
+ * гасила интерфейс: элемент с z-index 0 рисуется позже обычного содержимого.
+ */
+body > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Лес: тёплые пятна солнца сквозь кроны. */
+[data-theme='les'] body::before {
+  opacity: 1;
+  background:
+    radial-gradient(28% 24% at 22% 18%, rgba(111, 174, 90, 0.16), transparent 70%),
+    radial-gradient(24% 22% at 78% 68%, rgba(143, 199, 118, 0.12), transparent 72%);
+  animation: theme-drift 34s ease-in-out infinite;
+}
+
+[data-theme='les'] .panel__title,
+[data-theme='les'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+  animation: theme-sway 9s ease-in-out infinite;
+}
+
+/* Магия: тусклые искры, медленно проступающие из темноты. */
+[data-theme='magiya'] body::before {
+  opacity: 1;
+  background:
+    radial-gradient(2px 2px at 18% 24%, rgba(214, 198, 255, 0.85), transparent 60%),
+    radial-gradient(2px 2px at 72% 16%, rgba(198, 180, 255, 0.7), transparent 60%),
+    radial-gradient(2.5px 2.5px at 46% 62%, rgba(190, 172, 255, 0.75), transparent 60%),
+    radial-gradient(2px 2px at 86% 78%, rgba(214, 198, 255, 0.6), transparent 60%),
+    radial-gradient(2px 2px at 30% 86%, rgba(198, 180, 255, 0.55), transparent 60%),
+    radial-gradient(1.5px 1.5px at 60% 40%, rgba(214, 198, 255, 0.5), transparent 60%),
+    radial-gradient(30% 28% at 50% 50%, rgba(155, 124, 232, 0.14), transparent 72%);
+  animation: theme-pulse 11s ease-in-out infinite;
+}
+
+[data-theme='magiya'] .panel__title,
+[data-theme='magiya'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+  animation: theme-pulse 5.5s ease-in-out infinite;
+}
+
+[data-theme='magiya'] .panel:hover::before,
+[data-theme='magiya'] .panel:hover::after {
+  opacity: 1;
+  box-shadow: 0 0 10px var(--glow);
+}
+
+/* Океан: ровная волна, проходящая по экрану. */
+[data-theme='okean'] body::before {
+  opacity: 1;
+  background:
+    linear-gradient(180deg, transparent 42%, rgba(78, 163, 196, 0.1) 50%, transparent 58%),
+    radial-gradient(40% 30% at 30% 20%, rgba(78, 163, 196, 0.1), transparent 70%);
+  animation: theme-drift 26s ease-in-out infinite;
+}
+
+[data-theme='okean'] .panel__title,
+[data-theme='okean'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+  animation: theme-shimmer 7s ease-in-out infinite;
+}
+
+/* Трактир: неровный свет свечей. Дрожание специально неровное — ровное
+ * pulsание читалось бы как лампочка в приборе, а не как огонь. */
+[data-theme='traktir'] body::before {
+  opacity: 1;
+  background:
+    radial-gradient(34% 26% at 50% 0%, rgba(224, 181, 82, 0.14), transparent 70%),
+    radial-gradient(26% 22% at 12% 88%, rgba(208, 138, 60, 0.1), transparent 72%);
+  animation: theme-flicker 6.5s ease-in-out infinite;
+}
+
+[data-theme='traktir'] .panel__title,
+[data-theme='traktir'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+  animation: theme-flicker 6.5s ease-in-out infinite;
+}
+
+/*
+ * Уважаем системную настройку «уменьшить движение»: оформление остаётся,
+ * исчезает только движение.
+ */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  [data-theme] .panel__title,
+  [data-theme] .home__title {
+    animation: none !important;
+  }
 }

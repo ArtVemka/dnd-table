@@ -9,7 +9,9 @@
  *
  * Все производные значения (модификаторы, спасброски, навыки, инициатива,
  * пассивная Внимательность) считаются на клиенте по формулам D&D 5e 2014
- * и пересчитываются на каждый ввод. Итоговые значения сервер валидирует сам.
+ * и пересчитываются на каждый ввод. Сервер их не считает: он проверяет только
+ * исходные числа и обрезает их по пределам из DnD.LIMITS — тем же самым, что
+ * применяет форма, поэтому введённое и сохранённое значения совпадают.
  */
 
 (function (global) {
@@ -165,11 +167,10 @@
       const profRow = el('div', 'inline-row');
       profRow.appendChild(this.readonlyField('Бонус мастерства', 'profBonus'));
       combat.appendChild(profRow);
-      const manualRow = el('label', 'prof-row prof-row--manual');
-      const manualCheck = el('input');
-      manualCheck.type = 'checkbox';
-      manualCheck.className = 'sheet__manual-prof';
-      manualCheck.addEventListener('change', () => {
+        const manualRow = el('label', 'prof-row prof-row--manual');
+        const manualCheck = el('input');
+        manualCheck.type = 'checkbox';
+        manualCheck.addEventListener('change', () => {
         if (manualCheck.checked && !manualInput.value.trim()) {
           const levelInput = this.root.querySelector('[data-field="level"]');
           manualInput.value = String(DnD.proficiencyBonus(levelInput ? Number(levelInput.value) : 1));
@@ -295,28 +296,70 @@
     }
 
     /** Читает текущие значения формы в объект листа. */
+    /**
+     * Собирает лист из полей формы.
+     *
+     * Числа приводятся к тем же пределам, что и на сервере. Раньше форма их не
+     * ограничивала вовсе, и игрок видел одно значение, пока в кампанию
+     * записывалось другое: сила 90 показывала модификатор +40, на сервере
+     * оставалось 30, и исправления он не видел никогда.
+     */
     collect() {
-      const sheet = DnD.createEmptySheet();
-      sheet.abilities = {};
-      for (const key of DnD.ABILITY_KEYS) sheet.abilities[key] = 10;
+      // Пустой лист создаётся один раз на представление, а не на каждый
+      // символ в текстовом поле.
+      const sheet = this.emptySheet || (this.emptySheet = DnD.createEmptySheet());
 
       for (const input of this.inputs) {
         const name = input.dataset.field;
         if (!name) continue;
         if (input.dataset.ability) {
-          const value = Number(input.value);
-          sheet.abilities[input.dataset.ability] = Number.isFinite(value) ? value : 10;
+          sheet.abilities[input.dataset.ability] = DnD.clampNumber(
+            input.value, DnD.LIMITS.minAbility, DnD.LIMITS.maxAbility, 10
+          );
           continue;
         }
         if (name === 'proficiencyBonusManual') {
           sheet.proficiencyBonusManual = this.manualProfCheck && this.manualProfCheck.checked
-            ? Math.round(Number(input.value) || 0)
+            ? DnD.clampNumber(
+              input.value, DnD.LIMITS.minProficiencyBonus, DnD.LIMITS.maxProficiencyBonus, 2
+            )
             : null;
           continue;
         }
+        if (name === 'level') {
+          sheet.level = DnD.clampNumber(input.value, DnD.LIMITS.minLevel, DnD.LIMITS.maxLevel, 1);
+          continue;
+        }
+        if (name === 'experience') {
+          sheet.experience = DnD.clampNumber(input.value, 0, DnD.LIMITS.maxExperience, 0);
+          continue;
+        }
+        if (name === 'hp') {
+          sheet.hp = DnD.clampNumber(input.value, DnD.LIMITS.minHp, DnD.LIMITS.maxHp, 0);
+          continue;
+        }
+        if (name === 'maxHp' || name === 'tempHp') {
+          sheet[name] = DnD.clampNumber(input.value, 0, DnD.LIMITS.maxHp, 0);
+          continue;
+        }
+        if (name === 'armorClass') {
+          sheet.armorClass = DnD.clampNumber(
+            input.value, DnD.LIMITS.minArmorClass, DnD.LIMITS.maxArmorClass, 10
+          );
+          continue;
+        }
+        if (name === 'initiativeMisc') {
+          sheet.initiativeMisc = DnD.clampNumber(
+            input.value, DnD.LIMITS.minInitiativeMisc, DnD.LIMITS.maxInitiativeMisc, 0
+          );
+          continue;
+        }
+        if (name === 'speed') {
+          sheet.speed = DnD.clampNumber(input.value, DnD.LIMITS.minSpeed, DnD.LIMITS.maxSpeed, 0);
+          continue;
+        }
         if (input.type === 'number') {
-          const value = Number(input.value);
-          sheet[name] = Number.isFinite(value) ? value : 0;
+          sheet[name] = DnD.clampNumber(input.value, -1000000, 1000000, 0);
         } else {
           sheet[name] = input.value;
         }
@@ -328,7 +371,10 @@
       for (const skill of DnD.SKILLS) {
         const node = this.skillNodes[skill.key];
         sheet.skillProficiencies[skill.key] = node.check.checked;
-        sheet.skillExpertise[skill.key] = node.expert && node.expert.checked;
+        // Компетентность без владения бессмысленна: правило 5e даёт её только
+        // за владение. Раньше галка оставалась включённой, а сервер всё равно
+        // обнулял значение, и игрок об этом не узнавал.
+        sheet.skillExpertise[skill.key] = Boolean(node.expert && node.expert.checked) && node.check.checked;
       }
       return sheet;
     }

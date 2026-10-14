@@ -46,27 +46,11 @@
     { key: 'survival', label: 'Выживание', ability: 'wis' }
   ];
 
-  const SKILL_BY_KEY = SKILLS.reduce((acc, skill) => {
-    acc[skill.key] = skill;
-    return acc;
-  }, {});
 
   const ABILITY_LABELS = ABILITIES.reduce((acc, ability) => {
     acc[ability.key] = ability.label;
     return acc;
   }, {});
-
-  const ALIGNMENTS = [
-    'Законно-добрый',
-    'Нейтрально-добрый',
-    'Хаотично-добрый',
-    'Законно-нейтральный',
-    'Нейтральный',
-    'Хаотично-нейтральный',
-    'Законно-злой',
-    'Нейтрально-злой',
-    'Хаотично-злой'
-  ];
 
   const HIT_DICE = ['1d6', '1d8', '1d10', '1d12'];
 
@@ -100,8 +84,51 @@
   const LIMITS = {
     maxNameLength: 40,
     maxChatLength: 1000,
-    maxImageBytes: 10 * 1024 * 1024
+    maxImageBytes: 10 * 1024 * 1024,
+    // Пределы листа. Раньше они были в четырёх местах, и клиент с сервером
+    // разошлись: форма показывала одно значение, а сохранялось другое.
+    // Теперь клиент и сервер берут числа отсюда и из серверных LIMITS.
+    minAbility: 1,
+    maxAbility: 30,
+    minLevel: 1,
+    maxLevel: 20,
+    minHp: -999,
+    maxHp: 9999,
+    minArmorClass: 0,
+    maxArmorClass: 99,
+    minInitiativeMisc: -20,
+    maxInitiativeMisc: 20,
+    minSpeed: 0,
+    maxSpeed: 999,
+    minProficiencyBonus: 0,
+    maxProficiencyBonus: 12,
+    maxExperience: 9999999,
+    maxSheetTextLength: 4000,
+    maxHitDiceLength: 20,
+    maxClassLength: 60
   };
+
+  /**
+   * Приводит число к пределам листа — теми же, что на сервере.
+   *
+   * Без этого игрок видел в форме одно значение, а в кампании сохранялось
+   * другое: например, сила 99 показывала модификатор +44, но на сервере
+   * резалась до 30, и исправления игрок не видел никогда.
+   * @param {number|string} value
+   * @param {number} min
+   * @param {number} max
+   * @param {number} fallback
+   * @returns {number}
+   */
+  function clampNumber(value, min, max, fallback) {
+    // Пустое поле — это «значение не введено», а не ноль. Иначе очищенная
+    // Сила превращалась бы в 1, а не возвращалась к десяти, и игрок видел бы
+    // не то, что вводил.
+    if (value === '' || value === null || value === undefined) return fallback;
+    const number = Math.round(Number(value));
+    if (!Number.isFinite(number)) return fallback;
+    return Math.min(max, Math.max(min, number));
+  }
 
   /**
    * Модификатор характеристики: floor((score - 10) / 2).
@@ -212,16 +239,14 @@
 
     const initiative = modifiers.dex + (Math.round(Number(safe.initiativeMisc) || 0));
     const passivePerception = 10 + skills.perception.total;
-    const totalLevelHp = safe.maxHp;
 
-    return { level, profBonus, modifiers, saves, skills, initiative, passivePerception, totalLevelHp };
+    return { level, profBonus, modifiers, saves, skills, initiative, passivePerception };
   }
 
   global.DnD5e = {
     ABILITY_KEYS,
     ABILITIES,
     ABILITY_LABELS,
-    ALIGNMENTS,
     GRID,
     HIT_DICE,
     LIMITS,
@@ -229,8 +254,8 @@
     MAP_TYPES,
     SKETCH,
     SKILLS,
-    SKILL_BY_KEY,
     abilityModifier,
+      clampNumber,
     computeDerived,
     createEmptySheet,
     formatModifier,

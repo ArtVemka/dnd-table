@@ -13,11 +13,12 @@
     "postinstall": "node scripts/copy-vendor.js",
     "dist": "electron-builder --dir",
     "dist:portable": "electron-builder --dir && node scripts/make-portable.js",
-    "test": "node test/integration.js && node test/importer.js",
+    "test": "node test/integration.js && node test/importer.js && node test/sheet.js",
     "test:importer": "node test/importer.js",
     "foundry:fetch": "node scripts/fetch-foundry-sample.js",
     "foundry:demo": "node scripts/make-foundry-demo.js",
-    "dnd-index": "node scripts/build-dnd-index.js"
+    "dnd-index": "node scripts/build-dnd-index.js",
+    "test:sheet": "node test/sheet.js"
   },
   "dependencies": {
     "@number0/iroh": "^1.1.0",

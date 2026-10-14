@@ -365,6 +365,9 @@ async function createTableServer(options) {
         id: newTokenId(),
         name: sanitizeName(payload && payload.name) || `Фишка ${room.tokens.length + 1}`,
         mapType,
+        // Фишка привязывается к той карте, на которой её создали, иначе на
+        // вкладке с несколькими картами она появлялась бы на всех сразу.
+        mapId: sanitizeText(payload && payload.mapId, 80),
         x: 0.5,
         y: 0.5,
         imageUrl: null,

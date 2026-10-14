@@ -916,9 +916,27 @@
         onRoll: (sides) => emit('rollDice', { sides })
       });
     }
-    if (!tokenPanel) {
+    /**
+   * Идентификатор карты, открытой в своей вкладке: фишка создаётся именно на
+   * ней, иначе на вкладке с несколькими картами она показывалась бы везде.
+   * @returns {string}
+   */
+  function activeMapId() {
+    const type = app.room.activeMap || 'world';
+    const slot = (app.room.maps || {})[type] || { items: [] };
+    const active = (slot.items || []).find((item) => item.id === slot.activeId) || slot.items[0];
+    return (active && active.id) || '';
+  }
+
+  if (!tokenPanel) {
       tokenPanel = new TokenPanel($('#tab-tokens'), {
-        onCreate: (name) => emit('createToken', { name, mapType: app.room.activeMap || 'battle' }),
+        onCreate: (name) => emit('createToken', {
+        name,
+        mapType: app.room.activeMap || 'battle',
+        // Привязываем к открытой карте: вкладка умеет держать несколько карт,
+        // и фишка должна жить на той, где её создали.
+        mapId: activeMapId()
+      }),
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);

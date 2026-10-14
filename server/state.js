@@ -427,6 +427,11 @@ class RoomState {
       id: String(token.id),
       name: sanitizeText(token.name, LIMITS.maxNameLength) || 'Фишка',
       mapType: MAP_TYPES.includes(token.mapType) ? token.mapType : 'battle',
+      // Фишка принадлежит конкретной карте, а не вкладке: вкладка умеет держать
+      // несколько карт, и без этого фишки одной карты наезжали на другую.
+      // Пустая строка — фишка из кампании, созданной до этого поля: такие
+      // показываются на любой карте своей вкладки, как и раньше.
+      mapId: sanitizeText(token.mapId, 80),
       x: clampNumber(token.x, 0, 1, 0.5),
       y: clampNumber(token.y, 0, 1, 0.5),
       imageUrl: typeof token.imageUrl === 'string' ? token.imageUrl : null,

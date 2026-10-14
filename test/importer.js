@@ -497,6 +497,23 @@ check('путь в файлы Foundry объясняется внятно, а н
   assert.match(warning, /modules\/что-то\/карта\.webp/, 'предупреждение должно называть файл');
 });
 
+check('фишки сцены привязаны к своей карте, а не ко всей вкладке', async () => {
+  const zip = makeZipEntries({
+    'adventure.json': JSON.stringify(makeRealAdventure()),
+    'assets/upper_level.png': Buffer.from(PNG_BASE64, 'base64'),
+    'assets/berserker.png': Buffer.from(PNG_BASE64, 'base64')
+  });
+  const { patch } = await runImport({ data: zip, path: 'храм.zip' }, { include: ['rs1'] }, freshContext());
+  const map = patch.maps.world.items[0];
+  assert.ok(map, 'должна появиться карта');
+  assert.strictEqual(patch.tokens.length, 2, 'две фишки');
+  for (const token of patch.tokens) {
+    // Вкладка умеет держать несколько карт. Без mapId фишки обеих сцен
+    // рисовались на каждой карте вкладки и наезжали друг на друга.
+    assert.strictEqual(token.mapId, map.id, `фишка ${token.name} должна принадлежать своей карте`);
+  }
+});
+
 (async () => {
   let failed = 0;
   for (const item of checks) {

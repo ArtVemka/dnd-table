@@ -175,14 +175,20 @@ function mapToCampaign(built, context) {
       }
       const sceneWidth = Number(entity.raw && entity.raw.sceneWidth) || 0;
       const sceneHeight = Number(entity.raw && entity.raw.sceneHeight) || 0;
+      let sceneMapId = '';
 
       if (entity.image) {
-        maps[slot].items.push({
+        const mapItem = {
           id: nextId('map'),
           url: entity.image.data,
           name: entity.name || 'Карта',
           importedAt: new Date().toISOString()
-        });
+        };
+        maps[slot].items.push(mapItem);
+        // Фишки сцены принадлежат именно этой карте: вкладка умеет держать
+        // несколько карт, и без привязки фишки обеих сцен наезжали друг на
+        // друга при переключении.
+        sceneMapId = mapItem.id;
       } else {
         // Страховка на случай, если импорт вызвали в обход предпросмотра:
         // лучше пропустить сцену, чем отчитаться об успехе, которого не было.
@@ -196,6 +202,7 @@ function mapToCampaign(built, context) {
             id: nextId('token'),
             name: child.name || 'Фишка',
             mapType: slot,
+            mapId: sceneMapId,
             x: toFraction(raw.x, raw.width, sceneWidth),
             y: toFraction(raw.y, raw.height, sceneHeight),
             imageUrl: child.image ? child.image.data : null,

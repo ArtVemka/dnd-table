@@ -1200,7 +1200,13 @@
       // ту самую фишку, которую сейчас тащат.
       if (this.dragState) return;
       const type = this.viewedMap;
-      const tokens = this.tokens.filter((token) => token.mapType === type);
+      const activeMapId = (this.mapOf(type) || {}).id || '';
+      // Показываем фишки той карты, что открыта. Фишка без mapId — из кампании,
+      // заведённой до появления этого поля, и видна на любой карте вкладки,
+      // как было раньше.
+      const tokens = this.tokens.filter((token) => (
+        token.mapType === type && (!token.mapId || !activeMapId || token.mapId === activeMapId)
+      ));
       this.tokenLayer.innerHTML = '';
 
       for (const token of tokens) {

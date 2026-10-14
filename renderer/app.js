@@ -1815,6 +1815,9 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     const owner = isDm ? app.room.players.find((player) => player.playerId === viewPlayerId) : null;
     const result = await desktop.openSheetWindow({
       role: app.role,
+      // Адрес стола обязателен для игрока: его главный процесс сервер не
+      // запускал, и без адреса окно листа не знает, к чему подключаться.
+      url: app.serverUrl || '',
       playerId: app.playerId,
       name: storedName() || (isDm ? 'Мастер' : 'Игрок'),
       viewPlayerId,

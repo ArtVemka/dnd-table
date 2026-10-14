@@ -163,9 +163,14 @@ function sendToRenderer(channel, payload) {
  * @param {{name?: string, role?: string, playerId?: string, viewPlayerId?: string, readOnly?: boolean, title?: string, training?: boolean}} request
  * @returns {{ok: boolean, error?: string, id?: string}}
  */
-function openSheetWindow(request = {}) {
-  const training = Boolean(request.training);
-  if (!host && !training) return { ok: false, error: 'Стол не запущен — открывать лист не из чего' };
+  function openSheetWindow(request = {}) {
+    const training = Boolean(request.training);
+    // Адрес стола берём из запроса, а не только у себя. Главный процесс игрока
+    // сервер не запускал, у него нет `host`, и раньше игрок не мог вынести свой
+    // лист в отдельное окно: кнопка отвечала «стол не запущен».
+    const requestedUrl = String(request.url || '').replace(/\/+$/, '');
+    const serverUrl = host ? host.localUrl : requestedUrl;
+    if (!training && !serverUrl) return { ok: false, error: 'Стол не запущен — открывать лист не из чего' };
   const viewPlayerId = String(request.viewPlayerId || '');
   if (!viewPlayerId) return { ok: false, error: 'Не указано, чей лист открывать' };
 
@@ -176,7 +181,7 @@ function openSheetWindow(request = {}) {
   const isDm = request.role === 'dm';
 
   const context = {
-    url: host ? host.localUrl : '',
+      url: serverUrl,
     // hostKey наружу не уходит: окно забирает контекст по случайному id.
     hostKey: isDm && host ? host.hostKey : '',
     playerId: isDm ? 'dm' : String(request.playerId || ''),

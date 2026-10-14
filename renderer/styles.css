@@ -3,7 +3,17 @@
    Тёмная «настольная» тема: пергамент, бронза, обожжённая глина.
    ========================================================================== */
 
-:root {
+/*
+ * Палитра «Стандарт» — та, что была в приложении до тем.
+ *
+ * Каждая тема переопределяет один и тот же набор переменных, поэтому
+ * переключение не трогает разметку: цвета берутся оттуда, где и раньше.
+ * Отдельно вынесены поверхности, рамки, акцент и служебные цвета — если
+ * добавить новую тему, достаточно описать здесь те же поля.
+ */
+
+:root,
+[data-theme='standart'] {
   --bg: #14100c;
   --bg-deep: #0c0906;
   --surface: #1e1811;
@@ -20,6 +30,89 @@
   --gold: #d9a441;
   --danger: #b8473a;
   --ok: #6fae5a;
+}
+
+/* Лес: прохладная зелень, тёмная хвоя и светлый мох. */
+[data-theme='les'] {
+  --bg: #0d1410;
+  --bg-deep: #070b09;
+  --surface: #141d17;
+  --surface-2: #1b261e;
+  --surface-3: #243127;
+  --border: #2b3c30;
+  --border-strong: #3e5745;
+  --text: #e3ece0;
+  --text-dim: #bccbb8;
+  --muted: #8ba089;
+  --accent: #6fae5a;
+  --accent-hover: #86c46f;
+  --accent-soft: rgba(111, 174, 90, 0.16);
+  --gold: #c8b06a;
+  --danger: #c05545;
+  --ok: #7fbd68;
+}
+
+/* Магия: чернильный фиолетовый и светящаясь лоза. */
+[data-theme='magiya'] {
+  --bg: #100c18;
+  --bg-deep: #08060f;
+  --surface: #181329;
+  --surface-2: #201a36;
+  --surface-3: #2a2245;
+  --border: #362b57;
+  --border-strong: #4c3d76;
+  --text: #ece6f8;
+  --text-dim: #c6bade;
+  --muted: #9a8cb8;
+  --accent: #9b7ce8;
+  --accent-hover: #b096f2;
+  --accent-soft: rgba(155, 124, 232, 0.18);
+  --gold: #d9b44a;
+  --danger: #c0506a;
+  --ok: #63b6a8;
+}
+
+/* Океан: глубокая вода, холодный свет и пена. */
+[data-theme='okean'] {
+  --bg: #0a1418;
+  --bg-deep: #050c0f;
+  --surface: #101d22;
+  --surface-2: #17282e;
+  --surface-3: #1f343c;
+  --border: #27414a;
+  --border-strong: #3a5b66;
+  --text: #e0eef1;
+  --text-dim: #b3cdd4;
+  --muted: #83a6b0;
+  --accent: #4ea3c4;
+  --accent-hover: #6bbcd9;
+  --accent-soft: rgba(78, 163, 196, 0.16);
+  --gold: #cdb878;
+  --danger: #c9564f;
+  --ok: #5cb894;
+}
+
+/* Трактир: тёплое дерево, охра и свечной свет. */
+[data-theme='traktir'] {
+  --bg: #171009;
+  --bg-deep: #0d0805;
+  --surface: #21170e;
+  --surface-2: #2c1f13;
+  --surface-3: #39291a;
+  --border: #4a3520;
+  --border-strong: #6b4c2c;
+  --text: #f3e6cd;
+  --text-dim: #d2bd97;
+  --muted: #a8906d;
+  --accent: #d08a3c;
+  --accent-hover: #e5a25a;
+  --accent-soft: rgba(208, 138, 60, 0.18);
+  --gold: #e0b552;
+  --danger: #bf4a3c;
+  --ok: #79ac4e;
+}
+
+:root {
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);

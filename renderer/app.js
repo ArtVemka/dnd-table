@@ -1297,6 +1297,25 @@
     appBox.appendChild(dirButton);
     box.appendChild(appBox);
 
+    const themeBox = el('div', 'box');
+    themeBox.appendChild(el('div', 'box__title', 'Оформление'));
+    const themeRow = el('div', 'settings__row');
+    const themeSelect = el('select', 'select settings__select');
+    themeSelect.dataset.setting = 'theme';
+    for (const theme of window.DnDTheme.THEMES) {
+      const option = el('option', null, theme.label);
+      option.value = theme.id;
+      if (theme.id === window.DnDTheme.current()) option.selected = true;
+      themeSelect.appendChild(option);
+    }
+    // Переключаем сразу, без кнопки: палитра видна прямо в окне настроек.
+    themeSelect.addEventListener('change', () => window.DnDTheme.apply(themeSelect.value));
+    themeRow.appendChild(themeSelect);
+    themeBox.appendChild(themeRow);
+    themeBox.appendChild(el('div', 'box__note',
+      'Тема меняется у вас на этом компьютере. Выбор сохраняется и в окно листа персонажа.'));
+    box.appendChild(themeBox);
+
     const langBox = el('div', 'box');
     langBox.appendChild(el('div', 'box__title', 'Язык интерфейса'));
     const langSelect = el('select', 'select settings__select');

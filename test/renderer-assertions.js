@@ -1164,6 +1164,38 @@
       assert(!document.querySelector('.modal-overlay [data-setting="training"]'),
         'уже находясь за столом, предлагают открыть ещё один тренировочный стол');
     });
+
+    // Переключатель тем: он должен быть в настройках, и смена темы обязана
+    // реально менять палитру, а не только подсветку у списка.
+    const themeSelect = document.querySelector('.modal-overlay [data-setting="theme"]');
+    check('в настройках есть выбор оформления', () => {
+      assert(themeSelect, 'нет переключателя тем');
+      const labels = [].map.call(themeSelect.options, (option) => option.textContent);
+      for (const name of ['Стандартная', 'Лес', 'Магия', 'Океан', 'Трактир']) {
+        assert(labels.includes(name), `нет темы «${name}»: ${labels.join(', ')}`);
+      }
+    });
+    if (themeSelect) {
+      const before = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+      // Выбираем не ту тему, что уже стоит, иначе проверка ничего не заметит.
+      const target = themeSelect.value === window.DnDTheme.current()
+        ? themeSelect.options[1].value
+        : themeSelect.options[0].value;
+      themeSelect.value = target;
+      themeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      check('смена темы меняет палитру и запоминается', () => {
+        assert(
+          document.documentElement.dataset.theme === target,
+          `тема не применилась: ${document.documentElement.dataset.theme}`
+        );
+        const after = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+        assert(after && after !== before, `цвет акцента не изменился: ${before} → ${after}`);
+        assert(
+          localStorage.getItem(window.DnDTheme.STORAGE_KEY) === target,
+          'выбор темы не сохранился'
+        );
+      });
+    }
     document.querySelector('.modal-overlay .modal__actions button').click();
 
     document.querySelector('.tabs__btn[data-tab="tokens"]').click();

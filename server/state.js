@@ -557,6 +557,17 @@ class RoomState {
    */
   playerList(includeTokens = true) {
     const list = [];
+    // Кто на какой фишке: раньше внутри цикла по игрокам искали фишку поиском,
+    // то есть на каждой рассылке списка выполнялось «игроки × фишки». Словарь
+    // строится один раз, а список игроков перебирается один раз.
+    const tokenIdByPlayer = new Map();
+    if (includeTokens) {
+      for (const token of this.tokens) {
+        if (token.assignedPlayerId && !tokenIdByPlayer.has(token.assignedPlayerId)) {
+          tokenIdByPlayer.set(token.assignedPlayerId, token.id);
+        }
+      }
+    }
     for (const player of this.players.values()) {
       list.push({
         playerId: player.playerId,
@@ -565,7 +576,7 @@ class RoomState {
         online: player.online,
         hasSheet: this.sheets.has(player.playerId),
         tokenId: includeTokens
-          ? (this.tokens.find((t) => t.assignedPlayerId === player.playerId)?.id || null)
+          ? (tokenIdByPlayer.get(player.playerId) || null)
           : null
       });
     }

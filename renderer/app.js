@@ -27,6 +27,12 @@
   /** Размеры клетки сетки, которые предлагаются в настройках (в пикселях). */
   const CELL_CHOICES = [32, 46, 56, 72, 96];
 
+/**
+ * Пределы истории на клиенте. Те же числа, что у сервера: так память у всех
+ * участников растёт одинаково и не зависит от длины партии.
+ */
+const HISTORY_LIMITS = { dice: 200, chat: 300 };
+
   const desktop = window.desktop;
 
   const app = {
@@ -645,6 +651,12 @@
 
     socket.on('diceRollResult', (roll) => {
       app.room.diceHistory.push(roll);
+      // Сервер свои пределы держит, а клиент копил историю, пока не кончится
+      // память: DOM обрезается до двухсот строк, а массив рос без границы.
+      // За длинную партию это десятки тысяч записей в памяти браузера.
+      if (app.room.diceHistory.length > HISTORY_LIMITS.dice) {
+        app.room.diceHistory.splice(0, app.room.diceHistory.length - HISTORY_LIMITS.dice);
+      }
       dicePanel.append(roll);
       // Строку о броске в чат добавляет сервер (событие chatMessage),
       // поэтому у всех клиентов история чата совпадает.
@@ -652,6 +664,9 @@
 
     socket.on('chatMessage', (message) => {
       app.room.chatHistory.push(message);
+      if (app.room.chatHistory.length > HISTORY_LIMITS.chat) {
+        app.room.chatHistory.splice(0, app.room.chatHistory.length - HISTORY_LIMITS.chat);
+      }
       chatPanel.append(message);
     });
 
@@ -1146,7 +1161,16 @@
     const query = el('input', 'adv-search');
     query.type = 'search';
     query.placeholder = 'Поиск по приключению';
-    query.addEventListener('input', () => fillAdventureSections(panel, adventure, query.value.trim()));
+    // С задержкой: перестроение разделов на каждый введённый символ заметно
+    // тормозило на длинном справочнике, а человек печатает быстрее, чем
+    // список успевает перестроиться.
+    query.addEventListener('input', () => {
+      if (adventureSearchTimer) clearTimeout(adventureSearchTimer);
+      adventureSearchTimer = setTimeout(() => {
+        adventureSearchTimer = null;
+        fillAdventureSections(panel, adventure, query.value.trim());
+      }, 120);
+    });
     panel.appendChild(query);
 
     fillAdventureSections(panel, adventure, '');
@@ -1158,6 +1182,28 @@
    * @param {object} adventure
    * @param {string} query
    */
+  /**
+   * Поисковая строка объекта в нижнем регистре, с кэшем.
+   *
+   * Раньше на каждый введённый символ для каждого объекта склеивалось
+   * «название + текст + описание» и приводилось к нижнему регистру. У заметки
+   * текст достигает двадцати тысяч символов, так что на длинном справочнике
+   * один введённый символ означал мегабайты строк. Строка не меняется, пока
+   * не изменился сам объект, поэтому считаем её один раз.
+   * @param {object} item
+   * @returns {string}
+   */
+  function searchText(item) {
+    const cached = searchTextCache.get(item);
+    if (cached !== undefined) return cached;
+    const text = `${item.title || ''} ${item.name || ''} ${item.text || ''} ${item.description || ''}`
+      .toLowerCase();
+    searchTextCache.set(item, text);
+    return text;
+  }
+
+  const searchTextCache = new WeakMap();
+
   function fillAdventureSections(panel, adventure, query) {
     for (const old of panel.querySelectorAll('.adv-section')) old.remove();
     const needle = query.toLowerCase();
@@ -1166,9 +1212,7 @@
     for (const section of ADVENTURE_SECTIONS) {
       const items = adventure[section.key] || [];
       const visible = needle
-        ? items.filter((item) => `${item.title || ''} ${item.name || ''} ${item.text || ''} ${item.description || ''}`
-          .toLowerCase()
-          .includes(needle))
+        ? items.filter((item) => searchText(item).includes(needle))
         : items;
       if (!visible.length) continue;
       // Одинаковые названия схлопываются в одну группу: вместо двадцати
@@ -2117,6 +2161,8 @@
   let adventureFilePath = '';
   /** Содержимое справочника устарело, пока вкладка была закрыта. */
   let adventurePanelStale = false;
+  /** Отложенный пересбор разделов при поиске. */
+  let adventureSearchTimer = null;
 
   function closeImportDialog() {
     adventurePreview = null;

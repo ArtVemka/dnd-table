@@ -16,7 +16,8 @@
     "test": "node test/integration.js && node test/importer.js",
     "test:importer": "node test/importer.js",
     "foundry:fetch": "node scripts/fetch-foundry-sample.js",
-    "foundry:demo": "node scripts/make-foundry-demo.js"
+    "foundry:demo": "node scripts/make-foundry-demo.js",
+    "dnd-index": "node scripts/build-dnd-index.js"
   },
   "dependencies": {
     "@number0/iroh": "^1.1.0",

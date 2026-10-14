@@ -2677,3 +2677,96 @@ body > * {
     animation: none !important;
   }
 }
+
+/* ------------------------------------------- Группы в справочнике */
+
+/*
+ * Одинаковые объекты схлопываются в группу: вместо двадцати одинаковых
+ * карточек одна с пометкой «×20». Подробности прячутся под «Показать»,
+ * чтобы список оставался обозримым.
+ */
+.adv-item.is-group {
+  border-color: var(--accent-soft);
+  background: linear-gradient(160deg, var(--surface-2), var(--surface));
+}
+
+.adv-group__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.adv-group__head .adv-item__title {
+  margin-bottom: 0;
+}
+
+.adv-group__count {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--bg);
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.adv-group__body {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.adv-group__list {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.adv-group__member {
+  padding: 1px 0;
+}
+
+/* Загрузка картинки сразу для всей группы. */
+.adv-item__file {
+  display: none;
+}
+
+.adv-item__row:has(.adv-item__file) {
+  cursor: pointer;
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+
+.adv-item__filelabel {
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: underline dotted;
+}
+
+.adv-item__row:has(.adv-item__file):hover .adv-item__filelabel {
+  color: var(--accent-hover);
+}
+
+/*
+ * Название предмета в справочнике кликабельно: открывает статью на dnd.su.
+ * Вид ссылки даётся только когда статья точно есть, иначе это был бы
+ * обманчивый клик в никуда.
+ */
+.adv-item__title--link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.adv-item__title--link:hover {
+  color: var(--accent-hover);
+  text-decoration-style: solid;
+}

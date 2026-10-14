@@ -611,6 +611,14 @@
       else app.room.tokens.push(token);
       mapView.render(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
+      renderAdventurePanel();
+    });
+
+    // Массовая картинка в справочнике: сервер присылает обновлённое приключение,
+    // потому что пришёл копией, а не дельтой по одному объекту.
+    socket.on('adventureUpdated', (adventure) => {
+      app.adventure = adventure || null;
+      renderAdventurePanel();
     });
 
     socket.on('tokenMoved', ({ tokenId, x, y }) => {
@@ -991,6 +999,69 @@
   ];
 
   /**
+   * Ключ группы: название без регистра и лишних пробелов.
+   *
+   * При импорте из Foundry один и тот же «Кобольд» приходит десятками копий,
+   * иногда с разным регистром и отступами. Сравнивать «как есть» нельзя:
+   * одна группа распалась бы на несколько, и картинка легла бы не на всё.
+   * @param {string} name
+   * @returns {string}
+   */
+  function groupKey(name) {
+    return String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  /**
+   * Указатель предметов dnd.su: название → ссылка на статью.
+   *
+   * Собран скриптом scripts/build-dnd-index.js из каталога dnd.su и лежит
+   * рядом с игрой, поэтому клик работает мгновенно и без сети. Предмета в
+   * указателе нет — ссылки не будет, и это лучше битой.
+   * @type {Record<string, string>|null}
+   */
+  let dndItems = null;
+  let dndItemsLoaded = false;
+
+  /**
+   * @param {string} name
+   * @returns {Promise<string>} ссылка или пустая строка
+   */
+  async function loadDndItemUrl(name) {
+    if (!dndItemsLoaded) {
+      dndItemsLoaded = true;
+      try {
+        const response = await fetch('dnd-items.json');
+        dndItems = response.ok ? await response.json() : {};
+      } catch {
+        dndItems = {};
+      }
+    }
+    if (!dndItems || !name) return '';
+    // Пробуем точное название, а если не вышло — то же без хвостов в скобках:
+    // в базе «Алхимический сосуд (оранжевый)» это отдельная статья, но искать
+    // игроку разумнее по общему названию.
+    const direct = dndItems[groupKey(name)];
+    if (direct) return direct;
+    const trimmed = name.replace(/\s*\([^)]*\)\s*$/, '').trim();
+    return trimmed && trimmed !== name ? dndItems[groupKey(trimmed)] || '' : '';
+  }
+
+  /**
+   * Складывает объекты в группы по названию.
+   * @param {object[]} items
+   * @returns {{name: string, members: object[]}[]}
+   */
+  function groupByName(items) {
+    const groups = new Map();
+    for (const item of items) {
+      const key = groupKey(item.name || item.title);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    return [...groups].map(([key, members]) => ({ name: members[0].name || members[0].title || '—', members }));
+  }
+
+  /**
    * Склоняет слово по числу: 1 заметка, 2 заметки, 5 заметок.
    * @param {number} count
    * @param {string} one
@@ -1058,7 +1129,7 @@
   function fillAdventureSections(panel, adventure, query) {
     for (const old of panel.querySelectorAll('.adv-section')) old.remove();
     const needle = query.toLowerCase();
-    let found = 0;
+    let groups = 0;
 
     for (const section of ADVENTURE_SECTIONS) {
       const items = adventure[section.key] || [];
@@ -1068,17 +1139,187 @@
           .includes(needle))
         : items;
       if (!visible.length) continue;
-      found += visible.length;
+      // Одинаковые названия схлопываются в одну группу: вместо двадцати
+      // одинаковых карточек «Кобольд» мастер видит одну с пометкой «×20».
+      const grouped = groupByName(visible);
+      groups += grouped.length;
 
       const block = el('section', 'adv-section');
-      block.appendChild(el('h3', 'adv-section__title', `${section.icon} ${section.label} · ${visible.length}`));
-      for (const item of visible) block.appendChild(renderAdventureItem(section.key, item));
+      const total = visible.length;
+      const title = grouped.length === total
+        ? `${section.icon} ${section.label} · ${total}`
+        : `${section.icon} ${section.label} · ${grouped.length} ${plural(grouped.length, section.one, section.few, section.many)} из ${total}`;
+      block.appendChild(el('h3', 'adv-section__title', title));
+      for (const group of grouped) block.appendChild(renderAdventureGroup(section, group));
       panel.appendChild(block);
     }
 
-    if (!found) {
+    // Фишки живут на столе, а не в приключении, но группируются по тому же
+    // правилу: мастеру удобно назначать картинку всем «Кобольдам» сразу.
+    const tokens = app.room.tokens || [];
+    if (tokens.length) {
+      const visible = needle
+        ? tokens.filter((token) => token.name.toLowerCase().includes(needle))
+        : tokens;
+      const grouped = groupByName(visible);
+      if (grouped.length) {
+        groups += grouped.length;
+        const block = el('section', 'adv-section');
+        block.appendChild(el('h3', 'adv-section__title', `⬤ Фишки · ${grouped.length} из ${visible.length}`));
+        for (const group of grouped) block.appendChild(renderTokenGroup(group));
+        panel.appendChild(block);
+      }
+    }
+
+    if (!groups) {
       panel.appendChild(el('p', 'muted adv-empty', 'Ничего не найдено.'));
     }
+  }
+
+  /**
+   * Группа объектов приключения с массовой картинкой.
+   * @param {object} section
+   * @param {{name: string, members: object[]}} group
+   * @returns {HTMLElement}
+   */
+  function renderAdventureGroup(section, group) {
+    const card = el('article', `adv-item adv-item--group${group.members.length > 1 ? ' is-group' : ''}`);
+    const head = el('div', 'adv-group__head');
+    head.appendChild(renderItemTitle(group.name, section.key));
+    if (group.members.length > 1) {
+      head.appendChild(el('span', 'adv-group__count', `× ${group.members.length}`));
+    }
+    card.appendChild(head);
+
+    // Картинку массово ставят только тем, у кого это осмысленно: предметам
+    // и персонажам. Заметку и таблицу одной картинкой не заменить.
+    if (section.key === 'items' || section.key === 'actors') {
+      card.appendChild(makeGroupImageButton(group.name, section.key, group.members));
+    }
+
+    // Подробности показываем, когда в группе что-то есть сказать либо когда
+    // группа не одна: одиночную карточку незачем прятать под «раскрыть».
+    const sample = group.members[0];
+    const text = kindText(section.key, sample);
+    const showDetails = group.members.length > 1 || (text && text.length > 60);
+    if (!showDetails) {
+      if (text) card.appendChild(el('div', 'adv-item__text', text.length > 220 ? `${text.slice(0, 220)}…` : text));
+      return card;
+    }
+
+    const body = el('div', 'adv-group__body');
+    if (text) {
+      const clipped = el('div', 'adv-item__text', text.length > 220 ? `${text.slice(0, 220)}…` : text);
+      body.appendChild(clipped);
+      if (text.length > 220) body.appendChild(makeMoreButton(clipped, text));
+    }
+    if (group.members.length > 1) {
+      const list = el('div', 'adv-group__list');
+      for (const member of group.members) {
+        const memberText = kindText(section.key, member);
+        if (memberText && memberText !== text) {
+          list.appendChild(el('div', 'adv-group__member', `— ${memberText.slice(0, 120)}`));
+        }
+      }
+      if (list.childElementCount) body.appendChild(list);
+    }
+    const toggle = el('button', 'adv-item__more', 'Показать');
+    toggle.addEventListener('click', () => {
+      const open = body.hidden;
+      body.hidden = !open;
+      toggle.textContent = open ? 'Свернуть' : 'Показать';
+    });
+    body.hidden = true;
+    card.appendChild(toggle);
+    card.appendChild(body);
+    return card;
+  }
+
+  /** Текст объекта приключения для карточки. */
+  function kindText(key, item) {
+    if (key === 'notes') return String(item.text || '');
+    if (key === 'tables') return String(item.description || '');
+    if (key === 'items' || key === 'actors') return String(item.type || '');
+    return '';
+  }
+
+  /**
+   * Название объекта. У предметов оно кликабельно: открывает статью на
+   * dnd.su в браузере. Если статьи нет, остаётся обычным текстом — клик по
+   * никуда не ведущему виду только сбивает с толку.
+   * @param {string} name
+   * @param {string} section
+   * @returns {HTMLElement}
+   */
+  function renderItemTitle(name, section) {
+    const plain = el('div', 'adv-item__title', name);
+    if (section !== 'items' && section !== 'actors') return plain;
+    const link = el('button', 'adv-item__title adv-item__title--link', name);
+    link.type = 'button';
+    link.title = 'Открыть описание на dnd.su';
+    loadDndItemUrl(name).then((url) => {
+      if (!url) {
+        // Статьи нет: убираем вид ссылки, чтобы не обещать переход зря.
+        link.replaceWith(plain);
+        return;
+      }
+      link.addEventListener('click', () => desktop.openExternal(url));
+    });
+    return link;
+  }
+
+  function makeMoreButton(target, text) {
+    const more = el('button', 'adv-item__more', 'Читать целиком');
+    more.addEventListener('click', () => {
+      const open = target.classList.toggle('is-open');
+      target.textContent = open ? text : `${text.slice(0, 220)}…`;
+      more.textContent = open ? 'Свернуть' : 'Читать целиком';
+    });
+    return more;
+  }
+
+  /**
+   * Кнопка «картинка всем сразу»: одна загрузка, а картинка встаёт на всю группу.
+   * @param {string} name
+   * @param {string} event
+   * @param {object[]} members
+   * @returns {HTMLElement}
+   */
+  function makeGroupImageButton(name, event, members) {
+    const row = el('label', 'adv-item__row');
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+    input.className = 'adv-item__file';
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const dataUrl = await readImageFile(file);
+      if (!dataUrl) return toast('Не получилось прочитать картинку', 'error');
+      emit(event, { name, image: dataUrl });
+      toast(`Картинка «${name}» назначена: ${members.length} шт.`, 'ok');
+    });
+    row.appendChild(input);
+    row.appendChild(el('span', 'adv-item__filelabel', members.length > 1
+      ? `Картинка всем (${members.length})`
+      : 'Картинка'));
+    return row;
+  }
+
+  /** Группа фишек: та же группировка и та же массовая картинка. */
+  function renderTokenGroup(group) {
+    const card = el('article', `adv-item adv-item--group${group.members.length > 1 ? ' is-group' : ''}`);
+    const head = el('div', 'adv-group__head');
+    head.appendChild(el('div', 'adv-item__title', group.name));
+    if (group.members.length > 1) head.appendChild(el('span', 'adv-group__count', `× ${group.members.length}`));
+    card.appendChild(head);
+    card.appendChild(makeGroupImageButton(group.name, 'setTokenGroupImage', group.members));
+    const withImage = group.members.filter((token) => token.imageUrl).length;
+    if (group.members.length > 1) {
+      card.appendChild(el('div', 'muted adv-item__text',
+        `На картах: ${plural(group.members.length, 'фишка', 'фишки', 'фишек')}, с картинкой ${withImage}`));
+    }
+    return card;
   }
 
   /**
@@ -1086,46 +1327,6 @@
    * @param {object} item
    * @returns {HTMLElement}
    */
-  function renderAdventureItem(kind, item) {
-    const card = el('article', 'adv-item');
-    const title = item.title || item.name || 'Без названия';
-    card.appendChild(el('div', 'adv-item__title', title));
-
-    if (kind === 'notes') {
-      const text = item.text || 'Пустая заметка';
-      card.appendChild(el('div', 'adv-item__text', text.length > 220 ? `${text.slice(0, 220)}…` : text));
-      // Длинную заметку разворачиваем по клику, иначе она не помещается в панель.
-      if (text.length > 220) {
-        const more = el('button', 'adv-item__more', 'Читать целиком');
-        const body = card.querySelector('.adv-item__text');
-        more.addEventListener('click', () => {
-          const open = body.classList.toggle('is-open');
-          body.textContent = open ? text : `${text.slice(0, 220)}…`;
-          more.textContent = open ? 'Свернуть' : 'Читать целиком';
-        });
-        card.appendChild(more);
-      }
-    } else if (kind === 'actors') {
-      const row = el('div', 'adv-item__row');
-      if (item.image) {
-        const pic = document.createElement('img');
-        pic.className = 'adv-item__img';
-        pic.src = item.image;
-        pic.alt = '';
-        row.appendChild(pic);
-      }
-      row.appendChild(el('span', 'muted', 'Лист персонажа не заполняется — заведите его вручную.'));
-      card.appendChild(row);
-    } else if (kind === 'tables') {
-      if (item.description) card.appendChild(el('div', 'adv-item__text', item.description));
-      if (!item.formula && !item.description) {
-        card.appendChild(el('div', 'muted adv-item__text', 'В файле не оказалось результатов.'));
-      }
-    } else if (item.type) {
-      card.appendChild(el('div', 'adv-item__type', item.type));
-    }
-    return card;
-  }
 
   function updateRoleUi() {
     const isDm = app.role === 'dm';

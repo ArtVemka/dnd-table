@@ -169,6 +169,17 @@ async function createTableServer(options) {
 
   const findToken = (tokenId) => room.tokens.find((token) => token.id === String(tokenId || ''));
 
+  /**
+   * Ключ группы: название без регистра и лишних пробелов.
+   *
+   * При импорте из Foundry названия приходят с разными отступами и иногда с
+   * разным регистром. Если сравнивать «как есть», одна группа распадётся
+   * на несколько, и картинка ляжет не на всё.
+   * @param {string} name
+   * @returns {string}
+   */
+  const groupKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
   io.on('connection', (socket) => {
     socket.data.role = null;
     socket.data.playerId = null;
@@ -428,6 +439,69 @@ async function createTableServer(options) {
       } catch (error) {
         emitError(socket, 'Не удалось сохранить изображение фишки');
         onLog(`Ошибка сохранения фишки: ${error.message}`);
+      }
+    });
+
+    /**
+     * Картинка сразу для всех фишек с одинаковым названием.
+     *
+     * При импорте из Foundry одно и то же существо встречается десятками
+     * копий: «Кобольд», «Кобольд», «Кобольд». Ставить картинку по одной
+     * бессмысленно, поэтому мастер назначает её сразу всем.
+     */
+    socket.on('setTokenGroupImage', async (payload) => {
+      if (!requireDm(socket)) return;
+      const wanted = sanitizeText(payload && payload.name, LIMITS.maxNameLength);
+      if (!wanted) return emitError(socket, 'Не указано название группы');
+      const decoded = decodeImage(payload && payload.image);
+      if (decoded.error) return emitError(socket, decoded.error);
+      // Сравниваем без регистра и лишних пробелов: «Кобольд » и «кобольд» —
+      // это одна и та же группа, иначе половина копий осталась бы без картинки.
+      const key = groupKey(wanted);
+      const group = room.tokens.filter((token) => groupKey(token.name) === key);
+      if (!group.length) return emitError(socket, 'Фишек с таким названием нет');
+      try {
+        const fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
+        const url = `/files/${fileName}`;
+        for (const token of group) token.imageUrl = url;
+        markDirty();
+        for (const token of group) io.emit('tokenUpdated', token);
+        onLog(`Картинка «${wanted}» назначена фишкам: ${group.length} шт.`);
+      } catch (error) {
+        emitError(socket, 'Не получилось сохранить картинку');
+        onLog(`Ошибка сохранения картинки: ${error.message}`);
+      }
+    });
+
+    /**
+     * Картинка сразу всем объектам приключения с одинаковым названием:
+     * предметам и персонажам справочника. Правка только у мастера, потому что
+     * справочник он и читает.
+     */
+    socket.on('setAdventureGroupImage', async (payload) => {
+      if (!requireDm(socket)) return;
+      if (!room.adventure) return emitError(socket, 'В кампании нет приключения');
+      const section = payload && payload.section;
+      if (section !== 'items' && section !== 'actors') {
+        return emitError(socket, 'Картинку массово можно назначить только предметам и персонажам');
+      }
+      const wanted = sanitizeText(payload && payload.name, LIMITS.maxNameLength);
+      if (!wanted) return emitError(socket, 'Не указано название группы');
+      const decoded = decodeImage(payload && payload.image);
+      if (decoded.error) return emitError(socket, decoded.error);
+      const key = groupKey(wanted);
+      const group = room.adventure[section].filter((entry) => groupKey(entry.name) === key);
+      if (!group.length) return emitError(socket, 'В приключении нет объектов с таким названием');
+      try {
+        const fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
+        const url = `/files/${fileName}`;
+        for (const entry of group) entry.image = url;
+        markDirty();
+        io.emit('adventureUpdated', room.adventure);
+        onLog(`Картинка «${wanted}» назначена в справочнике: ${group.length} шт.`);
+      } catch (error) {
+        emitError(socket, 'Не получилось сохранить картинку');
+        onLog(`Ошибка сохранения картинки: ${error.message}`);
       }
     });
 

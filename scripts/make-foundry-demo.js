@@ -197,7 +197,9 @@ function main() {
   for (const scene of Array.isArray(adventure.scenes) ? adventure.scenes : []) {
     if (!scene || !scene.background || !scene.background.src) continue;
     const fileName = `assets/сцена-${index += 1}.png`;
-    entries[fileName] = drawMap(900, 1000, index);
+    // Размер как у настоящего баттмапа: на такой подложке видно разницу между
+    // ручной клеткой и подгонкой по ширине карты.
+    entries[fileName] = drawMap(1800, 2000, index);
     scene.background.src = fileName;
   }
 

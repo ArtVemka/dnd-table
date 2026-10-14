@@ -225,7 +225,7 @@
       sheets: {},
       maps: emptyMaps(),
       activeMap: null,
-      grid: { enabled: false, cell: DnD.GRID.defaultCell },
+      grid: { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
       tokens: [],
       diceHistory: [],
       chatHistory: []
@@ -408,8 +408,12 @@
       setGrid(payload) {
         const enabled = Boolean(payload.enabled);
         const cell = clampInt(payload.cell, DnD.GRID.minCell, DnD.GRID.maxCell, state.grid.cell);
-        if (state.grid.enabled === enabled && state.grid.cell === cell) return;
-        state.grid = { enabled, cell };
+        // columns — сколько клеток по ширине карты; по нему клетка считается
+        // от настоящей ширины подложки. Здесь без сервера, поэтому и держим
+        // ровно то же, что и за настоящим столом.
+        const columns = clampInt(payload.columns, 0, DnD.GRID.maxColumns, state.grid.columns || 0);
+        if (state.grid.enabled === enabled && state.grid.cell === cell && state.grid.columns === columns) return;
+        state.grid = { enabled, cell, columns };
         emitTo('gridUpdated', state.grid);
       },
 

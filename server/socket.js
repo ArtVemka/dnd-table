@@ -335,10 +335,13 @@ async function createTableServer(options) {
       const data = payload && typeof payload === 'object' ? payload : {};
       const enabled = Boolean(data.enabled);
       const cell = clampInt(data.cell, GRID.minCell, GRID.maxCell, room.grid.cell);
-      if (room.grid.enabled === enabled && room.grid.cell === cell) return;
-      room.grid = { enabled, cell };
+      // columns — сколько клеток по ширине карты. По нему все участники стола
+      // одинаково считают размер клетки, поэтому разошться не могут.
+      const columns = clampInt(data.columns, 0, GRID.maxColumns, room.grid.columns || 0);
+      if (room.grid.enabled === enabled && room.grid.cell === cell && room.grid.columns === columns) return;
+      room.grid = { enabled, cell, columns };
       markDirty();
-      // Сетка — свойство стола: её видят все и одинаково.
+      // Сетка — дело мастера: её видят и двигают только он.
       io.emit('gridUpdated', room.grid);
     });
 

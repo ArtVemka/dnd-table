@@ -566,13 +566,31 @@ async function main() {
   emit(dm, 'setGrid', { enabled: true, cell: 5000 });
   await waitFor(() => dm.log.gridUpdated[0], 'ограничение размера клетки сверху');
   check('размер клетки ограничен допустимым диапазоном', () => {
-    assert.strictEqual(room.grid.cell, 120);
+    assert.strictEqual(room.grid.cell, 512);
   });
 
   // Оставляем включённую сетку нестандартного размера: ниже проверим, что она
   // переживает сохранение и загрузку кампании.
   emit(dm, 'setGrid', { enabled: true, cell: 56 });
   await waitFor(() => room.grid.cell === 56, 'сетка 56 px');
+
+  // Подгонка сетки под карту: мастер задаёт, сколько клеток по ширине, а
+  // размер клетки каждый участник считает сам от ширины подложки. Проверяем,
+  // что число доезжает до всех одинаково и не ломает ручной размер.
+  emit(dm, 'setGrid', { enabled: true, cell: 56, columns: 20 });
+  await waitFor(() => room.grid.columns === 20, 'подгонка сетки под карту');
+  check('подгонка сетки по ширине карты доезжает до всех участников', () => {
+    assert.strictEqual(room.grid.columns, 20);
+    assert.strictEqual(dm.log.gridUpdated.at(-1).columns, 20, 'мастер должен увидеть новое число');
+    assert.strictEqual(p1.log.gridUpdated.at(-1).columns, 20, 'игрок должен увидеть то же число');
+  });
+  // Ноль означает «размер клетки задаёт мастер» — возвращаем ручной режим.
+  emit(dm, 'setGrid', { enabled: true, cell: 56, columns: 0 });
+  await waitFor(() => room.grid.columns === 0, 'ручной размер клетки');
+  check('ноль возвращает ручной размер клетки', () => {
+    assert.strictEqual(room.grid.columns, 0);
+    assert.strictEqual(room.grid.cell, 56, 'ручной размер клетки не должен слететь');
+  });
 
   /* -------------------------------------------------------------- фишки */
 

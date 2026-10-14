@@ -88,7 +88,15 @@ function emptyMaps() {
  * пикселях и хранится вместе с состоянием стола: у всех участников сетка и
  * фишки одного размера.
  */
-const GRID = { minCell: 24, maxCell: 120, defaultCell: 46 };
+const GRID = {
+  minCell: 8,
+  // Потолок поднят: клетка теперь может считаться от размера карты, и у большой
+  // карты на двадцать клеток она выходит больше прежних 120 пикселей.
+  maxCell: 512,
+  defaultCell: 46,
+  minColumns: 2,
+  maxColumns: 200
+};
 const ROLE_DM = 'dm';
 const ROLE_PLAYER = 'player';
 const DM_PLAYER_ID = 'dm';
@@ -304,7 +312,7 @@ class RoomState {
     /** @type {'world'|'battle'|'sketch'|null} */
     this.activeMap = null;
     /** @type {{enabled: boolean, cell: number}} */
-    this.grid = { enabled: false, cell: GRID.defaultCell };
+    this.grid = { enabled: false, cell: GRID.defaultCell, columns: 0 };
     /** @type {object[]} */
     this.tokens = [];
     /** @type {object[]} */
@@ -356,7 +364,11 @@ class RoomState {
     const grid = data.grid && typeof data.grid === 'object' ? data.grid : {};
     this.grid = {
       enabled: Boolean(grid.enabled),
-      cell: clampInt(grid.cell, GRID.minCell, GRID.maxCell, GRID.defaultCell)
+      cell: clampInt(grid.cell, GRID.minCell, GRID.maxCell, GRID.defaultCell),
+      // columns — сколько клеток укладывается по ширине карты. Ноль означает
+      // «размер клетки задаёт мастер», иначе клетка считается от ширины карты
+      // и сетка одинаково ложится на любую подложку.
+      columns: clampInt(grid.columns, 0, GRID.maxColumns, 0)
     };
 
     const tokens = Array.isArray(data.tokens) ? data.tokens.slice(0, LIMITS.maxTokens) : [];

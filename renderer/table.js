@@ -929,7 +929,8 @@
       if (source.grid && typeof source.grid === 'object') {
         this.grid = {
           enabled: Boolean(source.grid.enabled),
-          cell: Number(source.grid.cell) || DnD.GRID.defaultCell
+          cell: Number(source.grid.cell) || DnD.GRID.defaultCell,
+          columns: Number(source.grid.columns) || 0
         };
       }
       this.applyGrid();
@@ -980,10 +981,29 @@
 
     /** Применяет настройки сетки стола к карте. */
     applyGrid() {
-      const cell = this.grid.cell;
+      const cell = this.effectiveCell();
       this.surface.style.setProperty('--cell', `${cell}px`);
       this.gridLayer.hidden = !this.grid.enabled;
       if (this.editor) this.editor.setGrid(cell);
+    }
+
+    /**
+     * Размер клетки в пикселях карты.
+     *
+     * Если мастер задал, сколько клеток укладывается по ширине, клетка
+     * считается от настоящей ширины подложки: сетка одинаково ложится и на
+     * маленькую, и на большую карту. Фишка рисуется тем же --cell, поэтому
+     * ровно занимает одну клетку.
+     * @returns {number}
+     */
+    effectiveCell() {
+      const columns = Number(this.grid.columns) || 0;
+      if (columns > 1 && this.image && this.image.naturalWidth) {
+        const fitted = Math.round(this.image.naturalWidth / columns);
+        return Math.min(DnD.GRID.maxCell, Math.max(DnD.GRID.minCell, fitted));
+      }
+      const manual = Number(this.grid.cell) || DnD.GRID.defaultCell;
+      return Math.min(DnD.GRID.maxCell, Math.max(DnD.GRID.minCell, manual));
     }
 
     /** Создаёт холст при первом обращении: он нужен только тому, кто рисует. */
@@ -1190,8 +1210,13 @@
       if (this.image.dataset.url !== src) {
         this.image.dataset.url = src;
         this.image.src = src;
+        // Клетка считается от ширины подложки, а та станет известна только
+        // после загрузки картинки — иначе сетка легла бы по старой карте.
+        this.image.onload = () => this.applyGrid();
+        this.image.onerror = () => this.applyGrid();
       }
       this.layoutSurface();
+      this.applyGrid();
       this.renderTokens();
     }
 

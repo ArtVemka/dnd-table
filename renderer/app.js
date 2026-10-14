@@ -522,7 +522,7 @@
         sheets: state.sheets || {},
         maps: normalizeMapSlots(state.maps),
         activeMap: state.activeMap || null,
-        grid: state.grid || { enabled: false, cell: 46 },
+        grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
         tokens: state.tokens || [],
         diceHistory: state.diceHistory || [],
         chatHistory: state.chatHistory || []
@@ -879,7 +879,11 @@
         onSelectMap: (type, mapId) => emit('selectMap', { type, mapId }),
         onMoveToken: (tokenId, x, y) => emit('moveToken', { tokenId, x, y }),
         onNotice: (message) => toast(message),
-        onToggleGrid: (enabled) => emit('setGrid', { enabled, cell: app.room.grid.cell }),
+        onToggleGrid: (enabled) => emit('setGrid', {
+          enabled,
+          cell: app.room.grid.cell,
+          columns: app.room.grid.columns || 0
+        }),
         onRenameToken: async (token) => {
           const name = await modal({
             title: 'Имя фишки',
@@ -1340,6 +1344,26 @@
     cellSelect.disabled = !canManageGrid;
     gridRow.appendChild(cellSelect);
     tableBox.appendChild(gridRow);
+
+    // Подгонка сетки под карту: мастер говорит, сколько клеток укладывается
+    // по ширине, а размер клетки считается от настоящей ширины подложки.
+    // Так сетка ровная на любой карте, и фишка всегда занимает ровно клетку.
+    const fitRow = el('div', 'settings__row');
+    const fitLabel = el('label', 'settings__check');
+    const fitInput = el('input', 'input settings__input settings__input--narrow');
+    fitInput.type = 'number';
+    fitInput.min = '0';
+    fitInput.max = String(DnD.GRID.maxColumns);
+    fitInput.step = '1';
+    fitInput.dataset.setting = 'columns';
+    fitInput.value = String(app.room.grid.columns || 0);
+    fitInput.disabled = !canManageGrid;
+    fitInput.title = '0 — размер клетки задаётся вручную. Например, 20 — двадцать клеток по ширине карты.';
+    fitLabel.appendChild(fitInput);
+    fitLabel.appendChild(el('span', null, 'клеток по ширине карты (0 — вручную)'));
+    fitRow.appendChild(fitLabel);
+    tableBox.appendChild(fitRow);
+
     tableBox.appendChild(el('div', 'box__note', app.training
       ? 'Проверка без сети: сетка и размер клетки — только у вас, других участников здесь нет.'
       : (isDm
@@ -1347,10 +1371,12 @@
         : 'Сетку на карте и размер клетки задаёт ДМ за столом.')));
 
     const applyGrid = () => {
-      emit('setGrid', { enabled: gridInput.checked, cell: Number(cellSelect.value) });
+      const columns = Math.max(0, Math.min(DnD.GRID.maxColumns, Number(fitInput.value) || 0));
+      emit('setGrid', { enabled: gridInput.checked, cell: Number(cellSelect.value), columns });
     };
     gridInput.addEventListener('change', applyGrid);
     cellSelect.addEventListener('change', applyGrid);
+    fitInput.addEventListener('change', applyGrid);
     settingsGridInput = gridInput;
     settingsCellSelect = cellSelect;
 

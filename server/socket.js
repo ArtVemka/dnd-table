@@ -147,6 +147,10 @@ async function createTableServer(options) {
       type,
       items: slot ? slot.items : [],
       activeId: slot ? slot.activeId : null,
+      // Показанная игрокам карта едет вместе со списком. Без неё клиент
+      // обнулял поле при каждом движении карты, и «Показать игрокам»
+      // молча переставал работать: игроки снова шли за мастером.
+      revealedId: slot ? slot.revealedId : null,
       activeMap: room.activeMap
     });
   };

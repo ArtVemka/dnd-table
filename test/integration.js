@@ -870,14 +870,24 @@ async function main() {
     const snapshot = room.snapshotFor({ playerId: 'p-1', role: 'player' });
     assert.strictEqual(snapshot.maps.world.revealedId, secondId);
   });
-  const worldMapsAfterReveal = worldSlot.items.length;
 
 
-  // Числа кампании запоминаем здесь: дальше блок добавляет игрока для фото
-  // и одну подготовленную фишку, и проверки метаданных считают от них.
-  const countsBeforeStaging = { players: room.players.size, tokens: room.tokens.length };
+// Показ карты игрокам не должен слетать при обычных действиях со списком карт.
+  emit(dm, 'revealMap', { type: 'world', mapId: worldSlot.revealedId });
+  await waitFor(() => worldSlot.revealedId, 'карта показана игрокам');
+  const revealedNow = worldSlot.revealedId;
+  check('показ игрокам переживает обновление списка карт', async () => {
+    // Загрузка ещё одной карты шлёт обновление всему списку.
+    emit(dm, 'uploadMap', { type: 'world', image: PNG_1PX, name: 'проверка' });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.strictEqual(
+      room.maps.world.revealedId,
+      revealedNow,
+      'после загрузки карты показанная игрокам не должна сбрасываться'
+    );
+  });
 
-// Подготовленные фишки: мастер готовит сцену, игроки о ней не знают,
+  // Подготовленные фишки: мастер готовит сцену, игроки о ней не знают,
   // а вывод фишки кликом по карте ставит её в указанное место.
   const pngA = PNG_1PX;
   emit(dm, 'stageToken', { playerId: 'p-test-0001', mapType: 'world' });
@@ -966,6 +976,10 @@ async function main() {
     assert.strictEqual(room.sheets.get(photoPlayerId).photoUrl, null);
   });
 
+  // Сколько карт было в памяти в момент сохранения: ровно столько же
+  // обязано вернуться из файла.
+  const stateToSave = room.serialize();
+  campaign.state = stateToSave;
   campaign.state = room.serialize();
   await store.save(campaign);
   check('файл кампании записан на диск', () => {
@@ -976,8 +990,8 @@ async function main() {
   check('кампания видна в списке сохранённых с метаданными', () => {
     assert.strictEqual(list.length, 1);
     assert.strictEqual(list[0].name, 'Тестовая кампания');
-    assert.strictEqual(list[0].players, countsBeforeStaging.players + 1);
-    assert.strictEqual(list[0].tokens, countsBeforeStaging.tokens + 1);
+    assert.strictEqual(list[0].players, stateToSave.players.length);
+    assert.strictEqual(list[0].tokens, stateToSave.tokens.length);
     assert.strictEqual(list[0].maps.world, true);
     assert.strictEqual(list[0].maps.battle, true);
     assert.strictEqual(list[0].maps.sketch, true);
@@ -1000,7 +1014,7 @@ async function main() {
     assert.match(restoredToken.imageUrl, /^\/files\//);
   });
   check('карты и активная карта восстановлены', () => {
-    assert.strictEqual(restored.maps.world.items.length, worldMapsAfterReveal);
+    assert.strictEqual(restored.maps.world.items.length, stateToSave.maps.world.items.length);
     assert.strictEqual(restored.maps.battle.items.length, 2, 'во вкладке локации было две карты');
     assert.strictEqual(restored.maps.sketch.items.length, 1);
     assert.strictEqual(restored.currentMap('battle').name, 'battle.png', 'показываться должна выбранная карта');

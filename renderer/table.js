@@ -633,9 +633,6 @@
       this.tokens = [];
       this.players = [];
       this.grid = { enabled: false, cell: DnD.GRID.defaultCell };
-      // Режим подготовки сцены и фишка, выбранная для вывода на карту.
-      this.preparing = false;
-      this.stagingTokenId = null;
       this.editing = false;
       this.editor = null;
       /** Приближение карты — личное для каждого клиента, у других не меняется. */
@@ -654,35 +651,7 @@
     mapOf(type) {
       const slot = type ? this.maps[type] : null;
       if (!slot || !Array.isArray(slot.items) || !slot.items.length) return null;
-      // Игрокам видна та карта, которую мастер показал: revealedId.
-      // Если её не задавали (старая кампания или никто ещё не показывал),
-      // показывается мастерская карта — как велось до разделения.
-      const revealed = slot.revealedId || slot.activeId;
-      return slot.items.find((item) => item.id === revealed) || slot.items[0];
-    }
-
-    /**
-     * Показывает игрокам карту, которую мастер смотрит сейчас.
-     *
-     * Переключение стрелками двигает только мастерский экран: игроки остаются
-     * на показанной им карте, пока мастер не нажмёт эту кнопку.
-     */
-    revealCurrentMap() {
-      const slot = this.maps[this.viewedMap];
-      if (!slot || !Array.isArray(slot.items)) return;
-      if (slot.activeId && slot.revealedId === slot.activeId) return;
-      if (this.handlers.onRevealMap) this.handlers.onRevealMap(this.viewedMap, slot.activeId);
-    }
-
-    /** Кнопка в панели карты: только для мастера. */
-    revealButtonNode() {
-      if (!this.revealButton) {
-        this.revealButton = el('button', 'btn btn--accent btn--tiny', 'Показать игрокам');
-        this.revealButton.type = 'button';
-        this.revealButton.title = 'Перевести карту у всех участников на ту, что смотрите вы'
-        this.revealButton.addEventListener('click', () => this.revealCurrentMap());
-      }
-      return this.revealButton;
+      return slot.items.find((item) => item.id === slot.activeId) || slot.items[0];
     }
 
     /** Сколько карт лежит во вкладке. */
@@ -742,15 +711,6 @@
 
       stage.appendChild(surface);
       stage.appendChild(empty);
-
-      // Панель подготовленных фишек: лежит поверх карты снизу и появляется
-      // только когда мастеру есть что готовить.
-      this.stageNode = el('div', 'stage');
-      this.stageNode.hidden = true;
-      // Пока мастер не выбрал фишку из подготовки, клик по карте ничего
-      // не делает: обработчик выходит сразу же.
-      this.surface.addEventListener('click', (event) => this.onSurfaceClick(event));
-      stage.appendChild(this.stageNode);
 
       // Холст для рисования карты: появляется вместо карты, когда ДМ рисует.
       const editorHost = el('div', 'sketch-editor');
@@ -908,26 +868,6 @@
       this.zoom = 1;
       this.pan = { x: 0, y: 0 };
       this.applyZoom();
-    }
-
-    /**
-     * Клик по карте ставит выбранную подготовленную фишку.
-     *
-     * Слушатель на подложке, а не на самой карте: клик может прийти по сетке
-     * или по фону, и координаты всё равно считаются от краёв карты.
-     * @param {PointerEvent} event
-     */
-    onSurfaceClick(event) {
-      if (!this.stagingTokenId) return;
-      // Правая кнопка и перетаскивание карты не должны ставить фишку.
-      if (event.button !== 0) return;
-      if (event.target.closest('.token')) return;
-      const rect = this.surface.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-      this.spawnStagedAt({
-        x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
-        y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height))
-      });
     }
 
     /** Таскание карты мышью: приблизил — можно посмотреть другой угол. */
@@ -1163,33 +1103,6 @@
       const index = map && slot ? slot.items.findIndex((item) => item.id === map.id) : -1;
 
       // Переключение между картами одной вкладки: их может быть много.
-      // Кнопка «Показать игрокам»: мастер смотрит одну карту, игроки — другую.
-      // Показывать имеет смысл, только когда в вкладке есть из чего выбирать.
-      if (this.role === 'dm' && !this.training && count > 1 && slot && map) {
-        this.toolbar.appendChild(this.revealButtonNode());
-        this.revealButton.hidden = slot.revealedId === map.id;
-      } else if (this.revealButton) {
-        this.revealButton.hidden = true;
-      }
-
-      // Подготовка: мастер готовит сцену, игроки продолжают видеть прежнюю.
-      // Переключение стрелками и так двигает только мастерский экран, а этот
-      // переключатель делает намерение видимым: сейчас идёт подготовка.
-      if (this.role === 'dm' && !this.training && count > 1) {
-        const prep = el('button', `btn btn--ghost${this.preparing ? ' btn--active' : ''}`,
-          this.preparing ? '● Идёт подготовка' : '○ Подготовка');
-        prep.type = 'button';
-        prep.title = this.preparing
-          ? 'Подготовка идёт: игроки видят показанную им карту. Нажмите, чтобы вернуться в стол'
-          : 'Готовить сцену: игроки останутся на показанной им карте';
-        prep.addEventListener('click', () => {
-          this.preparing = !this.preparing;
-          this.renderToolbar();
-          this.renderStageTray();
-        });
-        this.toolbar.appendChild(prep);
-      }
-
       if (count > 1) {
         const prev = el('button', 'btn btn--ghost', '◀');
         prev.type = 'button';
@@ -1263,14 +1176,6 @@
         });
         this.toolbar.appendChild(activate);
 
-      const toStage = el('button', 'token-menu__item', 'Вернуть в подготовку');
-      toStage.type = 'button';
-      toStage.addEventListener('click', () => {
-        closeMenu();
-        if (this.handlers.onUnstage) this.handlers.onUnstage(token.id);
-      });
-      menu.appendChild(toStage);
-
         const remove = el('button', 'btn btn--danger btn--ghost', 'Удалить карту');
         remove.type = 'button';
         remove.title = count > 1 ? `Останется карт во вкладке: ${count - 1}` : 'Вкладка станет пустой';
@@ -1296,10 +1201,6 @@
           ? 'Рисунок пока пуст: нажмите «Нарисовать карту» или загрузите изображение'
           : 'Карта ещё не загружена ДМ';
         this.tokenLayer.innerHTML = '';
-
-      // Панель подготовки живёт вместе с фишками: она и есть список
-      // того, что мастер приготовил.
-      this.renderStageTray();
         return;
       }
 
@@ -1329,94 +1230,13 @@
       // заведённой до появления этого поля, и видна на любой карте вкладки,
       // как было раньше.
       const tokens = this.tokens.filter((token) => (
-        !token.staged
-        && token.mapType === type && (!token.mapId || !activeMapId || token.mapId === activeMapId)
+        token.mapType === type && (!token.mapId || !activeMapId || token.mapId === activeMapId)
       ));
       this.tokenLayer.innerHTML = '';
 
       for (const token of tokens) {
         this.tokenLayer.appendChild(this.buildToken(token));
       }
-    }
-
-    /**
-     * Фото игрока из его листа.
-     * @param {string|null|undefined} playerId
-     * @returns {string|null}
-     */
-    photoOf(playerId) {
-      if (!playerId) return null;
-      const player = this.players.find((item) => item.playerId === playerId);
-      if (!player || !player.photoUrl) return null;
-      return this.resolveUrl(player.photoUrl);
-    }
-
-    /**
-     * Панель подготовленных фишек.
-     *
-     * Фишки в подготовке не лежат на карте: мастер выбирает нужную и кликает
-     * по месту, где она должна появиться. Убрать из подготовки можно оттуда же.
-     */
-    renderStageTray() {
-      if (!this.stageNode) return;
-      const staged = this.tokens.filter((token) => token.staged);
-      // Панель нужна мастеру, у которого есть что готовить, или когда он
-      // выбрал фишку для вывода: пустая панель занимала бы место в макете.
-      if (this.role !== 'dm' || this.training || (!staged.length && !this.stagingTokenId)) {
-        this.stageNode.hidden = true;
-        return;
-      }
-      this.stageNode.innerHTML = '';
-      this.stageNode.hidden = false;
-
-      const title = el('div', 'stage__title');
-      title.appendChild(el('span', null, this.stagingTokenId
-        ? 'Кликните по карте, куда поставить фишку'
-        : 'Подготовлено фишек:'));
-      if (this.stagingTokenId) {
-        const cancel = el('button', 'btn btn--ghost btn--tiny', 'Отмена');
-        cancel.type = 'button';
-        cancel.addEventListener('click', () => {
-          this.stagingTokenId = null;
-          this.renderStageTray();
-          this.surface.classList.remove('is-staging');
-        });
-        title.appendChild(cancel);
-      }
-      this.stageNode.appendChild(title);
-
-      for (const token of staged) {
-        const chip = el('button', `stage__chip${this.stagingTokenId === token.id ? ' is-active' : ''}`);
-        chip.type = 'button';
-        const photo = token.imageUrl || this.photoOf(token.assignedPlayerId);
-        if (photo) {
-          const thumb = el('span', 'stage__chip-photo');
-          thumb.style.backgroundImage = `url("${photo}")`;
-          chip.appendChild(thumb);
-        }
-        chip.appendChild(el('span', null, token.name));
-        chip.addEventListener('click', () => {
-          this.stagingTokenId = this.stagingTokenId === token.id ? null : token.id;
-          this.surface.classList.toggle('is-staging', Boolean(this.stagingTokenId));
-          this.renderStageTray();
-        });
-        this.stageNode.appendChild(chip);
-      }
-    }
-
-    /**
-     * Ставит выбранную подготовленную фишку в точку клика.
-     * @param {{x: number, y: number}} point
-     */
-    spawnStagedAt(point) {
-      if (!this.stagingTokenId) return false;
-      if (this.handlers.onSpawnStaged) {
-        this.handlers.onSpawnStaged(this.stagingTokenId, point.x, point.y);
-      }
-      this.stagingTokenId = null;
-      this.surface.classList.remove('is-staging');
-      this.renderStageTray();
-      return true;
     }
 
     canMove(token) {
@@ -1434,12 +1254,8 @@
       node.style.top = `${token.y * 100}%`;
 
       const circle = el('div', 'token__circle');
-      // Фото персонажа подставляется на его фишку, если у фишки нет своей
-      // картинки. Иначе пришлось бы стави��ь аватар дважды: в листе и на
-      // фишке, и они расходились бы при первом же переименовании.
-      const portrait = token.imageUrl || this.photoOf(token.assignedPlayerId);
-      if (portrait) {
-        circle.style.backgroundImage = `url("${this.resolveUrl(portrait)}")`;
+      if (token.imageUrl) {
+        circle.style.backgroundImage = `url("${this.resolveUrl(token.imageUrl)}")`;
         circle.classList.add('token__circle--image');
       } else {
         circle.style.setProperty('--token-color', token.color || '#c96f4a');
@@ -1660,13 +1476,6 @@
 
         const avatar = el('div', 'player-row__avatar', initials(player.name));
         if (player.role === 'dm') avatar.classList.add('player-row__avatar--dm');
-        // Фото из листа игрока, если он его загрузил. Иначе остаётся буква.
-        const photo = this.photoOf(player.playerId);
-        if (photo) {
-          avatar.textContent = '';
-          avatar.style.backgroundImage = `url("${photo}")`;
-          avatar.classList.add('player-row__avatar--image');
-        }
         row.appendChild(avatar);
 
         const main = el('div', 'player-row__main');
@@ -1692,16 +1501,6 @@
             if (this.handlers.onOpenSheet) this.handlers.onOpenSheet(player.playerId);
           });
           row.appendChild(open);
-
-          // Фишка персонажа готовится заранее: игрок подключается, его фишка
-          // уже лежит в подготовке, и мастер выводит её кликом по карте.
-          const stage = el('button', 'btn btn--tiny', 'Подготовить фишку');
-          stage.type = 'button';
-          stage.title = 'Создать фишку этого игрока с его фото и вывести её позже';
-          stage.addEventListener('click', () => {
-            if (this.handlers.onStageToken) this.handlers.onStageToken(player.playerId);
-          });
-          row.appendChild(stage);
         }
         this.listNode.appendChild(row);
       }

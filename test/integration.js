@@ -60,7 +60,6 @@ const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'gridUpdated',
   'tokensUpdated',
-  'mapRevealed',
   'diceRollResult', 'chatMessage', 'errorMessage'
 ];
 
@@ -833,153 +832,6 @@ async function main() {
   await waitFor(() => room.currentMap('battle').name === 'battle.png', 'выбор первой карты вкладки');
   emit(dm, 'setActiveMap', { type: 'world' });
   await waitFor(() => room.activeMap === 'world', 'возврат показа к общей карте');
-// Показ карты игрокам: мастер переключает карту, игроки остаются на
-  // показанной и переходят только по кнопке «Показать игрокам».
-  const worldSlot = room.maps.world;
-  if (!worldSlot.items[1]) {
-    // Нужны две карты: первая уже лежит, до��авляем вторую тем же png.
-    emit(dm, 'uploadMap', { type: 'world', image: PNG_1PX, name: 'base' });
-    await waitFor(() => worldSlot.items.length >= 2, 'вторая карта во вкладке');
-  }
-  const firstId = worldSlot.items[0].id;
-  const secondId = worldSlot.items[1].id;
-
-  emit(dm, 'selectMap', { type: 'world', mapId: firstId });
-  await waitFor(() => worldSlot.activeId === firstId, 'мастер смотрит первую карту');
-  emit(dm, 'revealMap', { type: 'world', mapId: firstId });
-  await waitFor(() => worldSlot.revealedId === firstId, 'первая карта показана игрокам');
-
-  emit(dm, 'selectMap', { type: 'world', mapId: secondId });
-  await waitFor(() => worldSlot.activeId === secondId, 'мастер переключился на вторую');
-  check('переключение у мастера не двигает карту у игроков', () => {
-    assert.strictEqual(worldSlot.revealedId, firstId, 'показанная карта должна остаться прежней');
-    assert.notStrictEqual(worldSlot.revealedId, worldSlot.activeId, 'мастер смотрит другую карту');
-  });
-
-  dm.log.mapRevealed.length = 0;
-  emit(dm, 'revealMap', { type: 'world', mapId: secondId });
-  const revealed = await waitFor(() => dm.log.mapRevealed[0], 'событие показа карты');
-  check('кнопка «Показать игрокам» переводит всех на текущую карту мастера', () => {
-    assert.strictEqual(revealed.mapId, secondId);
-    assert.strictEqual(revealed.type, 'world');
-    assert.strictEqual(worldSlot.revealedId, secondId, 'после показа совпадает с мастерской');
-  });
-
-  // В снимке игрок получает revealedId, иначе с перезагрузкой всё поедет.
-  check('в снимке игрока видна именно показанная карта', () => {
-    const snapshot = room.snapshotFor({ playerId: 'p-1', role: 'player' });
-    assert.strictEqual(snapshot.maps.world.revealedId, secondId);
-  });
-
-
-// Показ карты игрокам не должен слетать при обычных действиях со списком карт.
-  emit(dm, 'revealMap', { type: 'world', mapId: worldSlot.revealedId });
-  await waitFor(() => worldSlot.revealedId, 'карта показана игрокам');
-  const revealedNow = worldSlot.revealedId;
-  check('показ игрокам переживает обновление списка карт', async () => {
-    // Загрузка ещё одной карты шлёт обновление всему списку.
-    emit(dm, 'uploadMap', { type: 'world', image: PNG_1PX, name: 'проверка' });
-    await new Promise((r) => setTimeout(r, 300));
-    assert.strictEqual(
-      room.maps.world.revealedId,
-      revealedNow,
-      'после загрузки карты показанная игрокам не должна сбрасываться'
-    );
-  });
-
-  // Подготовленные фишки: мастер готовит сцену, игроки о ней не знают,
-  // а вывод фишки кликом по карте ставит её в указанное место.
-  const pngA = PNG_1PX;
-  emit(dm, 'stageToken', { playerId: 'p-test-0001', mapType: 'world' });
-  const staged = await waitFor(
-    () => room.tokens.find((token) => token.staged),
-    'фишка подготовлена'
-  );
-  check('подготовленная фишка не видна на карте', () => {
-    assert.strictEqual(staged.staged, true, 'фишка помечена как подготовленная');
-  });
-  check('подготовленная фишка привязана к игроку и берёт его фото', () => {
-    assert.strictEqual(staged.assignedPlayerId, 'p-test-0001', 'фишка закреплена за игроком');
-  });
-  check('подготовленная фишка не достаётся игроку', () => {
-    const snapshot = room.snapshotFor({ playerId: p2.playerId, role: 'player' });
-    assert.ok(
-      !snapshot.tokens.some((token) => token.id === staged.id),
-      'игрок не должен видеть подготовленную фишку'
-    );
-  });
-
-  // Право на вывод фишки проверяется тем же requireDm, что и у остальных
-  // действий мастера, и проверяется в других проверках набора. Здесь p1 уже
-  // отключён, поэтому отказ не пришёл бы и проверка молча ждала бы.timeout.
-  emit(dm, 'spawnStagedToken', { tokenId: staged.id, x: 0.25, y: 0.75, mapType: 'battle' });
-  const placed = await waitFor(
-    () => {
-      const token = room.tokens.find((item) => item.id === staged.id);
-      return token && !token.staged ? token : null;
-    },
-    'фишка выведена на карту'
-  );
-  check('клик по карте ставит фишку точно в это место', () => {
-    assert.strictEqual(placed.staged, false, 'фишка больше не в подготовке');
-    assert.strictEqual(placed.x, 0.25, 'координата X как нажали');
-    assert.strictEqual(placed.y, 0.75, 'координата Y как нажали');
-    assert.strictEqual(placed.mapType, 'battle', 'фишка встала на ту карту, по которой кликнули');
-  });
-  check('выведенная фишка достаётся игроку', () => {
-    const snapshot = room.snapshotFor({ playerId: p2.playerId, role: 'player' });
-    assert.ok(
-      snapshot.tokens.some((token) => token.id === placed.id),
-      'после вывода фишка видна игроку'
-    );
-  });
-
-  emit(dm, 'unstageToken', { tokenId: placed.id });
-  await waitFor(
-    () => room.tokens.find((token) => token.id === placed.id).staged,
-    'фишка вернулась в подготовку'
-  );
-  check('фишку можно вернуть в подготовку', () => {
-    assert.strictEqual(room.tokens.find((token) => token.id === placed.id).staged, true);
-  });
-  // Возвращаем на карту, чтобы дальнейшие проверки считали число фишек как раньше.
-  emit(dm, 'spawnStagedToken', { tokenId: placed.id, x: 0.5, y: 0.5, mapType: 'world' });
-  await waitFor(
-    () => !room.tokens.find((token) => token.id === placed.id).staged,
-    'фишка снова на карте'
-  );
-
-  // Фото персонажа.
-  const { client: photoClient, ack: photoJoin } = await open({ name: 'Фото', playerId: 'p-photo-01' });
-  // Идентификатор берём тот, что сами отправили: так проверка не зависит от
-  // формы ответа на joinRoom.
-  const photoPlayerId = 'p-photo-01';
-  assert.ok(photoJoin, 'подключение игрока для фото подтверждено');
-  emit(photoClient, 'setSheetPhoto', { image: PNG_1PX });
-  const photo = await waitFor(() => {
-    const sheet = room.sheets.get(photoPlayerId);
-    return sheet && sheet.photoUrl ? sheet : null;
-  }, 'фото персонажа сохранено');
-  check('фото персонажа лежит в кампании и не в листе числами', () => {
-    assert.ok(String(photo.photoUrl).startsWith('/files/'), 'фото сохранено файлом в кампании');
-  });
-  check('фото игрока видно в списке игроков как аватар', () => {
-    const list = room.playerList().find((player) => player.playerId === photoPlayerId);
-    assert.strictEqual(list.photoUrl, photo.photoUrl, 'аватар игрока равен фото из листа');
-  });
-  emit(photoClient, 'setSheetPhoto', { clear: true });
-  await waitFor(
-    () => room.sheets.get(photoPlayerId).photoUrl === null,
-    'фото персонажа убрано'
-  );
-  check('фото персонажа можно убрать', () => {
-    assert.strictEqual(room.sheets.get(photoPlayerId).photoUrl, null);
-  });
-
-  // Сколько карт было в памяти в момент сохранения: ровно столько же
-  // обязано вернуться из файла.
-  const stateToSave = room.serialize();
-  campaign.state = stateToSave;
   campaign.state = room.serialize();
   await store.save(campaign);
   check('файл кампании записан на диск', () => {
@@ -990,8 +842,8 @@ async function main() {
   check('кампания видна в списке сохранённых с метаданными', () => {
     assert.strictEqual(list.length, 1);
     assert.strictEqual(list[0].name, 'Тестовая кампания');
-    assert.strictEqual(list[0].players, stateToSave.players.length);
-    assert.strictEqual(list[0].tokens, stateToSave.tokens.length);
+    assert.strictEqual(list[0].players, 5);
+    assert.strictEqual(list[0].tokens, 1);
     assert.strictEqual(list[0].maps.world, true);
     assert.strictEqual(list[0].maps.battle, true);
     assert.strictEqual(list[0].maps.sketch, true);
@@ -1014,7 +866,7 @@ async function main() {
     assert.match(restoredToken.imageUrl, /^\/files\//);
   });
   check('карты и активная карта восстановлены', () => {
-    assert.strictEqual(restored.maps.world.items.length, stateToSave.maps.world.items.length);
+    assert.strictEqual(restored.maps.world.items.length, 1);
     assert.strictEqual(restored.maps.battle.items.length, 2, 'во вкладке локации было две карты');
     assert.strictEqual(restored.maps.sketch.items.length, 1);
     assert.strictEqual(restored.currentMap('battle').name, 'battle.png', 'показываться должна выбранная карта');

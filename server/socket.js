@@ -28,7 +28,6 @@ const {
   TOKEN_PALETTE,
   clampInt,
   clampNumber,
-  createEmptySheet,
   newMapId,
   newTokenId,
   normalizeSheet,
@@ -147,10 +146,6 @@ async function createTableServer(options) {
       type,
       items: slot ? slot.items : [],
       activeId: slot ? slot.activeId : null,
-      // Показанная игрокам карта едет вместе со списком. Без неё клиент
-      // обнулял поле при каждом движении карты, и «Показать игрокам»
-      // молча переставал работать: игроки снова шли за мастером.
-      revealedId: slot ? slot.revealedId : null,
       activeMap: room.activeMap
     });
   };
@@ -260,53 +255,6 @@ async function createTableServer(options) {
       broadcastPlayers();
     });
 
-    /**
-     * Фото персонажа.
-     *
-     * Кладётся в кампанию тем же путём, что картинки фишек, и дальше
-     * используется как аватар: в списке игроков и на фишке, если фишка
-     * закреплена за этим игроком и своей картинки не имеет.
-     */
-    socket.on('setSheetPhoto', async (payload) => {
-      if (!requireJoined(socket)) return;
-      const playerId = String((payload && payload.playerId) || socket.data.playerId || '');
-      if (!room.players.has(playerId)) return emitError(socket, 'Игрок не найден');
-      // Своё фото меняет игрок, чужое — мастер.
-      const isOwner = socket.data.playerId === playerId;
-      if (socket.data.role !== ROLE_DM && !isOwner) {
-        return emitError(socket, 'Можно менять фото только своего персонажа');
-      }
-
-      if (payload && payload.clear) {
-        const sheet = room.sheets.get(playerId) || createEmptySheet('');
-        sheet.photoUrl = null;
-        room.sheets.set(playerId, sheet);
-        markDirty();
-        io.emit('characterSheetUpdated', { playerId, sheet });
-        broadcastPlayers();
-        return;
-      }
-
-      const decoded = decodeImage(payload && payload.image);
-      if (decoded.error) return emitError(socket, decoded.error);
-      try {
-        const fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
-        const sheet = room.sheets.get(playerId) || createEmptySheet('');
-        sheet.photoUrl = `/files/${fileName}`;
-        room.sheets.set(playerId, sheet);
-        markDirty();
-        io.to(playerId).emit('characterSheetData', { playerId, sheet });
-        io.to('dm-sockets').emit('characterSheetUpdated', { playerId, sheet });
-        // Фишка персонажа должна сразу получить фото, поэтому список игроков
-        // пересылается всем: аватар нужен и мастеру, и игрокам.
-        broadcastPlayers();
-        io.emit('tokensUpdated', { tokens: room.tokens });
-      } catch (error) {
-        emitError(socket, 'Не удалось сохранить фото персонажа');
-        onLog(`Ошибка сохранения фото: ${error.message}`);
-      }
-    });
-
     socket.on('requestCharacterSheet', (payload) => {
       if (!requireJoined(socket)) return;
       const targetId = String((payload && payload.playerId) || '');
@@ -368,26 +316,6 @@ async function createTableServer(options) {
       markDirty();
       broadcastMapUpdate(type);
       onLog(`ДМ переключил карту (${type})`);
-    });
-
-    /**
-     * Показывает игрокам ту карту, которую сейчас смотрит мастер.
-     *
-     * Переключение у мастера само по себе ничего не двигает: у вкладки есть
-     * два идентификатора, activeId смотрит мастер, revealedId видят игроки.
-     */
-    socket.on('revealMap', (payload) => {
-      if (!requireDm(socket)) return;
-      const type = payload && payload.type;
-      if (!MAP_TYPES.includes(type)) return emitError(socket, 'Неизвестный тип карты');
-      const slot = room.maps[type];
-      const target = String((payload && payload.mapId) || slot.activeId || '');
-      if (!slot.items.some((item) => item.id === target)) return emitError(socket, 'Карта не найдена');
-      if (slot.revealedId === target) return;
-      slot.revealedId = target;
-      markDirty();
-      io.emit('mapRevealed', { type, mapId: target });
-      onLog(`Игрокам показана карта (${type})`);
     });
 
     socket.on('deleteMap', (payload) => {
@@ -463,81 +391,6 @@ async function createTableServer(options) {
       room.tokens.push(token);
       markDirty();
       io.emit('tokenCreated', token);
-    });
-
-    /**
-     * Подготовка фишки: создать заранее, до сцены.
-     *
-     * Фишка с флагом staged лежит в подготовке и на карте не видна. Позже
-     * мастер кликает по карте, и фишка там появляется. Так удобно: к началу
-     * боя все враги уже расставлены, а в сам момент встречи их не вбивают
-     * вручную одного за другим.
-     */
-    socket.on('stageToken', (payload) => {
-      if (!requireDm(socket)) return;
-      if (room.tokens.length >= LIMITS.maxTokens) return emitError(socket, 'Слишком много фишек на столе');
-      const requestedMap = payload && payload.mapType;
-      const mapType = MAP_TYPES.includes(requestedMap) ? requestedMap : (room.activeMap || 'battle');
-      const assignedPlayerId = payload && payload.playerId
-        ? String(payload.playerId)
-        : null;
-      if (assignedPlayerId && !room.players.has(assignedPlayerId)) {
-        return emitError(socket, 'Игрок не найден');
-      }
-      const player = assignedPlayerId ? room.players.get(assignedPlayerId) : null;
-      const token = {
-        id: newTokenId(),
-        name: sanitizeName(payload && payload.name) || (player ? player.name : `Фишка ${room.tokens.length + 1}`),
-        mapType,
-        mapId: sanitizeText(payload && payload.mapId, 80),
-        // Позиция не важна, пока фишка в подготовке: она всё равно не видна.
-        x: 0.5,
-        y: 0.5,
-        imageUrl: null,
-        assignedPlayerId,
-        staged: true,
-        color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length]
-      };
-      room.tokens.push(token);
-      markDirty();
-      io.to('dm-sockets').emit('tokenCreated', token);
-      onLog(`Фишка «${token.name}» подготовлена для сцены`);
-    });
-
-    /**
-     * Ставит подготовленную фишку на карту там, где мастер кликнул.
-     *
-     * В координатах карты то же самое, что и у обычной фишки: доли от 0 до 1,
-     * поэтому попадание одинаково у всех при любом размере окна.
-     */
-    socket.on('spawnStagedToken', (payload) => {
-      if (!requireDm(socket)) return;
-      const token = findToken(payload && payload.tokenId);
-      if (!token) return emitError(socket, 'Фишка не найдена');
-      if (!token.staged) return emitError(socket, 'Эта фишка уже на карте');
-      token.x = clampNumber(payload && payload.x, 0, 1, 0.5);
-      token.y = clampNumber(payload && payload.y, 0, 1, 0.5);
-      // Фишка встаёт на ту карту, по которой кликнули, а не ту, что готовили:
-      // иначе подготовка сцены была бы привязана к одному экрану.
-      const mapId = sanitizeText(payload && payload.mapId, 80);
-      if (mapId) token.mapId = mapId;
-      const mapType = payload && payload.mapType;
-      if (MAP_TYPES.includes(mapType)) token.mapType = mapType;
-      token.staged = false;
-      markDirty();
-      io.emit('tokenCreated', token);
-      onLog(`Фишка «${token.name}» выведена на карту`);
-    });
-
-    /** Возвращает фишку в подготовку, чтобы поставить её позже. */
-    socket.on('unstageToken', (payload) => {
-      if (!requireDm(socket)) return;
-      const token = findToken(payload && payload.tokenId);
-      if (!token) return emitError(socket, 'Фишка не найдена');
-      if (token.staged) return;
-      token.staged = true;
-      markDirty();
-      io.emit('tokenUpdated', token);
     });
 
     socket.on('renameToken', (payload) => {

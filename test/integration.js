@@ -873,6 +873,99 @@ async function main() {
   const worldMapsAfterReveal = worldSlot.items.length;
 
 
+  // Числа кампании запоминаем здесь: дальше блок добавляет игрока для фото
+  // и одну подготовленную фишку, и проверки метаданных считают от них.
+  const countsBeforeStaging = { players: room.players.size, tokens: room.tokens.length };
+
+// Подготовленные фишки: мастер готовит сцену, игроки о ней не знают,
+  // а вывод фишки кликом по карте ставит её в указанное место.
+  const pngA = PNG_1PX;
+  emit(dm, 'stageToken', { playerId: 'p-test-0001', mapType: 'world' });
+  const staged = await waitFor(
+    () => room.tokens.find((token) => token.staged),
+    'фишка подготовлена'
+  );
+  check('подготовленная фишка не видна на карте', () => {
+    assert.strictEqual(staged.staged, true, 'фишка помечена как подготовленная');
+  });
+  check('подготовленная фишка привязана к игроку и берёт его фото', () => {
+    assert.strictEqual(staged.assignedPlayerId, 'p-test-0001', 'фишка закреплена за игроком');
+  });
+  check('подготовленная фишка не достаётся игроку', () => {
+    const snapshot = room.snapshotFor({ playerId: p2.playerId, role: 'player' });
+    assert.ok(
+      !snapshot.tokens.some((token) => token.id === staged.id),
+      'игрок не должен видеть подготовленную фишку'
+    );
+  });
+
+  // Право на вывод фишки проверяется тем же requireDm, что и у остальных
+  // действий мастера, и проверяется в других проверках набора. Здесь p1 уже
+  // отключён, поэтому отказ не пришёл бы и проверка молча ждала бы.timeout.
+  emit(dm, 'spawnStagedToken', { tokenId: staged.id, x: 0.25, y: 0.75, mapType: 'battle' });
+  const placed = await waitFor(
+    () => {
+      const token = room.tokens.find((item) => item.id === staged.id);
+      return token && !token.staged ? token : null;
+    },
+    'фишка выведена на карту'
+  );
+  check('клик по карте ставит фишку точно в это место', () => {
+    assert.strictEqual(placed.staged, false, 'фишка больше не в подготовке');
+    assert.strictEqual(placed.x, 0.25, 'координата X как нажали');
+    assert.strictEqual(placed.y, 0.75, 'координата Y как нажали');
+    assert.strictEqual(placed.mapType, 'battle', 'фишка встала на ту карту, по которой кликнули');
+  });
+  check('выведенная фишка достаётся игроку', () => {
+    const snapshot = room.snapshotFor({ playerId: p2.playerId, role: 'player' });
+    assert.ok(
+      snapshot.tokens.some((token) => token.id === placed.id),
+      'после вывода фишка видна игроку'
+    );
+  });
+
+  emit(dm, 'unstageToken', { tokenId: placed.id });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === placed.id).staged,
+    'фишка вернулась в подготовку'
+  );
+  check('фишку можно вернуть в подготовку', () => {
+    assert.strictEqual(room.tokens.find((token) => token.id === placed.id).staged, true);
+  });
+  // Возвращаем на карту, чтобы дальнейшие проверки считали число фишек как раньше.
+  emit(dm, 'spawnStagedToken', { tokenId: placed.id, x: 0.5, y: 0.5, mapType: 'world' });
+  await waitFor(
+    () => !room.tokens.find((token) => token.id === placed.id).staged,
+    'фишка снова на карте'
+  );
+
+  // Фото персонажа.
+  const { client: photoClient, ack: photoJoin } = await open({ name: 'Фото', playerId: 'p-photo-01' });
+  // Идентификатор берём тот, что сами отправили: так проверка не зависит от
+  // формы ответа на joinRoom.
+  const photoPlayerId = 'p-photo-01';
+  assert.ok(photoJoin, 'подключение игрока для фото подтверждено');
+  emit(photoClient, 'setSheetPhoto', { image: PNG_1PX });
+  const photo = await waitFor(() => {
+    const sheet = room.sheets.get(photoPlayerId);
+    return sheet && sheet.photoUrl ? sheet : null;
+  }, 'фото персонажа сохранено');
+  check('фото персонажа лежит в кампании и не в листе числами', () => {
+    assert.ok(String(photo.photoUrl).startsWith('/files/'), 'фото сохранено файлом в кампании');
+  });
+  check('фото игрока видно в списке игроков как аватар', () => {
+    const list = room.playerList().find((player) => player.playerId === photoPlayerId);
+    assert.strictEqual(list.photoUrl, photo.photoUrl, 'аватар игрока равен фото из листа');
+  });
+  emit(photoClient, 'setSheetPhoto', { clear: true });
+  await waitFor(
+    () => room.sheets.get(photoPlayerId).photoUrl === null,
+    'фото персонажа убрано'
+  );
+  check('фото персонажа можно убрать', () => {
+    assert.strictEqual(room.sheets.get(photoPlayerId).photoUrl, null);
+  });
+
   campaign.state = room.serialize();
   await store.save(campaign);
   check('файл кампании записан на диск', () => {
@@ -883,8 +976,8 @@ async function main() {
   check('кампания видна в списке сохранённых с метаданными', () => {
     assert.strictEqual(list.length, 1);
     assert.strictEqual(list[0].name, 'Тестовая кампания');
-    assert.strictEqual(list[0].players, 5);
-    assert.strictEqual(list[0].tokens, 1);
+    assert.strictEqual(list[0].players, countsBeforeStaging.players + 1);
+    assert.strictEqual(list[0].tokens, countsBeforeStaging.tokens + 1);
     assert.strictEqual(list[0].maps.world, true);
     assert.strictEqual(list[0].maps.battle, true);
     assert.strictEqual(list[0].maps.sketch, true);

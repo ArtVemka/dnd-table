@@ -110,6 +110,49 @@
 
       const identity = el('div', 'box');
       identity.appendChild(el('div', 'box__title', 'Персонаж'));
+
+      // Фото персонажа. Загружается один раз и дальше работает как аватар
+      // везде в сессии: в списке игроков и на фишке, если фишка закреплена
+      // за этим игроком. Само фото в лист не входит числовым полем, поэтому
+      // форма его не собирает и не перезаписывает при каждом вводе.
+      const photoRow = el('div', 'photo-row');
+      this.photoNode = el('img', 'photo-row__img');
+      this.photoNode.alt = 'Фото персонажа';
+      this.photoNode.hidden = true;
+      photoRow.appendChild(this.photoNode);
+
+      const photoTools = el('div', 'photo-row__tools');
+      this.photoInput = el('input');
+      this.photoInput.type = 'file';
+      this.photoInput.accept = 'image/png,image/jpeg,image/webp,image/gif';
+      this.photoInput.hidden = true;
+      this.photoInput.addEventListener('change', () => {
+        const file = this.photoInput.files && this.photoInput.files[0];
+        // Сбрасываем значение: иначе повторный выбор того же файла не даст
+        // события change, и фото не обновится.
+        this.photoInput.value = '';
+        if (file && this.handlers.onPhoto) this.handlers.onPhoto(file);
+      });
+      photoTools.appendChild(this.photoInput);
+
+      const photoButton = el('button', 'btn btn--ghost btn--tiny', '📷 Фото');
+      photoButton.type = 'button';
+      photoButton.title = 'Это фото станет аватаром на фишке и в списке игроков';
+      photoButton.addEventListener('click', () => {
+        if (!this.readOnly) this.photoInput.click();
+      });
+      this.photoButton = photoButton;
+      photoTools.appendChild(photoButton);
+
+      this.photoClearButton = el('button', 'btn btn--ghost btn--tiny', 'Убрать');
+      this.photoClearButton.type = 'button';
+      this.photoClearButton.addEventListener('click', () => {
+        if (!this.readOnly && this.handlers.onPhotoClear) this.handlers.onPhotoClear();
+      });
+      photoTools.appendChild(this.photoClearButton);
+      photoRow.appendChild(photoTools);
+      identity.appendChild(photoRow);
+
       identity.appendChild(this.field('characterName', 'Имя персонажа'));
       identity.appendChild(this.field('playerName', 'Имя игрока'));
       identity.appendChild(this.field('charClass', 'Класс'));
@@ -304,6 +347,26 @@
      * записывалось другое: сила 90 показывала модификатор +40, на сервере
      * оставалось 30, и исправления он не видел никогда.
      */
+    /**
+     * Показывает фото персонажа или пустое место.
+     *
+     * Вызывается и когда лист приходит с сервера, и сразу после загрузки
+     * файла, чтобы не ждать кругового обмена с сервером.
+     * @param {string|null} url
+     */
+    setPhoto(url) {
+      if (!this.photoNode) return;
+      const has = typeof url === 'string' && url;
+      this.photoNode.hidden = !has;
+      if (has) this.photoNode.src = url;
+      else this.photoNode.removeAttribute('src');
+      if (this.photoClearButton) this.photoClearButton.hidden = !has;
+      if (this.photoButton) {
+        this.photoButton.textContent = has ? '📷 Заменить' : '📷 Фото';
+        this.photoButton.disabled = Boolean(this.readOnly);
+      }
+    }
+
     collect() {
       // Пустой лист создаётся один раз на представление, а не на каждый
       // символ в текстовом поле.
@@ -449,6 +512,9 @@
       }
       this.derived = DnD.computeDerived(data);
       this.paintDerived();
+      // Фото живёт рядом с листом, но не часть его чисел, поэтому ставится
+      // здесь, а не разбирается в цикле по полям формы.
+      this.setPhoto(typeof data.photoUrl === 'string' ? data.photoUrl : null);
     }
 
     /** @param {boolean} value */
@@ -459,6 +525,10 @@
       for (const box of this.checkboxes) box.disabled = this.readOnly;
       if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
       if (this.manualProfCheck && !this.manualProfCheck.checked) this.manualProfInput.hidden = true;
+      // Кнопки фото при просмотре только убираются: фотографию ДМ смотрит,
+      // но не меняет, а игрок при отключённом поле ввода тоже.
+      if (this.photoButton) this.photoButton.disabled = this.readOnly;
+      if (this.photoClearButton) this.photoClearButton.hidden = this.readOnly;
       this.paintDerived();
     }
 

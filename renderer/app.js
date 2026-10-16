@@ -257,6 +257,27 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     });
   }
 
+  /**
+   * Загружает фото персонажа.
+   *
+   * Файл читается тем же способом, что картинки фишек, поэтому ограничения
+   * на размер и тип не расходятся. После чтения фото показывается сразу, не
+   * дожидаясь ответа сервера: иначе при медленной сети картинка мигает.
+   * @param {File} file
+   */
+  async function uploadSheetPhoto(file) {
+    const read = await readImageFile(file);
+    if (read.canceled) return;
+    if (read.error) {
+      toast(read.error, 'error');
+      return;
+    }
+    const sent = emit('setSheetPhoto', { image: read.dataUrl });
+    if (!sent) return;
+    if (sheetView) sheetView.setPhoto(read.dataUrl);
+    if (sheetView) sheetView.setStatus('Фото загружается…');
+  }
+
   function emit(event, payload) {
     if (!app.socket || !app.connected) {
       toast('Нет соединения со столом', 'error');
@@ -923,6 +944,16 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         },
         onSelectMap: (type, mapId) => emit('selectMap', { type, mapId }),
         onRevealMap: (type, mapId) => emit('revealMap', { type, mapId }),
+      onStageToken: (playerId) => emit('stageToken', { playerId }),
+      onUnstage: (tokenId) => emit('unstageToken', { tokenId }),
+      onSpawnStaged: (tokenId, x, y) => emit('spawnStagedToken', {
+        tokenId,
+        x,
+        y,
+        // Фишка встаёт на ту карту, по которой кликнули, а не ту, что готовили.
+        mapId: activeMapId(),
+        mapType: app.room.activeMap
+      }),
         onMoveToken: (tokenId, x, y) => emit('moveToken', { tokenId, x, y }),
         onNotice: (message) => toast(message),
         onToggleGrid: (enabled) => emit('setGrid', {
@@ -1002,7 +1033,9 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         onChange: onSheetChange,
         onPlayerChange: (playerId) => openPlayerSheet(playerId),
         onBack: () => closePlayerSheet(),
-        onDetach: () => detachSheet()
+        onDetach: () => detachSheet(),
+        onPhoto: (file) => uploadSheetPhoto(file),
+        onPhotoClear: () => emit('setSheetPhoto', { clear: true })
       });
     }
   }

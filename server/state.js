@@ -150,6 +150,8 @@ function emptyProficiencyMap(keys) {
 function createEmptySheet(playerName = '') {
   return {
     playerName,
+    /** Фото персонажа: аватар в списке игроков и на его фишке. */
+    photoUrl: null,
     characterName: '',
     charClass: '',
     race: '',
@@ -247,6 +249,8 @@ function normalizeSheet(input, fallbackPlayerName = '') {
   const raw = /** @type {Record<string, any>} */ (input);
 
   sheet.playerName = sanitizeText(raw.playerName, LIMITS.maxNameLength) || fallbackPlayerName;
+  // Фото персонажа: служит аватаром везде в сессии, в том числе на фишке.
+  sheet.photoUrl = typeof raw.photoUrl === 'string' ? raw.photoUrl : null;
   sheet.characterName = sanitizeText(raw.characterName, LIMITS.maxNameLength);
   sheet.charClass = sanitizeText(raw.charClass, 60);
   sheet.race = sanitizeText(raw.race, 60);
@@ -453,6 +457,8 @@ class RoomState {
       y: clampNumber(token.y, 0, 1, 0.5),
       imageUrl: typeof token.imageUrl === 'string' ? token.imageUrl : null,
       assignedPlayerId: token.assignedPlayerId ? String(token.assignedPlayerId) : null,
+      /** Подготовленная фишка лежит в запасе и на карте не видна. */
+      staged: Boolean(token.staged),
       color: typeof token.color === 'string' ? token.color : TOKEN_PALETTE[0]
     };
   }
@@ -580,6 +586,12 @@ class RoomState {
         role: player.role,
         online: player.online,
         hasSheet: this.sheets.has(player.playerId),
+        // Фото из листа: клиенту не нужно знать про листы, чтобы нарисовать
+        // аватар в списке игроков.
+        photoUrl: (() => {
+          const sheet = this.sheets.get(player.playerId);
+          return (sheet && typeof sheet.photoUrl === 'string') ? sheet.photoUrl : null;
+        })(),
         tokenId: includeTokens
           ? (tokenIdByPlayer.get(player.playerId) || null)
           : null
@@ -625,7 +637,9 @@ class RoomState {
       maps: this.maps,
       activeMap: this.activeMap,
       grid: this.grid,
-      tokens: this.tokens,
+      // Игроку отдаём только то, что стоит на карте: подготовленные фишки
+      // мастер держит в запасе, и знать о них до сцены игрокам незачем.
+      tokens: isDm ? this.tokens : this.tokens.filter((token) => !token.staged),
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory),
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory)
     };

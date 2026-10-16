@@ -1037,6 +1037,15 @@ code {
   color: var(--gold);
 }
 
+/* Фото игрока из листа: круглая обрезка по центру, как у фишки. */
+.player-row__avatar--image {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  color: transparent;
+  font-size: 0;
+}
+
 .player-row__main {
   flex: 1;
   min-width: 0;
@@ -2215,6 +2224,35 @@ code {
   color: #9ad186;
 }
 
+/* ------------------------------------------- Фото персонажа в листе */
+
+.photo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.photo-row__img {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--panel, #1c1f26);
+  border: 1px solid var(--line, #3a404d);
+}
+
+.photo-row__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.is-readonly .photo-row__tools {
+  opacity: 0.75;
+}
+
 /* ------------------------------------------- Список игроков у ДМ в листах */
 
 .sheet__players {
@@ -2780,4 +2818,66 @@ body > * {
 .adv-item__title--link:hover {
   color: var(--accent-hover);
   text-decoration-style: solid;
+}
+
+/* ------------------------------------- Подготовленные фишки и режим подготовки */
+
+.stage {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(92%, 720px);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  z-index: 6;
+}
+
+.stage__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.stage__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.stage__chip.is-active {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold) inset;
+}
+
+.stage__chip-photo {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--surface-3);
+}
+
+/* Курсор-прицел, пока мастер ждёт клика для вывода фишки. */
+.map-surface.is-staging,
+.is-staging .map-surface {
+  cursor: crosshair;
 }

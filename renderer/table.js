@@ -1134,8 +1134,8 @@
       // Кнопка «Показать игрокам»: мастер смотрит одну карту, игроки — другую.
       // Показывать имеет смысл, только когда в вкладке есть из чего выбирать.
       if (this.role === 'dm' && !this.training && count > 1 && slot && map) {
-        this.revealButton.hidden = slot.revealedId === map.id;
         this.toolbar.appendChild(this.revealButtonNode());
+        this.revealButton.hidden = slot.revealedId === map.id;
       } else if (this.revealButton) {
         this.revealButton.hidden = true;
       }

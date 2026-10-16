@@ -318,6 +318,26 @@ async function createTableServer(options) {
       onLog(`ДМ переключил карту (${type})`);
     });
 
+    /**
+     * Показывает игрокам ту карту, которую сейчас смотрит мастер.
+     *
+     * Переключение у мастера само по себе ничего не двигает: у вкладки есть
+     * два идентификатора, activeId смотрит мастер, revealedId видят игроки.
+     */
+    socket.on('revealMap', (payload) => {
+      if (!requireDm(socket)) return;
+      const type = payload && payload.type;
+      if (!MAP_TYPES.includes(type)) return emitError(socket, 'Неизвестный тип карты');
+      const slot = room.maps[type];
+      const target = String((payload && payload.mapId) || slot.activeId || '');
+      if (!slot.items.some((item) => item.id === target)) return emitError(socket, 'Карта не найдена');
+      if (slot.revealedId === target) return;
+      slot.revealedId = target;
+      markDirty();
+      io.emit('mapRevealed', { type, mapId: target });
+      onLog(`Игрокам показана карта (${type})`);
+    });
+
     socket.on('deleteMap', (payload) => {
       if (!requireDm(socket)) return;
       const type = payload && payload.type;

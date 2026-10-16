@@ -60,6 +60,7 @@ const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'gridUpdated',
   'tokensUpdated',
+  'mapRevealed',
   'diceRollResult', 'chatMessage', 'errorMessage'
 ];
 
@@ -832,6 +833,46 @@ async function main() {
   await waitFor(() => room.currentMap('battle').name === 'battle.png', 'выбор первой карты вкладки');
   emit(dm, 'setActiveMap', { type: 'world' });
   await waitFor(() => room.activeMap === 'world', 'возврат показа к общей карте');
+// Показ карты игрокам: мастер переключает карту, игроки остаются на
+  // показанной и переходят только по кнопке «Показать игрокам».
+  const worldSlot = room.maps.world;
+  if (!worldSlot.items[1]) {
+    // Нужны две карты: первая уже лежит, до��авляем вторую тем же png.
+    emit(dm, 'uploadMap', { type: 'world', image: PNG_1PX, name: 'base' });
+    await waitFor(() => worldSlot.items.length >= 2, 'вторая карта во вкладке');
+  }
+  const firstId = worldSlot.items[0].id;
+  const secondId = worldSlot.items[1].id;
+
+  emit(dm, 'selectMap', { type: 'world', mapId: firstId });
+  await waitFor(() => worldSlot.activeId === firstId, 'мастер смотрит первую карту');
+  emit(dm, 'revealMap', { type: 'world', mapId: firstId });
+  await waitFor(() => worldSlot.revealedId === firstId, 'первая карта показана игрокам');
+
+  emit(dm, 'selectMap', { type: 'world', mapId: secondId });
+  await waitFor(() => worldSlot.activeId === secondId, 'мастер переключился на вторую');
+  check('переключение у мастера не двигает карту у игроков', () => {
+    assert.strictEqual(worldSlot.revealedId, firstId, 'показанная карта должна остаться прежней');
+    assert.notStrictEqual(worldSlot.revealedId, worldSlot.activeId, 'мастер смотрит другую карту');
+  });
+
+  dm.log.mapRevealed.length = 0;
+  emit(dm, 'revealMap', { type: 'world', mapId: secondId });
+  const revealed = await waitFor(() => dm.log.mapRevealed[0], 'событие показа карты');
+  check('кнопка «Показать игрокам» переводит всех на текущую карту мастера', () => {
+    assert.strictEqual(revealed.mapId, secondId);
+    assert.strictEqual(revealed.type, 'world');
+    assert.strictEqual(worldSlot.revealedId, secondId, 'после показа совпадает с мастерской');
+  });
+
+  // В снимке игрок получает revealedId, иначе с перезагрузкой всё поедет.
+  check('в снимке игрока видна именно показанная карта', () => {
+    const snapshot = room.snapshotFor({ playerId: 'p-1', role: 'player' });
+    assert.strictEqual(snapshot.maps.world.revealedId, secondId);
+  });
+  const worldMapsAfterReveal = worldSlot.items.length;
+
+
   campaign.state = room.serialize();
   await store.save(campaign);
   check('файл кампании записан на диск', () => {
@@ -866,7 +907,7 @@ async function main() {
     assert.match(restoredToken.imageUrl, /^\/files\//);
   });
   check('карты и активная карта восстановлены', () => {
-    assert.strictEqual(restored.maps.world.items.length, 1);
+    assert.strictEqual(restored.maps.world.items.length, worldMapsAfterReveal);
     assert.strictEqual(restored.maps.battle.items.length, 2, 'во вкладке локации было две карты');
     assert.strictEqual(restored.maps.sketch.items.length, 1);
     assert.strictEqual(restored.currentMap('battle').name, 'battle.png', 'показываться должна выбранная карта');

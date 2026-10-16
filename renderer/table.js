@@ -651,7 +651,35 @@
     mapOf(type) {
       const slot = type ? this.maps[type] : null;
       if (!slot || !Array.isArray(slot.items) || !slot.items.length) return null;
-      return slot.items.find((item) => item.id === slot.activeId) || slot.items[0];
+      // Игрокам видна та карта, которую мастер показал: revealedId.
+      // Если её не задавали (старая кампания или никто ещё не показывал),
+      // показывается мастерская карта — как велось до разделения.
+      const revealed = slot.revealedId || slot.activeId;
+      return slot.items.find((item) => item.id === revealed) || slot.items[0];
+    }
+
+    /**
+     * Показывает игрокам карту, которую мастер смотрит сейчас.
+     *
+     * Переключение стрелками двигает только мастерский экран: игроки остаются
+     * на показанной им карте, пока мастер не нажмёт эту кнопку.
+     */
+    revealCurrentMap() {
+      const slot = this.maps[this.viewedMap];
+      if (!slot || !Array.isArray(slot.items)) return;
+      if (slot.activeId && slot.revealedId === slot.activeId) return;
+      if (this.handlers.onRevealMap) this.handlers.onRevealMap(this.viewedMap, slot.activeId);
+    }
+
+    /** Кнопка в панели карты: только для мастера. */
+    revealButtonNode() {
+      if (!this.revealButton) {
+        this.revealButton = el('button', 'btn btn--accent btn--tiny', 'Показать игрокам');
+        this.revealButton.type = 'button';
+        this.revealButton.title = 'Перевести карту у всех участников на ту, что смотрите вы'
+        this.revealButton.addEventListener('click', () => this.revealCurrentMap());
+      }
+      return this.revealButton;
     }
 
     /** Сколько карт лежит во вкладке. */
@@ -1103,6 +1131,15 @@
       const index = map && slot ? slot.items.findIndex((item) => item.id === map.id) : -1;
 
       // Переключение между картами одной вкладки: их может быть много.
+      // Кнопка «Показать игрокам»: мастер смотрит одну карту, игроки — другую.
+      // Показывать имеет смысл, только когда в вкладке есть из чего выбирать.
+      if (this.role === 'dm' && !this.training && count > 1 && slot && map) {
+        this.revealButton.hidden = slot.revealedId === map.id;
+        this.toolbar.appendChild(this.revealButtonNode());
+      } else if (this.revealButton) {
+        this.revealButton.hidden = true;
+      }
+
       if (count > 1) {
         const prev = el('button', 'btn btn--ghost', '◀');
         prev.type = 'button';

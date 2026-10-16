@@ -588,16 +588,26 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       if (app.role === 'dm' && app.viewedSheetPlayerId === playerId) refreshSheetView(true);
     });
 
-    socket.on('mapUpdated', ({ type, items, activeId, activeMap }) => {
+    socket.on('mapUpdated', ({ type, items, activeId, activeMap, revealedId }) => {
       // Карты вкладки приходят списком: ДМ может держать во вкладке несколько
       // локаций и переключаться между ними, ничего не теряя.
       app.room.maps[type] = {
         items: Array.isArray(items) ? items : [],
-        activeId: activeId || null
+        activeId: activeId || null,
+        revealedId: revealedId || null
       };
       app.room.activeMap = activeMap;
       mapView.render(app.room, viewer());
     });
+
+    socket.on('mapRevealed', ({ type, mapId } = {}) => {
+      const slot = (app.room.maps || {})[type];
+      if (!slot) return;
+      slot.revealedId = mapId;
+      // Игрок узнаёт о показанной карте и перерисовывает стол.
+      if (app.role !== 'dm') mapView.render(app.room, viewer());
+    });
+
 
     socket.on('gridUpdated', (grid) => {
       app.room.grid = grid;
@@ -912,6 +922,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
           emit('uploadMap', { type, image: result.dataUrl, name: result.name });
         },
         onSelectMap: (type, mapId) => emit('selectMap', { type, mapId }),
+        onRevealMap: (type, mapId) => emit('revealMap', { type, mapId }),
         onMoveToken: (tokenId, x, y) => emit('moveToken', { tokenId, x, y }),
         onNotice: (message) => toast(message),
         onToggleGrid: (enabled) => emit('setGrid', {

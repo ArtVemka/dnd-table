@@ -80,7 +80,7 @@ const MAP_NAME_MAX = 120;
 
 function emptyMaps() {
   const maps = {};
-  for (const type of MAP_TYPES) maps[type] = { items: [], activeId: null };
+  for (const type of MAP_TYPES) maps[type] = { items: [], activeId: null, revealedId: null };
   return maps;
 }
 /**
@@ -392,7 +392,7 @@ class RoomState {
    * @param {unknown} raw
    */
   normalizeMapSlot(raw) {
-    const slot = { items: [], activeId: null };
+    const slot = { items: [], activeId: null, revealedId: null };
     if (!raw || typeof raw !== 'object') return slot;
     const source = /** @type {any} */ (raw);
 
@@ -420,6 +420,11 @@ class RoomState {
     slot.activeId = items.some((item) => item.id === source.activeId)
       ? String(source.activeId)
       : (items.length ? items[0].id : null);
+    // Что видят игроки. Поле появилось позже activeId, поэтому в старых
+    // кампаниях его нет: тогда показывается мастерская карта, как раньше.
+    slot.revealedId = items.some((item) => item.id === source.revealedId)
+      ? String(source.revealedId)
+      : slot.activeId;
     return slot;
   }
 

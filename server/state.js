@@ -10,6 +10,7 @@
  */
 
 const crypto = require('crypto');
+const diceModule = require('../renderer/dice.js');
 
 const CAMPAIGN_FORMAT_VERSION = 2;
 
@@ -670,7 +671,11 @@ class RoomState {
       // Фильтруем здесь, а не в интерфейсе: иначе фишка утекает в снимок
       // состояния, который игрок получает целиком.
       tokens: isDm ? this.tokens : this.tokens.filter((token) => !token.hidden),
-      diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory),
+      // Тайный бросок мастера хранится целиком: файл кампании и снимок для
+      // мастера должны видеть число. Игроку достаётся бросок без результата —
+      // иначе «слепой» бросок утечёт в состояние, которое игрок получает целиком.
+      diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory)
+        .map((roll) => (isDm ? roll : diceModule.hideRollResult(roll))),
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory)
     };
   }

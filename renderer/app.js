@@ -916,7 +916,10 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     }
     if (!dicePanel) {
       dicePanel = new DicePanel($('#tab-dice'), {
-        onRoll: (sides) => emit('rollDice', { sides })
+        // Формула приходит текстом («2d6+3»), число разбирает сервер.
+        onRoll: (formula, options) => emit('rollDice', { formula, ...(options || {}) }),
+        // Тайный бросок у мастера: игрок его всё равно увидел бы.
+        canRollHidden: () => app.role === 'dm'
       });
     }
     /**

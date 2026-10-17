@@ -1684,27 +1684,73 @@
     build() {
       this.root.appendChild(el('div', 'panel__title', 'Бросок кубика'));
 
-      const controls = el('div', 'dice__controls');
-      const select = el('select', 'select');
-      // Только настоящие кости: d4, d6, d8, d10, d12, d20 и сотня для
-      // процентных бросков. Раньше в списке стояли все двадцать, и половина
-      // вариантов в игре не встречается.
+      // Быстрые кости: бросить одну кость в один клик. Список тот же, что
+      // у DnD.DICE_SIDES: костей на три или семь граней в игре нет.
+      const quick = el('div', 'dice__quick');
       for (const sides of DnD.DICE_SIDES) {
-        const option = el('option', null, `d${sides}`);
-        option.value = String(sides);
-        if (sides === 20) option.selected = true;
-        select.appendChild(option);
+        const quickButton = el('button', 'btn dice__quick-btn', `d${sides}`);
+        quickButton.type = 'button';
+        quickButton.title = `Бросить d${sides}`;
+        quickButton.addEventListener('click', () => this.roll(`d${sides}`));
+        quick.appendChild(quickButton);
       }
-      this.select = select;
-      controls.appendChild(select);
+      this.root.appendChild(quick);
+
+      const controls = el('div', 'dice__controls');
+      const input = el('input', 'input dice__formula');
+      input.type = 'text';
+      input.placeholder = '2d6+3';
+      input.maxLength = 40;
+      // Формула набирается с клавиатуры: пока жмится «Enter», поле должно
+      // оставаться в форме, а не отправлять страницу.
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          this.rollFromInput();
+        }
+      });
+      this.input = input;
+      controls.appendChild(input);
 
       const roll = el('button', 'btn btn--accent', 'Бросить');
       roll.type = 'button';
-      roll.addEventListener('click', () => {
-        if (this.handlers.onRoll) this.handlers.onRoll(Number(this.select.value));
-      });
+      roll.addEventListener('click', () => this.rollFromInput());
       controls.appendChild(roll);
       this.root.appendChild(controls);
+
+      // Переброс: тот же бросок ещё раз. Кнопка появляется после первого
+      // броска этой панелью и повторяет последнюю отправленную формулу.
+      const reroll = el('button', 'btn btn--ghost dice__reroll', 'Перебросить');
+      reroll.type = 'button';
+      reroll.hidden = true;
+      reroll.addEventListener('click', () => {
+        if (this.lastFormula) this.roll(this.lastFormula, { keepFormula: true });
+      });
+      this.reroll = reroll;
+      this.root.appendChild(reroll);
+
+      // Тайный бросок умеет только мастер. Поле всегда есть в разметке, но
+      // показывается по роли: панель собирается до подключения, роль в этот
+      // момент ещё неизвестна, и к моменту показа у мастера она уже есть.
+      // Игрок, бросивший тайно, видел бы число лишь сам, то есть «тайно» ничего
+      // бы не значило; сервер проверяет это повторно.
+      const hiddenLabel = el('label', 'dice__hidden');
+      const hiddenBox = el('input', null);
+      hiddenBox.type = 'checkbox';
+      hiddenLabel.appendChild(hiddenBox);
+      hiddenLabel.appendChild(el('span', null, 'тайно'));
+      this.hiddenBox = hiddenBox;
+      this.hiddenLabel = hiddenLabel;
+      this.canRollHidden = typeof this.handlers.canRollHidden === 'function'
+        ? this.handlers.canRollHidden
+        : () => false;
+      this.root.appendChild(hiddenLabel);
+      this.updateHiddenAvailability();
+
+      // Подсказка живёт под полем броска и до заголовка истории: ошибка
+      // разбора должна быть рядом с полем, а не внизу панели.
+      this.hint = el('div', 'dice__hint');
+      this.root.appendChild(this.hint);
 
       this.last = el('div', 'dice__last');
       this.last.hidden = true;
@@ -1715,11 +1761,80 @@
       this.root.appendChild(this.history);
     }
 
+    /**
+     * Отправляет бросок. Формулу разбирает сервер: клиент знает только
+     * набор настоящих костей и отдаёт написанное текстом.
+     * @param {string} formula
+     * @param {{keepFormula?: boolean}} [options]
+     */
+    roll(formula, options = {}) {
+      const text = String(formula || '').trim();
+      if (!text) return;
+      const parsed = DnDDice.parseFormula(text);
+      if (!parsed.ok) {
+        this.showHint(parsed.error);
+        return;
+      }
+      this.lastFormula = parsed.normalized;
+      if (this.reroll) this.reroll.hidden = false;
+      // Набранный текст после броска не нужен: он остаётся в перебросе, а поле
+      // очищается, чтобы следующий бросок не отличался от предыдущего одним
+      // нажатием.
+      if (this.input && !options.keepFormula) this.input.value = '';
+      this.showHint('');
+      if (this.handlers.onRoll) {
+        this.handlers.onRoll(parsed.normalized, {
+          hidden: this.canRollHidden() && Boolean(this.hiddenBox && this.hiddenBox.checked)
+        });
+      }
+    }
+
+    /** Бросок из строки формулы: пустая строка не отправляется. */
+    rollFromInput() {
+      const text = this.input ? this.input.value.trim() : '';
+      if (!text) {
+        this.showHint('Введите формулу броска, например 2d6+3');
+        return;
+      }
+      this.roll(text);
+    }
+
+    /**
+     * Подсказка под полем броска: сюда же сервер присылает отказ, если
+     * формула не разобралась. Ошибка должна быть видна рядом с полем, а не
+     * только во всплывающем сообщении.
+     * @param {string} text
+     */
+    showHint(text) {
+      if (!this.hint) return;
+      this.hint.textContent = text || '';
+      this.hint.classList.toggle('is-error', Boolean(text));
+    }
+
     /** @param {object[]} history */
     renderAll(history) {
+      this.updateHiddenAvailability();
       this.history.innerHTML = '';
       for (const roll of history) this.appendRow(roll);
       this.scrollToEnd();
+    }
+
+    /** Показывает поле «тайно» только мастеру и только пока он не отправлен. */
+    updateHiddenAvailability() {
+      if (!this.hiddenLabel) return;
+      this.hiddenLabel.hidden = !this.canRollHidden();
+      if (this.hiddenLabel.hidden) this.hiddenBox.checked = false;
+    }
+
+    /**
+     * Подпись броска: формула, а если броска не было, одна кость.
+     * Старые броски в истории кампании хранят только грани, и «d20» должно
+     * остаться читаемым.
+     * @param {object} roll
+     * @returns {string}
+     */
+    rollLabel(roll) {
+      return roll.formula || `d${roll.sides}`;
     }
 
     /** @param {object} roll */
@@ -1728,8 +1843,9 @@
       this.scrollToEnd();
       this.last.hidden = false;
       this.last.innerHTML = '';
-      this.last.appendChild(el('span', 'dice__last-text', `${roll.playerName} бросил d${roll.sides}:`));
-      const value = el('span', 'dice__last-value', String(roll.result));
+      this.last.appendChild(el('span', 'dice__last-text', `${roll.playerName} бросил ${this.rollLabel(roll)}:`));
+      const value = el('span', 'dice__last-value', roll.hidden ? '?' : String(roll.result));
+      if (roll.hidden) value.classList.add('is-secret');
       value.classList.add('is-pop');
       this.last.appendChild(value);
       setTimeout(() => value.classList.remove('is-pop'), 600);
@@ -1744,8 +1860,10 @@
     appendRow(roll) {
       const row = el('div', 'dice__row');
       row.appendChild(el('span', 'dice__row-name', roll.playerName));
-      row.appendChild(el('span', 'dice__row-die', `d${roll.sides}`));
-      row.appendChild(el('span', 'dice__row-result', String(roll.result)));
+      const label = el('span', 'dice__row-die', this.rollLabel(roll));
+      if (roll.hidden) label.classList.add('is-secret');
+      row.appendChild(label);
+      row.appendChild(el('span', 'dice__row-result', roll.hidden ? '?' : String(roll.result)));
       row.appendChild(el('span', 'dice__row-time', formatTime(roll.time)));
       this.history.appendChild(row);
       if (this.history.childElementCount > 200) this.history.removeChild(this.history.firstChild);

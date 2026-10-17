@@ -312,19 +312,29 @@
     trainTable.emit('renameToken', { tokenId: trainTokenId, name: 'Тордин' });
     trainTable.emit('setTokenImage', { tokenId: trainTokenId, image: PNG_1PX });
     trainTable.emit('rollDice', { sides: 20 });
+    trainTable.emit('rollDice', { formula: '2d6+3' });
     trainTable.emit('chatMessage', { text: 'Проверка связи' });
     trainTable.emit('nonExistentAction', {});
     check('фишку можно двигать, переименовывать и наряжать без сервера', () => {
       const token = train.tokens[train.tokens.length - 1];
       assert(token.name === 'Тордин', `имя фишки: ${token.name}`);
       assert(token.imageUrl === PNG_1PX, 'картинка фишки не применилась');
-      assert(train.rolls.length === 1 && train.rolls[0].sides === 20, 'кубик не бросился');
+      assert(train.rolls.length === 2 && train.rolls[0].sides === 20, 'кубик не бросился');
       const roll = train.rolls[0];
       assert(roll.result >= 1 && roll.result <= 20, `результат броска: ${roll.result}`);
       assert(roll.playerName === 'Артём', 'в броске нет имени игрока');
       assert(train.chat.some((message) => message.text === 'Проверка связи'), 'сообщение чата не прошло');
       assert(train.chat.some((message) => message.isRoll), 'бросок не попал в чат');
       assert(train.errors.length === 1, `неизвестное действие должно ругаться: ${train.errors.join(' | ')}`);
+    });
+    check('тренировочный стол считает формулы тем же модулем, что и сервер', () => {
+      const formula = train.rolls[1];
+      assert(formula.formula === '2d6+3', `формула: ${formula.formula}`);
+      assert(formula.values.length === 2, `бросков: ${formula.values.length}`);
+      const sum = formula.values.reduce((acc, value) => acc + value, 0);
+      assert(formula.result === sum + 3, `итог ${formula.result} не равен сумме костей и модулю`);
+      assert(train.chat.some((message) => message.isRoll && message.text.includes('2d6+3')),
+        'формульный бросок не попал в чат');
     });
     trainTable.disconnect();
 
@@ -1140,29 +1150,115 @@
 
     const diceHost = document.createElement('div');
     sandbox.appendChild(diceHost);
-    let rolledSides = null;
-    const dicePanel = new window.TableUI.DicePanel(diceHost, { onRoll: (sides) => { rolledSides = sides; } });
+    const sentRolls = [];
+    let dmMayRollHidden = true;
+    const dicePanel = new window.TableUI.DicePanel(diceHost, {
+      onRoll: (formula, options) => { sentRolls.push({ formula, options }); },
+      canRollHidden: () => dmMayRollHidden
+    });
     dicePanel.renderAll([]);
+    const quickButtons = [...diceHost.querySelectorAll('.dice__quick-btn')];
     check('панель кубиков предлагает только настоящие кости', () => {
-      const values = [...diceHost.querySelector('select').options].map((option) => option.value);
-      const expected = window.DnD5e.DICE_SIDES.map(String);
+      const labels = quickButtons.map((button) => button.textContent);
+      const expected = window.DnD5e.DICE_SIDES.map((sides) => `d${sides}`);
       // Сравниваем строками: в этом стенде assert знает только strictEqual,
       // а сравнение массивов через JSON не зависит от реализации.
-      assert.strictEqual(values.join(','), expected.join(','), 'список костей в панели');
+      assert.strictEqual(labels.join(','), expected.join(','), 'список костей в панели');
       // Костей на три, пять или семь граней в игре нет: если такая появится,
       // её можно будет выбрать, но сервер бросок всё равно отклонит.
-      assert(!values.includes('3') && !values.includes('7') && !values.includes('1'),
-        `в списке есть несуществующие кости: ${values.join(', ')}`);
+      assert(!labels.some((label) => label === 'd3' || label === 'd7' || label === 'd1'),
+        `в списке есть несуществующие кости: ${labels.join(', ')}`);
     });
-    diceHost.querySelector('select').value = '12';
+    check('клик по быстрой кости бросает её сразу', () => {
+      const d8 = quickButtons.find((button) => button.textContent === 'd8');
+      d8.click();
+      assert(sentRolls.length === 1, `отправлено бросков: ${sentRolls.length}`);
+      assert.strictEqual(sentRolls[0].formula, 'd8', 'отправлена не та кость');
+    });
+    const formulaInput = diceHost.querySelector('.dice__formula');
+    check('панель броска принимает формулу, а не только одну кость', () => {
+      assert(formulaInput, 'нет поля формулы');
+      assert.strictEqual(formulaInput.placeholder, '2d6+3', 'подсказка не показывает пример');
+    });
+    formulaInput.value = '4d6dl1 + 2';
     diceHost.querySelector('.dice__controls .btn--accent').click();
-    check('кнопка «Бросить» отправляет выбранную кость', () => {
-      assert(rolledSides === 12, `отправлено: ${rolledSides}`);
+    check('кнопка «Бросить» отправляет разобранную формулу', () => {
+      const last = sentRolls[sentRolls.length - 1];
+      assert.strictEqual(last.formula, '4d6dl1+2', `отправлено: ${last.formula}`);
+      assert.strictEqual(formulaInput.value, '', 'поле не очистилось после броска');
+    });
+    formulaInput.value = '2d20kh1';
+    formulaInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('Enter в поле отправляет бросок', () => {
+      assert.strictEqual(sentRolls[sentRolls.length - 1].formula, '2d20kh1');
+    });
+    check('переброс повторяет последний бросок', () => {
+      const reroll = diceHost.querySelector('.dice__reroll');
+      assert(!reroll.hidden, 'кнопка переброса не появилась после броска');
+      const before = sentRolls.length;
+      reroll.click();
+      assert.strictEqual(sentRolls.length, before + 1, 'переброс ничего не отправил');
+      assert.strictEqual(sentRolls[sentRolls.length - 1].formula, '2d20kh1', 'переброшена не та формула');
+    });
+    check('негодная формула не отправляется и объясняется под полем', () => {
+      sentRolls.length = 0;
+      formulaInput.value = 'привет';
+      diceHost.querySelector('.dice__controls .btn--accent').click();
+      assert.strictEqual(sentRolls.length, 0, 'негодная формула ушла на сервер');
+      const hint = diceHost.querySelector('.dice__hint');
+      assert(hint.classList.contains('is-error'), 'подсказка не помечена как ошибка');
+      assert(hint.textContent.includes('Не понял'), `подсказка: ${hint.textContent}`);
+    });
+    check('мастеру доступен тайный бросок, игроку нет', () => {
+      assert(!diceHost.querySelector('.dice__hidden').hidden, 'у мастера нет поля «тайно»');
+      dmMayRollHidden = false;
+      dicePanel.renderAll([]);
+      assert(diceHost.querySelector('.dice__hidden').hidden, 'игроку показано поле «тайно»');
+    });
+    check('тайный бросок помечается в отправке', () => {
+      dmMayRollHidden = true;
+      dicePanel.renderAll([]);
+      diceHost.querySelector('.dice__hidden input').checked = true;
+      quickButtons.find((button) => button.textContent === 'd20').click();
+      const last = sentRolls[sentRolls.length - 1];
+      assert.strictEqual(last.formula, 'd20');
+      assert.strictEqual(last.options.hidden, true, 'бросок ушёл не тайным');
+      diceHost.querySelector('.dice__hidden input').checked = false;
+    });
+    check('тайный бросок показывается без числа', () => {
+      dicePanel.append({
+        playerName: 'Мастер',
+        formula: 'd20',
+        count: 1,
+        sides: 20,
+        values: [17],
+        keptValues: [17],
+        droppedValues: [],
+        modifier: 0,
+        result: null,
+        hidden: true,
+        time: new Date().toISOString()
+      });
+      const row = diceHost.querySelector('.dice__row:last-child');
+      assert(row.textContent.includes('Мастер') && row.textContent.includes('d20'), `строка: ${row.textContent}`);
+      assert(!/\d/.test(row.querySelector('.dice__row-result').textContent), 'число тайного броска показано');
+      assert.strictEqual(diceHost.querySelector('.dice__last-value').textContent, '?', 'крупный результат не скрыт');
+    });
+    dicePanel.append({
+      playerName: 'Артём', formula: '2d6+3', count: 2, sides: 6,
+      values: [4, 3], keptValues: [4, 3], droppedValues: [], modifier: 3, result: 10,
+      hidden: false, time: new Date().toISOString()
+    });
+    check('бросок показывается как «имя бросил формулу: результат»', () => {
+      const row = diceHost.querySelector('.dice__row:last-child');
+      assert(row.textContent.includes('Артём') && row.textContent.includes('2d6+3') && row.textContent.includes('10'),
+        `строка истории: ${row.textContent}`);
+      assert(diceHost.querySelector('.dice__last').textContent.includes('Артём бросил 2d6+3:'), 'крупный результат');
     });
     dicePanel.append({ playerName: 'Артём', sides: 12, result: 7, time: new Date().toISOString() });
-    check('бросок показывается как «имя бросил dN: результат»', () => {
-      const row = diceHost.querySelector('.dice__row');
-      assert(row.textContent.includes('Артём') && row.textContent.includes('d12') && row.textContent.includes('7'),
+    check('старый бросок без формулы читается как одна кость', () => {
+      const row = diceHost.querySelector('.dice__row:last-child');
+      assert(row.textContent.includes('d12') && row.textContent.includes('7'),
         `строка истории: ${row.textContent}`);
       assert(diceHost.querySelector('.dice__last').textContent.includes('Артём бросил d12'), 'крупный результат');
     });
@@ -1404,8 +1500,19 @@
     await wait(4000);
 
     document.querySelector('.tabs__btn[data-tab="dice"]').click();
+    // Пустое поле броском не считается: сначала набираем формулу.
+    document.querySelector('#tab-dice .dice__controls .btn--accent').click();
+    await waitFor(
+      () => document.querySelector('#tab-dice .dice__hint').textContent.includes('Введите формулу'),
+      'подсказка о пустом поле броска'
+    );
+    document.querySelector('#tab-dice .dice__formula').value = '2d6+3';
     document.querySelector('#tab-dice .dice__controls .btn--accent').click();
     await waitFor(() => document.querySelectorAll('#tab-dice .dice__row').length > 0, 'бросок в тренировочном столе');
+    // И быстрая кость: её бросок тоже должен дойти до стола.
+    [...document.querySelectorAll('#tab-dice .dice__quick-btn')]
+      .find((button) => button.textContent === 'd20').click();
+    await waitFor(() => document.querySelectorAll('#tab-dice .dice__row').length > 1, 'быстрый бросок d20');
     document.querySelector('.tabs__btn[data-tab="chat"]').click();
     const trainChatForm = document.querySelector('#tab-chat .chat__form');
     trainChatForm.querySelector('input').value = 'Проверка без сети';
@@ -1415,10 +1522,12 @@
       'сообщение чата в тренировочном столе'
     );
     check('кубики и чат работают без сервера', () => {
-      const diceRow = document.querySelector('#tab-dice .dice__row');
-      assert(diceRow.textContent.includes('d20'), `строка броска: ${diceRow.textContent}`);
-      assert(diceRow.textContent.includes('Игрок'), `в броске нет имени: ${diceRow.textContent}`);
-      assert(document.querySelector('#tab-chat').textContent.includes('бросил d20'), 'бросок не попал в чат');
+      const diceRows = [...document.querySelectorAll('#tab-dice .dice__row')];
+      assert(diceRows[0].textContent.includes('2d6+3'), `строка броска: ${diceRows[0].textContent}`);
+      assert(diceRows[1].textContent.includes('d20'), `строка быстрой кости: ${diceRows[1].textContent}`);
+      assert(diceRows[0].textContent.includes('Игрок'), `в броске нет имени: ${diceRows[0].textContent}`);
+      assert(document.querySelector('#tab-chat').textContent.includes('бросил 2d6+3'), 'формула не попала в чат');
+      assert(document.querySelector('#tab-chat').textContent.includes('бросил d20'), 'быстрый бросок не попал в чат');
     });
 
     // Карта, сетка и фишка: их в тренировочном столе выдаёт сам игрок.
@@ -2357,12 +2466,20 @@
     dmRaw.disconnect();
 
     document.querySelector('.tabs__btn[data-tab="dice"]').click();
+    // Настоящий стол: бросаем формулу и быструю кость, чтобы проверить оба пути.
+    document.querySelector('#tab-dice .dice__formula').value = '2d6+3';
     document.querySelector('#tab-dice .dice__controls .btn--accent').click();
-    await waitFor(() => document.querySelectorAll('#tab-dice .dice__row').length > 0, 'результат броска');
+    [...document.querySelectorAll('#tab-dice .dice__quick-btn')]
+      .find((button) => button.textContent === 'd20').click();
+    await waitFor(() => document.querySelectorAll('#tab-dice .dice__row').length > 1, 'результаты бросков');
     check('бросок кубика обработан сервером и показан', () => {
-      const row = document.querySelector('#tab-dice .dice__row');
-      assert(row.textContent.includes('Мастер'), `нет имени ДМ в броске: ${row.textContent}`);
-      assert(row.textContent.includes('d20'), `нет типа кости: ${row.textContent}`);
+      const rows = [...document.querySelectorAll('#tab-dice .dice__row')];
+      assert(rows[0].textContent.includes('2d6+3'), `нет формулы в броске: ${rows[0].textContent}`);
+      assert(rows[0].textContent.includes('Мастер'), `нет имени ДМ в броске: ${rows[0].textContent}`);
+      assert(rows[1].textContent.includes('d20'), `нет типа кости: ${rows[1].textContent}`);
+    });
+    check('мастеру доступен тайный бросок на настоящем столе', () => {
+      assert(!document.querySelector('#tab-dice .dice__hidden').hidden, 'у мастера нет поля «тайно»');
     });
 
     document.querySelector('.tabs__btn[data-tab="chat"]').click();

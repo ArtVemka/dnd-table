@@ -11,6 +11,8 @@
  */
 
 const assert = require('assert');
+// Тот же модуль, что требует сервер: список настоящих костей проверяем оттуда.
+const diceModule = require('../renderer/dice.js');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -19,7 +21,7 @@ const { io } = require('socket.io-client');
 
 const { CampaignStore } = require('../server/campaign');
 const { createTableServer } = require('../server/socket');
-const { RoomState } = require('../server/state');
+const { RoomState, ROLE_DM } = require('../server/state');
 
 const HOST_KEY = 'test-host-key-0123456789';
 /** Настоящий PNG 1x1. */
@@ -994,26 +996,62 @@ async function main() {
   const results = [];
   const collect = (roll) => results.push(roll);
   p2.on('diceRollResult', collect);
-  for (let i = 0; i < 120; i += 1) emit(p1, 'rollDice', { sides: 20 });
+  for (let i = 0; i < 120; i += 1) emit(p1, 'rollDice', { formula: 'd20' });
   await waitFor(() => results.length === 120, '120 бросков d20');
   check('d20 всегда даёт 1..20 и результат варьируется', () => {
     assert.ok(results.every((roll) => roll.result >= 1 && roll.result <= 20));
     assert.ok(new Set(results.map((roll) => roll.result)).size > 5, 'результаты не варьируются');
   });
-  check('бросок обрабатывает сервер, в событии есть имя, кость и время', () => {
+  check('бросок обрабатывает сервер, в событии есть имя, формула и время', () => {
     assert.strictEqual(results[0].playerName, 'Артём');
-    assert.strictEqual(results[0].sides, 20);
+    assert.strictEqual(results[0].formula, 'd20');
     assert.ok(!Number.isNaN(Date.parse(results[0].time)));
   });
   results.length = 0;
-  emit(p1, 'rollDice', { sides: 12 });
-  await waitFor(() => results.length === 1, 'бросок d12');
-  check('настоящие кости бросаются', () => {
-    assert.strictEqual(results[0].sides, 12);
-    assert.ok(results[0].result >= 1 && results[0].result <= 12);
+  emit(p1, 'rollDice', { formula: '2d6+3' });
+  await waitFor(() => results.length === 1, 'бросок 2d6+3');
+  check('формула 2d6+3 считается как сумма двух костей и модуль', () => {
+    const roll = results[0];
+    assert.strictEqual(roll.count, 2);
+    assert.strictEqual(roll.sides, 6);
+    assert.strictEqual(roll.values.length, 2);
+    assert.ok(roll.values.every((value) => value >= 1 && value <= 6), `значения: ${roll.values}`);
+    const sum = roll.values.reduce((acc, value) => acc + value, 0);
+    assert.strictEqual(roll.result, sum + 3, 'итог не равен сумме костей и модулю');
   });
   results.length = 0;
-  emit(p1, 'rollDice', { sides: 100 });
+  emit(p1, 'rollDice', { formula: '4d6dl1' });
+  await waitFor(() => results.length === 1, 'бросок 4d6dl1');
+  check('«отбрось худшую» оставляет три крупнейших кости', () => {
+    const roll = results[0];
+    assert.strictEqual(roll.values.length, 4);
+    assert.strictEqual(roll.droppedValues.length, 1);
+    const top3 = roll.values.slice().sort((a, b) => b - a).slice(0, 3);
+    assert.strictEqual(roll.result, top3.reduce((acc, value) => acc + value, 0));
+    assert.ok(roll.values.includes(roll.droppedValues[0]), 'отброшена не одна из брошенных');
+  });
+  results.length = 0;
+  emit(p1, 'rollDice', { formula: '2d20kh1' });
+  await waitFor(() => results.length === 1, 'бросок 2d20kh1');
+  check('преимущество 2d20kh1 даёт лучшую кость', () => {
+    const roll = results[0];
+    assert.strictEqual(roll.result, Math.max(...roll.values));
+  });
+  results.length = 0;
+  emit(p1, 'rollDice', { formula: '2d20kl1' });
+  await waitFor(() => results.length === 1, 'бросок 2d20kl1');
+  check('помеха 2d20kl1 даёт худшую кость', () => {
+    const roll = results[0];
+    assert.strictEqual(roll.result, Math.min(...roll.values));
+  });
+  results.length = 0;
+  emit(p1, 'rollDice', { formula: ' 2 D6 + 3 ' });
+  await waitFor(() => results.length === 1, 'бросок с лишними пробелами');
+  check('лишние пробелы и регистр в формуле не мешают', () => {
+    assert.strictEqual(results[0].formula, '2d6+3');
+  });
+  results.length = 0;
+  emit(p1, 'rollDice', { formula: 'd100' });
   await waitFor(() => results.length === 1, 'бросок d100');
   check('сотня бросается для процентных проверок', () => {
     assert.strictEqual(results[0].sides, 100);
@@ -1022,36 +1060,102 @@ async function main() {
   p2.off('diceRollResult', collect);
 
   p1.log.errorMessage.length = 0;
-  emit(p1, 'rollDice', { sides: 3 });
-  emit(p1, 'rollDice', { sides: 7 });
-  emit(p1, 'rollDice', { sides: 1 });
-  emit(dm, 'rollDice', { sides: 20 });
-  await waitFor(() => p1.log.errorMessage.length >= 3, 'отказ по несуществующим костям');
-  check('несуществующие кости отклоняются', () => {
+  emit(p1, 'rollDice', { formula: '3d7' });
+  emit(p1, 'rollDice', { formula: 'привет' });
+  emit(p1, 'rollDice', { formula: '' });
+  emit(dm, 'rollDice', { formula: 'd20' });
+  await waitFor(() => p1.log.errorMessage.length >= 3, 'отказ по негодной формуле');
+  check('негодная формула не бросается, а игрок получает объяснение', () => {
     assert.strictEqual(p1.log.errorMessage.length, 3);
-    assert.ok(p1.log.errorMessage.every((item) => item.message.includes('d4')),
-      `не назван список костей: ${p1.log.errorMessage[0].message}`);
+    assert.match(p1.log.errorMessage[0].message, /d7.*не бывает/s, p1.log.errorMessage[0].message);
+    assert.match(p1.log.errorMessage[1].message, /Не понял формулу/, p1.log.errorMessage[1].message);
+  });
+  check('кость вне списка настоящих не принимается даже в формуле', () => {
+    assert.ok(p1.log.errorMessage.every((item) => !item.message.includes('бросил')));
   });
   check(
-    'список костей у клиента и сервера один и тот же',
+    'список костей у клиента, сервера и разбора формул один и тот же',
     () => {
       // Списки продублированы: renderer не может потребовать серверный файл.
       // Если их разведут, панель предложит кость, которую сервер не примет.
+      const expected = [4, 6, 8, 10, 12, 20, 100];
       const client = readDiceSides(path.join(__dirname, '..', 'renderer', 'dnd5e.js'));
       const server = readDiceSides(path.join(__dirname, '..', 'server', 'state.js'));
-      assert.deepStrictEqual(client, [4, 6, 8, 10, 12, 20, 100], `в клиенте: ${client}`);
+      assert.deepStrictEqual(client, expected, `в клиенте: ${client}`);
       assert.deepStrictEqual(client, server, `клиент ${client}, сервер ${server}`);
+      assert.deepStrictEqual(diceModule.DICE_SIDES, expected, 'в разборе формул другой список');
     }
   );
   check('ДМ тоже может бросать кубики', () => {
     assert.ok(p2.log.diceRollResult.some((roll) => roll.playerName === 'Мастер'));
   });
+
+  /* ------------------------------------------------- тайный бросок мастера */
+  console.log('\nТайный бросок');
+  const dmRolls = [];
+  const dmCollect = (roll) => dmRolls.push(roll);
+  dm.on('diceRollResult', dmCollect);
+  results.length = 0;
+  // Подписка игрока была снята выше: без неё тайный бросок некуда принять.
+  p2.on('diceRollResult', collect);
+  emit(dm, 'rollDice', { formula: 'd20', hidden: true });
+  await waitFor(() => results.length === 1 && dmRolls.length === 1, 'тайный бросок мастера');
+  check('мастер видит число своего тайного броска', () => {
+    assert.strictEqual(dmRolls[0].hidden, true);
+    assert.ok(dmRolls[0].result >= 1 && dmRolls[0].result <= 20);
+  });
+  check('игрок числа тайного броска не видит', () => {
+    assert.strictEqual(results[0].hidden, true);
+    assert.strictEqual(results[0].result, null);
+    assert.strictEqual(results[0].values, undefined, 'игроку ушли сами броски');
+  });
+  const secretText = p1.log.chatMessage.filter((message) => message.isRoll && message.hidden).pop();
+  check('в чате тайный бросок объявляется без числа', () => {
+    assert.ok(secretText, 'нет объявления тайного броска');
+    assert.strictEqual(secretText.from, 'Мастер');
+    assert.match(secretText.text, /тайно$/, `текст: ` + secretText.text);
+    assert.ok(!/\d/.test(secretText.text.replace(/d\d+/g, '')), `в тексте есть число: ${secretText.text}`);
+  });
+  check('в истории бросков сервера число тайного броска остаётся', () => {
+    const stored = room.diceHistory.filter((roll) => roll.hidden).pop();
+    assert.ok(stored && stored.result >= 1, 'число потерялось у мастера');
+  });
+  dm.off('diceRollResult', dmCollect);
+
+  results.length = 0;
+  emit(p1, 'rollDice', { formula: 'd20', hidden: true });
+  await waitFor(() => results.length === 1, 'попытка игрока бросить тайно');
+  check('игрок не может бросить тайно: его бросок виден всем', () => {
+    assert.strictEqual(results[0].hidden, false);
+    assert.ok(results[0].result >= 1 && results[0].result <= 20);
+  });
+
+  // Снимок состояния игроку не должен содержать чисел тайных бросков: иначе
+  // игрок увидит их, переподключившись или обновив стол.
+  const playerSnapshot = room.snapshotFor({ playerId: P1, role: 'player' });
+  const dmSnapshot = room.snapshotFor({ playerId: P1, role: ROLE_DM });
+  check('в снимке состояния игроку чисел тайных бросков нет', () => {
+    const leaked = playerSnapshot.diceHistory.filter((roll) => roll.hidden && roll.result !== null);
+    assert.deepStrictEqual(leaked.map((roll) => roll.formula), [], 'число тайного броска утекло');
+  });
+  check('мастер в своём снимке числа тайных бросков видит', () => {
+    const hidden = dmSnapshot.diceHistory.filter((roll) => roll.hidden);
+    assert.ok(hidden.length >= 1 && hidden.every((roll) => roll.result >= 1));
+  });
+
   check('бросок объявляется в общем чате (виден и тем, кто подключится позже)', () => {
-    const announcement = p1.log.chatMessage.filter((message) => message.isRoll && message.text.startsWith('бросил d12')).pop();
-    assert.ok(announcement, 'нет объявления броска d12 в чате');
+    const announcement = p1.log.chatMessage
+      .filter((message) => message.isRoll && message.text.startsWith('бросил 2d6+3')).pop();
+    assert.ok(announcement, 'нет объявления броска 2d6+3 в чате');
     assert.strictEqual(announcement.from, 'Артём');
-    assert.match(announcement.text, /^бросил d12: \d+$/, `текст: ${announcement.text}`);
+    assert.match(announcement.text, /^бросил 2d6\+3: \d+$/, `текст: ${announcement.text}`);
     assert.ok(room.chatHistory.some((message) => message.isRoll), 'броска нет в истории чата на сервере');
+  });
+  check('отброшенные кости видны в тексте броска', () => {
+    const withDrop = p1.log.chatMessage
+      .filter((message) => message.isRoll && message.text.includes('отброшено')).pop();
+    assert.ok(withDrop, 'бросок с отброшенными костями не объяснён в чате');
+    assert.match(withDrop.text, /^бросил 4d6dl1: \d+ \(отброшено \d\)$/, `текст: ${withDrop.text}`);
   });
 
   /* --------------------------------------------------------------- чат */

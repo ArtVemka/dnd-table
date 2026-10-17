@@ -20,7 +20,6 @@ const { Server } = require('socket.io');
 
 const {
   DEFAULT_DM_AVATAR,
-  DICE_SIDES,
   DM_PLAYER_ID,
   GRID,
   LIMITS,
@@ -37,6 +36,9 @@ const {
 } = require('./state');
 const { findFreePort } = require('./net');
 const { decodeImage, sniffImageFormat } = require('./image');
+// Разбор формул броска. Модуль лежит в renderer/, потому что тем же файлом
+// считает бросок тренировочный стол: своя копия разбора разъехалась бы с ним.
+const dice = require('../renderer/dice.js');
 
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 /** Длина имени карты — та же, что при загрузке в состоянии стола. */
@@ -725,21 +727,33 @@ async function createTableServer(options) {
      * Кубики
      * ------------------------------------------------------------------ */
 
-    socket.on('rollDice', (payload) => {
+socket.on('rollDice', (payload) => {
       if (!requireJoined(socket)) return;
-      const sides = Math.round(Number(payload && payload.sides));
-      // Сервер берёт тот же список костей, что и панель в интерфейсе: костей на
-      // три или семь граней в игре нет, и подсунуть их сообщением нельзя.
-      if (!Number.isFinite(sides) || !DICE_SIDES.includes(sides)) {
-        return emitError(socket, `Доступны кости ${DICE_SIDES.map((n) => `d${n}`).join(', ')}`);
-      }
+      // Формулу разбирает общий модуль renderer/dice.js: им же считает бросок
+      // тренировочный стол. Своей копии разбора здесь намеренно нет.
+      const requested = payload && typeof payload.formula === 'string' && payload.formula.trim()
+        ? payload.formula
+        // Число граней принимаем для старых клиентов: так броски приходят из
+        // сохранённой сессии и из тестов.
+        : payload && Number.isFinite(Number(payload.sides))
+          ? `d${Math.round(Number(payload.sides))}`
+          : '';
+      const parsed = dice.parseFormula(requested);
+      if (!parsed.ok) return emitError(socket, parsed.error);
+
+      // Тайный бросок умеет только мастер. Игрок может прислать что угодно в
+      // поле hidden, но число увидят все: иначе «слепой» бросок игрока был бы
+      // виден только ему самому.
+      const hidden = socket.data.role === ROLE_DM && Boolean(payload && payload.hidden);
+
       // Кубик бросает сервер, а не клиент.
-      const result = crypto.randomInt(1, sides + 1);
+      const rolled = dice.rollFormula(parsed, (min, max) => crypto.randomInt(min, max + 1));
       const roll = {
         playerId: socket.data.playerId,
         playerName: socket.data.name,
-        sides,
-        result,
+        role: socket.data.role,
+        ...rolled,
+        hidden,
         time: new Date().toISOString()
       };
       room.diceHistory.push(roll);
@@ -748,7 +762,9 @@ async function createTableServer(options) {
       }
 
       // Бросок попадает и в общий чат: так его видят все, включая тех,
-      // кто подключится позже и получит историю чата со стола.
+      // кто подключится позже и получит историю чата со стола. Для тайного
+      // броска строка собирается без числа, поэтому в истории чата его тоже
+      // нет — утекать нечему.
       const announcement = {
         from: socket.data.name,
         playerId: socket.data.playerId,
@@ -758,8 +774,9 @@ async function createTableServer(options) {
         // остаться тем, каким был в момент броска.
         avatar: room.players.get(socket.data.playerId)?.avatar
           || (socket.data.role === ROLE_DM ? DEFAULT_DM_AVATAR : null),
-        text: `бросил d${sides}: ${result}`,
+        text: dice.describeRoll(roll),
         isRoll: true,
+        hidden,
         time: roll.time
       };
       room.chatHistory.push(announcement);
@@ -768,7 +785,11 @@ async function createTableServer(options) {
       }
 
       markDirty();
-      io.emit('diceRollResult', roll);
+      // Число тайного броска уходит только мастерам, игрокам достаётся тот же
+      // бросок без результата: рассылать всем одно и то же нельзя.
+      const forPlayers = dice.hideRollResult(roll);
+      io.to('table').except('dm-sockets').emit('diceRollResult', forPlayers);
+      io.to('dm-sockets').emit('diceRollResult', roll);
       io.emit('chatMessage', announcement);
     });
 

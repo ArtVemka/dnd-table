@@ -535,18 +535,22 @@
       },
 
       rollDice(payload) {
-        const sides = Math.round(Number(payload.sides));
-        // Тот же список настоящих костей, что на настоящем столе.
-        if (!Number.isFinite(sides) || !DnD.DICE_SIDES.includes(sides)) {
-          emitTo('errorMessage', {
-            message: `Доступны кости ${DnD.DICE_SIDES.map((n) => `d${n}`).join(', ')}`
-          });
+        // Формулу разбирает тот же модуль, что и сервер, иначе тренировочный
+        // стол считал бы «4d6dl1» не так, как настоящий.
+        const requested = typeof payload.formula === 'string' && payload.formula.trim()
+          ? payload.formula
+          : Number.isFinite(Number(payload.sides))
+            ? `d${Math.round(Number(payload.sides))}`
+            : '';
+        const parsed = DnDDice.parseFormula(requested);
+        if (!parsed.ok) {
+          emitTo('errorMessage', { message: parsed.error });
           return;
         }
         // Кубик, как и на настоящем столе, бросает «сервер», а не клиент.
-        const result = randomInt(1, sides);
+        const rolled = DnDDice.rollFormula(parsed, randomInt);
         const time = new Date().toISOString();
-        const roll = { playerId, playerName, sides, result, time };
+        const roll = { playerId, playerName, ...rolled, hidden: false, time };
         state.diceHistory.push(roll);
         if (state.diceHistory.length > MAX_DICE_HISTORY) {
           state.diceHistory = state.diceHistory.slice(-MAX_DICE_HISTORY);
@@ -557,7 +561,7 @@
           playerId,
           role: 'player',
           avatar: state.avatar || null,
-          text: `бросил d${sides}: ${result}`,
+          text: DnDDice.describeRoll(roll),
           isRoll: true,
           time
         });

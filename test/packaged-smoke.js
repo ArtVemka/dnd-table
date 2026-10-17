@@ -496,7 +496,14 @@ async function main() {
       }
     }
 
-    const campaignsDir = path.join(userData, 'campaigns');
+    // В портативной сборке данные лежат рядом с игрой, а не в
+    // --user-data-dir: рядом с exe лежит portable.txt. Проверка обязана
+    // смотреть туда же, а не в профиль Windows, иначе она валится на любой
+    // переносимой сборке.
+    const portableMode = fs.existsSync(path.join(path.dirname(exe), 'portable.txt'));
+    const campaignsDir = portableMode
+      ? path.join(path.dirname(exe), 'data', 'campaigns')
+      : path.join(userData, 'campaigns');
     const created = fs.existsSync(campaignsDir);
     const campaignCount = created ? fs.readdirSync(campaignsDir).length : 0;
     console.log('\nДанные собранного приложения\n');

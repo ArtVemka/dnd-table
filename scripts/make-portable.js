@@ -47,7 +47,13 @@ const exeBase = process.platform === 'win32'
 const outputDir = (packageJson.build && packageJson.build.directories && packageJson.build.directories.output) || 'dist';
 // electron-builder называет папку сборки по платформе: win-unpacked, linux-unpacked…
 const unpackedDirName = process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`;
-const distUnpacked = path.join(root, outputDir, unpackedDirName);
+// Папку сборки можно указать первым аргументом. Это нужно, когда прежняя
+// папка занята: Windows не даёт перезаписать файл, который держит антивирус
+// или запущенная копия игры, и сборка в том же месте падает с EBUSY. Тогда
+// electron-builder собирает в новую папку, а этот скрипт берёт её оттуда.
+const distUnpacked = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.join(root, outputDir, unpackedDirName);
 const releaseDir = path.join(root, 'release');
 
 const releaseApp = path.join(releaseDir, appName);

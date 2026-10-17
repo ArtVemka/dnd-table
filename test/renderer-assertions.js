@@ -458,6 +458,102 @@
       rollView.setMode('sheet');
     });
 
+    /* ------------------------------------------------- спасброски смерти */
+
+    const deathSaves = [];
+    const savedSheets = [];
+    const deathHost = document.createElement('div');
+    sandbox.appendChild(deathHost);
+    const deathView = new window.SheetView(deathHost, {
+      // Кнопки счётчика сохраняют лист тем же путём, что и любое поле ввода,
+      // поэтому без onChange им некуда деваться.
+      onChange: (sheet) => savedSheets.push(sheet),
+      onDeathSave: () => deathSaves.push('roll'),
+      onResetDeathSaves: () => deathSaves.push('reset')
+    });
+    const aliveSheet = { ...SAMPLE_SHEET, hp: 12, maxHp: 20 };
+    deathView.setSheet(aliveSheet);
+
+    check('счётчики спасбросков спрятаны, пока персонаж жив', () => {
+      assert(deathView.deathNode.hidden, 'блок спасбросков виден у живого героя');
+    });
+
+    check('на нуле хитов появляются счётчики и кнопка броска', () => {
+      deathView.setSheet({ ...aliveSheet, hp: 0 });
+      assert(!deathView.deathNode.hidden, 'блок не появился на нуле хитов');
+      assert.strictEqual(deathView.deathNodes.Successes.value.textContent, '0');
+      assert.strictEqual(deathView.deathNodes.Failures.value.textContent, '0');
+      assert(deathView.deathState.textContent.includes('При смерти'), `подпись: ${deathView.deathState.textContent}`);
+      deathView.deathRollButton.click();
+      assert.strictEqual(deathSaves[deathSaves.length - 1], 'roll', 'бросок не отправлен');
+    });
+
+    check('кнопки счётчика двигают его в границах трёх', () => {
+      const plus = deathView.deathNodes.Failures.plus;
+      const minus = deathView.deathNodes.Failures.minus;
+      plus.click();
+      plus.click();
+      assert.strictEqual(deathView.deathNodes.Failures.value.textContent, '2');
+      // Дальше трёх по правилам не идёт, и кнопка гаснет.
+      plus.click();
+      assert.strictEqual(deathView.deathNodes.Failures.value.textContent, '3');
+      assert(plus.disabled, 'счётчик пошёл дальше трёх');
+      minus.click();
+      assert.strictEqual(deathView.deathNodes.Failures.value.textContent, '2');
+      minus.click();
+      minus.click();
+      minus.click();
+      assert.strictEqual(deathView.deathNodes.Failures.value.textContent, '0', 'счётчик ушёл в минус');
+      // Счётчик должен доезжать до сервера, а не жить в кнопках.
+      assert(savedSheets.length > 0, 'правка счётчика никуда не отправлена');
+      assert.strictEqual(savedSheets[savedSheets.length - 1].deathSavesFailures, 0,
+        'в отправленном листе счётчик не тот');
+    });
+
+    check('три неудачи значат смерть, три успеха — стабилизацию', () => {
+      deathView.setSheet({ ...aliveSheet, hp: 0, deathSavesFailures: 3 });
+      assert(deathView.deathNode.classList.contains('is-dead'), 'три неудачи не значат смерть');
+      assert.strictEqual(deathView.deathState.textContent, 'Мёртв');
+      deathView.setSheet({ ...aliveSheet, hp: 0, deathSavesSuccesses: 3 });
+      assert(deathView.deathNode.classList.contains('is-stable'), 'три успеха не значат стабилизацию');
+      assert.strictEqual(deathView.deathState.textContent, 'Стабилизирован');
+    });
+
+    check('правка соседнего поля не стирает счётчики', () => {
+      // Счётчики не сидят в полях ввода, а collect() собирает лист только из
+      // них. Без переноса любая правка обнуляла бы весь бой.
+      deathView.setSheet({ ...aliveSheet, hp: 0, deathSavesSuccesses: 2, deathSavesFailures: 1 });
+      const nameInput = deathHost.querySelector('[data-field="characterName"]');
+      nameInput.value = 'Другой';
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      assert.strictEqual(deathView.deathNodes.Successes.value.textContent, '2',
+        'счётчик успехов стёрся при правке имени');
+      assert.strictEqual(deathView.deathNodes.Failures.value.textContent, '1',
+        'счётчик неудач стёрся при правке имени');
+    });
+
+    check('лечение прячет блок, но не трогает счётчики молча', () => {
+      deathView.setSheet({ ...aliveSheet, hp: 1, deathSavesSuccesses: 1 });
+      assert(deathView.deathNode.hidden, 'блок виден у ожившего героя');
+      deathView.setSheet({ ...aliveSheet, hp: 5, deathSavesSuccesses: 1 });
+      assert.strictEqual(deathView.sheet.deathSavesSuccesses, 1,
+        'лечение обнулило счётчик само: человек должен решить это кнопкой');
+      deathView.deathResetButton.click();
+      assert.strictEqual(deathSaves[deathSaves.length - 1], 'reset', 'сброс счётчиков не отправлен');
+    });
+
+    check('из чужого листа спасбросок не бросить', () => {
+      const frozen = new window.SheetView(document.createElement('div'), {
+        onDeathSave: () => deathSaves.push('чужой')
+      });
+      sandbox.appendChild(frozen.root);
+      frozen.setSheet({ ...aliveSheet, hp: 0 });
+      frozen.setReadOnly(true);
+      assert(frozen.deathRollButton.hidden, 'у чужого листа мастера видна кнопка спасброска');
+      frozen.deathRollButton.click();
+      assert(!deathSaves.includes('чужой'), 'из чужого листа бросили спасбросок');
+    });
+
     check('лист персонажа заполняется всеми полями 5e', () => {
       const value = (field) => {
         const node = sheetHost.querySelector(`[data-field="${field}"]`);

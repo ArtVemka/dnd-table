@@ -787,6 +787,80 @@
         emitTo('initiativeUpdated', cloneInitiative());
       },
 
+      /**
+       * Спасбросок смерти по правилам 5e: десятка и выше — успех, единица —
+       * две неудачи, двадцатка поднимает с одного хита. Бросает «сервер», то
+       * есть здесь сам стол, иначе игрок подкрутил бы и число, и счётчик.
+       */
+      rollDeathSave() {
+        const sheet = state.sheets[playerId];
+        if (!sheet) {
+          emitTo('errorMessage', { message: 'Лист персонажа ещё не готов' });
+          return;
+        }
+        if (sheet.hp > 0) {
+          emitTo('errorMessage', { message: 'Спасброски смерти идут при нулевом здоровье' });
+          return;
+        }
+        const die = randomInt(1, 20);
+        let outcome;
+        if (die === 20) {
+          sheet.hp = 1;
+          sheet.deathSavesSuccesses = 0;
+          sheet.deathSavesFailures = 0;
+          outcome = 'персонаж приходит в себя';
+        } else if (die === 1) {
+          sheet.deathSavesFailures = Math.min(DnD.LIMITS.maxDeathSaves, sheet.deathSavesFailures + 2);
+          outcome = 'две неудачи разом';
+        } else if (die >= 10) {
+          sheet.deathSavesSuccesses = Math.min(DnD.LIMITS.maxDeathSaves, sheet.deathSavesSuccesses + 1);
+          outcome = 'успех';
+        } else {
+          sheet.deathSavesFailures = Math.min(DnD.LIMITS.maxDeathSaves, sheet.deathSavesFailures + 1);
+          outcome = 'неудача';
+        }
+        emitTo('characterSheetData', { playerId, sheet: cloneSheet(sheet) });
+        const time = new Date().toISOString();
+        const roll = {
+          playerId,
+          playerName,
+          role: 'player',
+          formula: 'd20',
+          count: 1,
+          sides: 20,
+          values: [die],
+          keptValues: [die],
+          droppedValues: [],
+          modifier: 0,
+          result: die,
+          isDeathSave: true,
+          hidden: false,
+          time
+        };
+        state.diceHistory.push(roll);
+        emitTo('diceRollResult', roll);
+        pushChat({
+          from: playerName,
+          playerId,
+          role: 'player',
+          avatar: state.avatar || null,
+          text: `спасбросок смерти: d20 ${die} — ${outcome}`,
+          isRoll: true,
+          time
+        });
+      },
+
+      resetDeathSaves() {
+        const sheet = state.sheets[playerId];
+        if (!sheet) {
+          emitTo('errorMessage', { message: 'Лист персонажа ещё не готов' });
+          return;
+        }
+        sheet.deathSavesSuccesses = 0;
+        sheet.deathSavesFailures = 0;
+        emitTo('characterSheetData', { playerId, sheet: cloneSheet(sheet) });
+      },
+
       rollDice(payload) {
         // Формулу разбирает тот же модуль, что и сервер, иначе тренировочный
         // стол считал бы «4d6dl1» не так, как настоящий.

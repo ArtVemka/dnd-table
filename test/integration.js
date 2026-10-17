@@ -14,6 +14,7 @@ const assert = require('assert');
 // Тот же модуль, что требует сервер: список настоящих костей проверяем оттуда.
 const diceModule = require('../renderer/dice.js');
 const LIMITS_MAX_INITIATIVE = 40;
+const LIMITS_MAX_DEATH_SAVES = 3;
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -65,6 +66,34 @@ const TRACKED = [
   'tokensUpdated',
   'diceRollResult', 'chatMessage', 'errorMessage'
 ];
+
+/**
+ * Спасбросок смерти по правилам 5e — копия правил из server/socket.js.
+ *
+ * Нужна рядом с проверками, где бросает живой сервер: там исход выпадает
+ * случайно, и проверить сразу двадцатку и единицу нельзя. Правила в одном
+ * месте с сервером держать не получится, поэтому здесь они выписаны прямо и
+ * завязаны проверкой ниже.
+ * @param {{hp: number, deathSavesSuccesses: number, deathSavesFailures: number}} sheet
+ * @param {number} die
+ * @returns {{hp: number, deathSavesSuccesses: number, deathSavesFailures: number}}
+ */
+function reviveOnTwenty(sheet, die) {
+  const max = LIMITS_MAX_DEATH_SAVES;
+  const next = { ...sheet };
+  if (die === 20) {
+    next.hp = 1;
+    next.deathSavesSuccesses = 0;
+    next.deathSavesFailures = 0;
+  } else if (die === 1) {
+    next.deathSavesFailures = Math.min(max, next.deathSavesFailures + 2);
+  } else if (die >= 10) {
+    next.deathSavesSuccesses = Math.min(max, next.deathSavesSuccesses + 1);
+  } else {
+    next.deathSavesFailures = Math.min(max, next.deathSavesFailures + 1);
+  }
+  return next;
+}
 
 /**
  * Читает список костей из исходника, где он задан литералом массива.
@@ -1314,7 +1343,123 @@ async function main() {
     assert.match(withDrop.text, /^бросил 4d6dl1: \d+ \(отброшено \d\)$/, `текст: ${withDrop.text}`);
   });
 
-  /* ------------------------------------------------------ порядок боя */
+  /* ---------------------------------------------------- спасброски смерти */
+
+  console.log('\nСпасброски смерти');
+  // Лист игрока доводим до нуля хитов: спасброски идут только оттуда, и
+  // сервер обязан отказать, если персонаж жив.
+  const deathSheet = { ...(room.sheets.get(P1) || {}), hp: 0, maxHp: 20 };
+  emit(p1, 'saveCharacterSheet', { sheet: deathSheet });
+  await waitFor(() => room.sheets.get(P1).hp === 0, 'лист игрока на нуле хитов');
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'rollDeathSave', {});
+  await waitFor(() => dm.log.errorMessage.length > 0, 'мастер бросает спасбросок за игрока');
+  check('спасбросок смерти бросает только игрок', () => {
+    // Отказ приходит тому, кто нажал: это мастер.
+    assert.ok(dm.log.errorMessage.some((item) => /бросает сам игрок/.test(item.message)),
+      dm.log.errorMessage[0].message);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'saveCharacterSheet', { sheet: { ...room.sheets.get(P1), hp: 7 } });
+  await waitFor(() => room.sheets.get(P1).hp === 7, 'герой снова жив');
+  emit(p1, 'rollDeathSave', {});
+  await waitFor(() => p1.log.errorMessage.length > 0, 'спасбросок у живого героя');
+  check('живому персонажу спасбросок не бросают', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /нулевом здоровье/.test(item.message)));
+    assert.strictEqual(room.sheets.get(P1).deathSavesSuccesses, 0);
+    assert.strictEqual(room.sheets.get(P1).deathSavesFailures, 0);
+  });
+
+  // Дальше проверяем саму механику. Бросает сервер, поэтому исход
+  // выпадает случайно, а двадцатка по правилам поднимает героя и обнуляет
+  // счётчики: ждать, пока счётчик дойдёт до трёх, нельзя, бой может
+  // закончиться иначе. Крутим до любого исхода и проверяем, что при любом
+  // ходе бросков счётчик остался в границах.
+  emit(p1, 'saveCharacterSheet', { sheet: { ...room.sheets.get(P1), hp: 0 } });
+  await waitFor(() => room.sheets.get(P1).hp === 0, 'герой снова при смерти');
+
+  const rollCountBefore = dm.log.diceRollResult.length;
+  let rolls = 0;
+  for (let i = 0; i < 40; i += 1) {
+    const sheet = room.sheets.get(P1);
+    const finished = sheet.hp > 0
+      || sheet.deathSavesSuccesses >= 3
+      || sheet.deathSavesFailures >= 3;
+    if (finished) break;
+    emit(p1, 'rollDeathSave', {});
+    await wait(40);
+    rolls += 1;
+  }
+  const deathNow = room.sheets.get(P1);
+  const deathRolls = dm.log.diceRollResult.slice(rollCountBefore).filter((roll) => roll.isDeathSave);
+  check('спасбросок объявляется броском и виден мастеру', () => {
+    assert(deathRolls.length > 0, 'ни одного спасброска не произошло');
+    assert.strictEqual(deathRolls.length, rolls, `бросков на сервере ${deathRolls.length}, отправлено ${rolls}`);
+    for (const roll of deathRolls) {
+      assert.strictEqual(roll.formula, 'd20');
+      assert(roll.result >= 1 && roll.result <= 20, `выпало ${roll.result}`);
+    }
+  });
+  check('счётчик спасбросков всегда остаётся в границах', () => {
+    assert(deathNow.deathSavesSuccesses >= 0 && deathNow.deathSavesSuccesses <= 3,
+      `успехов: ${deathNow.deathSavesSuccesses}`);
+    assert(deathNow.deathSavesFailures >= 0 && deathNow.deathSavesFailures <= 3,
+      `неудач: ${deathNow.deathSavesFailures}`);
+  });
+  check('любой исход броска приводит к одному из состояний', () => {
+    const revived = deathNow.hp > 0;
+    const closed = deathNow.deathSavesSuccesses >= 3 || deathNow.deathSavesFailures >= 3;
+    assert(revived || closed || rolls >= 40,
+      `состояние: hp ${deathNow.hp}, ${deathNow.deathSavesSuccesses}/${deathNow.deathSavesFailures}`);
+    // Подняться с нуля двадцаткой можно только с одним хпом: правило 5e.
+    if (revived) {
+      assert(deathNow.hp === 1, `после двадцатки хитов ${deathNow.hp}, а должен быть 1`);
+      assert.strictEqual(deathNow.deathSavesSuccesses, 0, 'счётчики не обнулились');
+    }
+  });
+  check('спасбросок попадает в чат с названием броска', () => {
+    const note = dm.log.chatMessage.filter((message) => /спасбросок смерти/.test(message.text)).pop();
+    assert(note, 'броска смерти нет в чате');
+    assert(/спасбросок смерти: d20 \d+/.test(note.text), `текст: ${note.text}`);
+    assert(note.text.length > 'спасбросок смерти: d20 '.length, 'в тексте нет исхода броска');
+  });
+
+  // Исходы, которые на живой столе выпадают случайно, проверяются по правилам
+  // отдельно: ждать двадцатку в цикле бессмысленно.
+  check('двадцатка поднимает героя с одного хита и обнуляет счётчики', () => {
+    const twenty = reviveOnTwenty({ hp: 0, deathSavesSuccesses: 2, deathSavesFailures: 1 }, 20);
+    assert.strictEqual(twenty.hp, 1);
+    assert.strictEqual(twenty.deathSavesSuccesses, 0);
+    assert.strictEqual(twenty.deathSavesFailures, 0);
+  });
+  check('единица считается за две неудачи, но счётчик не уходит за три', () => {
+    const one = reviveOnTwenty({ hp: 0, deathSavesSuccesses: 0, deathSavesFailures: 0 }, 1);
+    assert.strictEqual(one.deathSavesFailures, 2, `после единицы: ${one.deathSavesFailures}`);
+    const capped = reviveOnTwenty({ hp: 0, deathSavesSuccesses: 0, deathSavesFailures: 2 }, 1);
+    assert.strictEqual(capped.deathSavesFailures, 3, 'счётчик ушёл за три');
+  });
+  check('десятка и выше считаются успехом, а девятка и ниже неудачей', () => {
+    const blank = () => ({ hp: 0, deathSavesSuccesses: 0, deathSavesFailures: 0 });
+    assert.strictEqual(reviveOnTwenty(blank(), 10).deathSavesSuccesses, 1);
+    assert.strictEqual(reviveOnTwenty(blank(), 19).deathSavesSuccesses, 1);
+    assert.strictEqual(reviveOnTwenty(blank(), 9).deathSavesFailures, 1);
+    assert.strictEqual(reviveOnTwenty(blank(), 2).deathSavesFailures, 1);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'resetDeathSaves', {});
+  await wait(120);
+  check('счётчики обнуляются вручную, когда герой пришёл в себя', () => {
+    assert.strictEqual(p1.log.errorMessage.length, 0);
+    assert.strictEqual(room.sheets.get(P1).deathSavesSuccesses, 0);
+    assert.strictEqual(room.sheets.get(P1).deathSavesFailures, 0);
+  });
+  emit(p1, 'saveCharacterSheet', { sheet: { ...room.sheets.get(P1), hp: 7 } });
+  await wait(80);
+
+  /* ------------------------------------------------------ порядок боя */  /* ------------------------------------------------------ порядок боя */
 
   console.log('\nПорядок боя');
   p2.log.errorMessage.length = 0;

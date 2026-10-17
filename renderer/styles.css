@@ -2905,6 +2905,10 @@ code {
   border-radius: 7px;
   flex: 1;
   min-width: 0;
+  /* Переносы внутри: в колонке стола три подписи не помещаются в строку, а
+     панель режет по горизонтали, и перенос переносился бы в обрезанное
+     место. */
+  flex-wrap: wrap;
 }
 
 .sheet__roll-mode {
@@ -4713,4 +4717,78 @@ body::after {
   .abil__mod {
     color: #101010 !important;
   }
+}
+/* ------------------------------------------------- Спасброски смерти */
+
+.death-saves {
+  margin-top: 10px;
+  padding: 8px 9px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* Стабилизирован и мёртв: блок остаётся на месте, но цвет говорит сразу. */
+.death-saves.is-stable {
+  border-color: var(--border-strong);
+}
+
+.death-saves.is-dead {
+  border-color: var(--danger);
+}
+
+.death-saves__rows {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.death-saves__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.death-saves__label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.death-saves__value {
+  font-family: var(--font-num);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--gold);
+  min-width: 20px;
+  text-align: center;
+}
+
+.death-saves.is-dead .death-saves__value {
+  color: var(--danger);
+}
+
+.death-saves__state {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.death-saves__state:empty {
+  display: none;
+}
+
+.death-saves__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.death-saves__actions .btn {
+  flex: 1;
+  font-size: 12px;
 }

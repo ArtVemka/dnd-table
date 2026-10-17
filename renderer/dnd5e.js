@@ -113,6 +113,8 @@
     maxLevel: 20,
     minHp: -999,
     maxHp: 9999,
+    /** Счётчик спасбросков смерти: дальше трёх он не идёт по правилам. */
+    maxDeathSaves: 3,
     minArmorClass: 0,
     maxArmorClass: 99,
     minInitiativeMisc: -20,
@@ -195,6 +197,11 @@
       hp: 10,
       maxHp: 10,
       tempHp: 0,
+      // Спасброски смерти. Считаются только пока здоровье на нуле: спасброски
+      // без сознания идут вместо обычных бросков, пока не три успеха или три
+      // неудачи.
+      deathSavesSuccesses: 0,
+      deathSavesFailures: 0,
       hitDice: '1d8',
       armorClass: 10,
       initiativeMisc: 0,
@@ -217,6 +224,29 @@
    * инициатива, пассивная Внимательность.
    * @param {object} sheet
    */
+  /**
+   * Состояние персонажа по здоровью и спасброскам смерти.
+   *
+   * Пока здоровье не упало в ноль, счётчики не значат ничего, и прятать их
+   * надо именно поэтому: три неудачи рядом со здоровым героем выглядят как
+   * ошибка, а не как отметка.
+   *
+   * @param {object} sheet
+   * @returns {{down: boolean, success: number, failure: number, label: string}}
+   */
+  function computeVitalState(sheet) {
+    const raw = sheet && typeof sheet === 'object' ? sheet : {};
+    const hp = Number.isFinite(Number(raw.hp)) ? Number(raw.hp) : 0;
+    const success = Math.max(0, Math.min(LIMITS.maxDeathSaves, Math.round(Number(raw.deathSavesSuccesses) || 0)));
+    const failure = Math.max(0, Math.min(LIMITS.maxDeathSaves, Math.round(Number(raw.deathSavesFailures) || 0)));
+    if (hp > 0) {
+      return { down: false, success: 0, failure: 0, label: '' };
+    }
+    if (failure >= LIMITS.maxDeathSaves) return { down: true, success, failure, label: 'Мёртв' };
+    if (success >= LIMITS.maxDeathSaves) return { down: true, success, failure, label: 'Стабилизирован' };
+    return { down: true, success, failure, label: 'При смерти' };
+  }
+
   function computeDerived(sheet) {
     const safe = sheet && typeof sheet === 'object' ? sheet : createEmptySheet();
     const level = Math.min(20, Math.max(1, Math.round(Number(safe.level) || 1)));
@@ -277,6 +307,7 @@
     abilityModifier,
       clampNumber,
     computeDerived,
+    computeVitalState,
     createEmptySheet,
     formatModifier,
     proficiencyBonus

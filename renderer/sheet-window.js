@@ -124,6 +124,9 @@
       },
       // Проверка уходит на стол тем же броском, что и из панели кубиков.
       onRollCheck: (formula) => table.emit('rollDice', { formula }),
+      // Спасбросок смерти считает сервер, в отдельном окне так же.
+      onDeathSave: () => table.emit('rollDeathSave', {}),
+      onResetDeathSaves: () => table.emit('resetDeathSaves', {}),
       onAvatarPick: async (file) => {
         if (context.readOnly) return;
         const read = await readImageFile(file, DnD.LIMITS.maxAvatarBytes);

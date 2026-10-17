@@ -1000,6 +1000,9 @@ let chosenSheetId = null;
           emit('rollDice', { formula });
           toast(`${label}: ${formula}`);
         },
+        // Спасбросок смерти считает сервер: клиент не решает, успех это или нет.
+        onDeathSave: () => emit('rollDeathSave', {}),
+        onResetDeathSaves: () => emit('resetDeathSaves', {}),
         onPlayerChange: (playerId) => openPlayerSheet(playerId),
         onBack: () => closePlayerSheet(),
         onDetach: () => detachSheet(),

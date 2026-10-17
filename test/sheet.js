@@ -77,6 +77,22 @@ check('стиль печати убирает интерфейс и оставл
   assert(/color:\s*#101010/.test(block), 'текст на печати остался тёмным на светлом');
 });
 
+check('счётчики спасбросков смерти живут только на нулевых хитах', () => {
+  const sheet = DnD.createEmptySheet();
+  assert.strictEqual(sheet.deathSavesSuccesses, 0, 'в пустом листе счётчики не обнулены');
+  assert.strictEqual(DnD.LIMITS.maxDeathSaves, 3, 'предел счётчика не три');
+  // Живой персонаж: счётчики не значат ничего и не показываются.
+  assert.strictEqual(DnD.computeVitalState({ ...sheet, hp: 1 }).down, false);
+  assert.strictEqual(DnD.computeVitalState({ ...sheet, hp: 1, deathSavesFailures: 3 }).label, '');
+  assert.strictEqual(DnD.computeVitalState({ ...sheet, hp: 0 }).label, 'При смерти');
+  assert.strictEqual(DnD.computeVitalState({ ...sheet, hp: 0, deathSavesFailures: 3 }).label, 'Мёртв');
+  assert.strictEqual(DnD.computeVitalState({ ...sheet, hp: 0, deathSavesSuccesses: 3 }).label, 'Стабилизирован');
+  // Мусор в кампании не должен ломать состояние.
+  const wild = DnD.computeVitalState({ hp: 0, deathSavesSuccesses: 99, deathSavesFailures: -4 });
+  assert.strictEqual(wild.success, 3, `успехов: ${wild.success}`);
+  assert.strictEqual(wild.failure, 0, `неудач: ${wild.failure}`);
+});
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }

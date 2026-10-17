@@ -282,6 +282,71 @@
       combatGrid.appendChild(this.field('hitDice', 'Кость хитов', { list: DnD.HIT_DICE }));
       combatGrid.appendChild(this.readonlyField('Пассивное восприятие', 'passivePerception'));
       combat.appendChild(combatGrid);
+
+      // Спасброски смерти. Показываются, когда хиты на нуле: раньше этого они
+      // не значат ничего, а три неудачи рядом со здоровым героем выглядят как
+      // ошибка. Бросок отправляется серверу и считается там же: клиент не решает,
+      // успех это или нет, иначе игрок подкрутил бы и число, и счётчик.
+      const death = el('div', 'death-saves');
+      death.hidden = true;
+      const deathTitle = el('div', 'box__title', 'Спасброски смерти');
+      death.appendChild(deathTitle);
+      const deathNote = el('div', 'box__note',
+        'Бросок d20: десятка и выше — успех, единица — две неудачи, двадцатка поднимает с одного хита');
+      death.appendChild(deathNote);
+
+      const deathRows = el('div', 'death-saves__rows');
+      this.deathNodes = {};
+      for (const kind of ['Successes', 'Failures']) {
+        const isSuccess = kind === 'Successes';
+        const row = el('div', 'death-saves__row');
+        row.appendChild(el('span', 'death-saves__label', isSuccess ? 'Успехи' : 'Неудачи'));
+        const minus = el('button', 'btn btn--ghost btn--tiny', '−');
+        minus.type = 'button';
+        minus.title = isSuccess ? 'Снять успех' : 'Снять неудачу';
+        minus.addEventListener('click', () => this.bumpDeathSave(kind, -1));
+        row.appendChild(minus);
+        const value = el('span', 'death-saves__value', '0');
+        row.appendChild(value);
+        const plus = el('button', 'btn btn--ghost btn--tiny', '+');
+        plus.type = 'button';
+        plus.title = isSuccess ? 'Добавить успех' : 'Добавить неудачу';
+        plus.addEventListener('click', () => this.bumpDeathSave(kind, 1));
+        row.appendChild(plus);
+        this.deathNodes[kind] = { value, minus, plus };
+        deathRows.appendChild(row);
+      }
+      death.appendChild(deathRows);
+
+      const deathState = el('div', 'death-saves__state', '');
+      this.deathState = deathState;
+      death.appendChild(deathState);
+
+      const deathActions = el('div', 'death-saves__actions');
+      const deathRoll = el('button', 'btn btn--accent btn--tiny', '🎲 Бросить спасбросок');
+      deathRoll.type = 'button';
+      deathRoll.title = 'Бросить d20 от имени персонажа';
+      deathRoll.addEventListener('click', () => {
+        // Проверка и в обработчике, а не только скрытием кнопки: скрытый
+        // элемент не исчезает из DOM, и вызвать его всё равно можно.
+        if (this.readOnly || !this.handlers.onDeathSave) return;
+        if (this.handlers.onDeathSave) this.handlers.onDeathSave();
+      });
+      deathActions.appendChild(deathRoll);
+      this.deathRollButton = deathRoll;
+      const deathReset = el('button', 'btn btn--ghost btn--tiny', 'Сбросить счётчики');
+      deathReset.type = 'button';
+      deathReset.title = 'Счётчики обнуляются, когда герой пришёл в себя';
+      deathReset.addEventListener('click', () => {
+        if (this.readOnly || !this.handlers.onResetDeathSaves) return;
+        this.handlers.onResetDeathSaves();
+      });
+      deathActions.appendChild(deathReset);
+      this.deathResetButton = deathReset;
+      this.deathNode = death;
+      death.appendChild(deathActions);
+      combat.appendChild(death);
+
       col1.appendChild(combat);
       grid.appendChild(col1);
 
@@ -400,6 +465,17 @@
       // символ в текстовом поле.
       const sheet = this.emptySheet || (this.emptySheet = DnD.createEmptySheet());
 
+// Счётчики спасбросков смерти не сидят в полях ввода: их двигают кнопки в листе
+// и присылает сервер после броска. Без переноса любой ввод в соседнее поле
+// обнулял бы их, и правка имени стирала бы весь бой.
+const current = this.sheet && typeof this.sheet === 'object' ? this.sheet : {};
+sheet.deathSavesSuccesses = DnD.clampNumber(
+  current.deathSavesSuccesses, 0, DnD.LIMITS.maxDeathSaves, 0
+);
+sheet.deathSavesFailures = DnD.clampNumber(
+  current.deathSavesFailures, 0, DnD.LIMITS.maxDeathSaves, 0
+);
+
       for (const input of this.inputs) {
         const name = input.dataset.field;
         if (!name) continue;
@@ -500,6 +576,53 @@
       this.setDerived('profBonus', DnD.formatModifier(d.profBonus));
       this.setDerived('initiative', DnD.formatModifier(d.initiative));
       this.setDerived('passivePerception', String(d.passivePerception));
+      this.paintVitalState();
+    }
+
+    /**
+     * Показывает и обновляет блок спасбросков смерти.
+     *
+     * Блок появляется на нулевых хитах и прячет счётчики у живого персонажа:
+     * иначе три неудачи рядом со здоровым героем выглядят как ошибка. Сами
+     * счётчики при этом не трогаем: лечение может быть впереди, а обнулять их
+     * молча нельзя, об этом человек решит кнопкой сброса.
+     */
+    paintVitalState() {
+      if (!this.deathNode) return;
+      const vital = DnD.computeVitalState(this.sheet);
+      this.deathNode.hidden = !vital.down;
+      if (!vital.down) return;
+      this.deathNodes.Successes.value.textContent = String(vital.success);
+      this.deathNodes.Failures.value.textContent = String(vital.failure);
+      this.deathState.textContent = vital.label;
+      this.deathNode.classList.toggle('is-dead', vital.label === 'Мёртв');
+      this.deathNode.classList.toggle('is-stable', vital.label === 'Стабилизирован');
+      const max = DnD.LIMITS.maxDeathSaves;
+      // Счётчик дошёл до трёх: растить дальше незачем, по правилам бой окончен.
+      this.deathNodes.Failures.plus.disabled = vital.failure >= max;
+      this.deathNodes.Successes.plus.disabled = vital.success >= max;
+      const canRoll = Boolean(this.handlers.onDeathSave) && !this.readOnly;
+      this.deathRollButton.hidden = !canRoll;
+      this.deathResetButton.hidden = !canRoll;
+    }
+
+    /**
+     * Двигает счётчик спасбросков вручную.
+     *
+     * Ручной плюс нужен не всегда: бросает сервер, но ибуты можно править
+     * таблицей, и иногда счётчик считают сами.
+     * @param {'Successes'|'Failures'} kind
+     * @param {number} delta
+     */
+    bumpDeathSave(kind, delta) {
+      if (this.readOnly || !this.handlers.onChange) return;
+      const sheet = this.collect();
+      const field = kind === 'Failures' ? 'deathSavesFailures' : 'deathSavesSuccesses';
+      const next = Math.max(0, Math.min(DnD.LIMITS.maxDeathSaves,
+        (Number(sheet[field]) || 0) + delta));
+      sheet[field] = next;
+      this.setSheet(sheet);
+      this.refresh();
     }
 
     setDerived(key, text) {

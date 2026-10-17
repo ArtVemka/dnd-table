@@ -333,6 +333,109 @@ async function createTableServer(options) {
       broadcastPlayers();
     });
 
+    /**
+     * Спасбросок смерти.
+     *
+     * Бросает сервер, а не клиент, иначе игрок мог бы подкрутить и число, и
+     * счётчик. Правила 5e: десятка и выше — успех, единица — сразу две неудачи,
+     *natural20 поднимает персонажа с одного здоровья.
+     *
+     * Бросает только сам игрок за свой лист: мастер в чужом листе работает
+     * только на чтение, иначе он вносил бы боевые броски от лица игрока.
+     */
+    socket.on('rollDeathSave', () => {
+      if (!requireJoined(socket)) return;
+      if (socket.data.role !== ROLE_PLAYER) {
+        return emitError(socket, 'Спасбросок смерти бросает сам игрок');
+      }
+      const playerId = socket.data.playerId;
+      const player = room.players.get(playerId);
+      const sheet = room.sheets.get(playerId);
+      if (!sheet) return emitError(socket, 'Лист персонажа ещё не готов');
+      if (sheet.hp > 0) return emitError(socket, 'Спасброски смерти идут при нулевом здоровье');
+
+      const die = crypto.randomInt(1, 21);
+      let outcome;
+      if (die === 20) {
+        sheet.hp = 1;
+        sheet.deathSavesSuccesses = 0;
+        sheet.deathSavesFailures = 0;
+        outcome = 'персонаж приходит в себя';
+      } else if (die === 1) {
+        sheet.deathSavesFailures = Math.min(LIMITS.maxDeathSaves, sheet.deathSavesFailures + 2);
+        outcome = 'две неудачи разом';
+      } else if (die >= 10) {
+        sheet.deathSavesSuccesses = Math.min(LIMITS.maxDeathSaves, sheet.deathSavesSuccesses + 1);
+        outcome = 'успех';
+      } else {
+        sheet.deathSavesFailures = Math.min(LIMITS.maxDeathSaves, sheet.deathSavesFailures + 1);
+        outcome = 'неудача';
+      }
+
+      markDirty();
+      // Лист шлём владельцу и мастеру: счётчик должен уйти обоим, иначе мастер
+      // увидит устаревшее состояние.
+      io.to(playerId).emit('characterSheetData', { playerId, sheet });
+      io.to('dm-sockets').emit('characterSheetUpdated', { playerId, sheet });
+
+      const roll = {
+        playerId,
+        playerName: sheet.characterName || player?.name || 'Игрок',
+        role: socket.data.role,
+        // Бросок смерти идёт в общую ленту бросков: его видят все и обсуждают.
+        formula: 'd20',
+        count: 1,
+        sides: 20,
+        values: [die],
+        keptValues: [die],
+        droppedValues: [],
+        modifier: 0,
+        result: die,
+        isDeathSave: true,
+        hidden: false,
+        time: new Date().toISOString()
+      };
+      room.diceHistory.push(roll);
+      if (room.diceHistory.length > LIMITS.maxDiceHistory) {
+        room.diceHistory = room.diceHistory.slice(-LIMITS.maxDiceHistory);
+      }
+      io.emit('diceRollResult', roll);
+
+      const note = sheet.hp > 0 && die === 20
+        ? ` (${outcome})`
+        : ` — ${outcome}`;
+      const announcement = {
+        from: sheet.playerName || player?.name || 'Игрок',
+        playerId,
+        role: socket.data.role,
+        avatar: player?.avatar || null,
+        text: `спасбросок смерти: d20 ${die}${note}`,
+        isRoll: true,
+        time: roll.time
+      };
+      room.chatHistory.push(announcement);
+      if (room.chatHistory.length > LIMITS.maxChatHistory) {
+        room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
+      }
+      io.emit('chatMessage', announcement);
+    });
+
+    /** Сбрасывает счётчики спасбросков вручную: лечение уже подняло героя. */
+    socket.on('resetDeathSaves', () => {
+      if (!requireJoined(socket)) return;
+      if (socket.data.role !== ROLE_PLAYER) {
+        return emitError(socket, 'Счётчики спасбросков сбрасывает игрок');
+      }
+      const playerId = socket.data.playerId;
+      const sheet = room.sheets.get(playerId);
+      if (!sheet) return emitError(socket, 'Лист персонажа ещё не готов');
+      sheet.deathSavesSuccesses = 0;
+      sheet.deathSavesFailures = 0;
+      markDirty();
+      io.to(playerId).emit('characterSheetData', { playerId, sheet });
+      io.to('dm-sockets').emit('characterSheetUpdated', { playerId, sheet });
+    });
+
     socket.on('requestCharacterSheet', (payload) => {
       if (!requireJoined(socket)) return;
       const targetId = String((payload && payload.playerId) || '');

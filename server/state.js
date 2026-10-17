@@ -29,6 +29,8 @@ const LIMITS = {
   maxTokens: 200,
   /** Прочность фишки: в кампании панцирь дракона из «Стимпанка» не поместится. */
   maxTokenHp: 9999,
+  /** Счётчик спасбросков смерти: дальше трёх он не идёт по правилам. */
+  maxDeathSaves: 3,
   maxLevel: 20,
   minAbility: 1,
   maxAbility: 30,
@@ -362,6 +364,10 @@ function normalizeSheet(input, fallbackPlayerName = '') {
   sheet.hp = clampInt(raw.hp, -999, 9999, 10);
   sheet.maxHp = clampInt(raw.maxHp, 0, 9999, 10);
   sheet.tempHp = clampInt(raw.tempHp, 0, 9999, 0);
+    // Спасброски смерти. Значение в кампании может достаться от другой версии
+    // или быть правлено руками, поэтому числа режутся здесь же.
+    sheet.deathSavesSuccesses = clampInt(raw.deathSavesSuccesses, 0, LIMITS.maxDeathSaves, 0);
+    sheet.deathSavesFailures = clampInt(raw.deathSavesFailures, 0, LIMITS.maxDeathSaves, 0);
   sheet.hitDice = sanitizeText(raw.hitDice, 20);
   sheet.armorClass = clampInt(raw.armorClass, 0, 99, 10);
   sheet.initiativeMisc = clampInt(raw.initiativeMisc, -20, 20, 0);

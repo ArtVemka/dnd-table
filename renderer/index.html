@@ -20,7 +20,7 @@
           <div class="home__logo">D&amp;D</div>
           <h1 class="home__title">Стол</h1>
           <p class="home__subtitle">
-            D&amp;D 5e (2014) · игра по локальной или виртуальной сети
+            D&amp;D 5e (2014) · игра напрямую через P2P
           </p>
         </div>
 
@@ -48,7 +48,7 @@
               <button id="btn-go-join" class="card" type="button">
                 <span class="card__icon">⇥</span>
                 <span class="card__title">Подключиться к столу</span>
-                <span class="card__text">Войти по адресу ДМ или по его P2P-билету</span>
+                <span class="card__text">Войти по P2P-билету, который прислал мастер</span>
               </button>
             </div>
           </div>
@@ -60,9 +60,9 @@
           <button id="btn-settings-home" class="btn btn--ghost btn--tiny" type="button">⚙ Настройки</button>
         </div>
         <p class="muted home__notice">
-          Приложение не создаёт сеть и не поднимает VPN. Оно только использует уже существующую
-          локальную сеть или виртуальную сеть (Hamachi, Radmin VPN, ZeroTier) либо проброс порта
-          через Porthole (Local Port Sharing).
+          Общей сети не нужно: игроки подключаются напрямую к мастеру по P2P-билету
+          через iroh. Приложение само пробивает NAT, а если не выйдет, идёт через
+          публичный relay — VPN и проброс портов не требуются.
         </p>
       </div>
     </section>
@@ -109,32 +109,26 @@
         <button class="btn btn--ghost dialog__back" data-back type="button">← Назад</button>
         <h2 class="dialog__title">Подключение к столу</h2>
         <p class="dialog__text">
-          Введите адрес, который показал ДМ, например <code>http://192.168.1.10:32100</code>
+          Вставьте P2P-билет, который прислал мастер. Общая сеть, VPN и проброс
+          портов не нужны: соединение идёт напрямую между вашими компьютерами.
         </p>
         <label class="field">
-          <span class="field__label">Адрес сервера</span>
-          <input id="join-address" class="field__input" type="text" placeholder="http://192.168.1.10:32100" />
+          <span class="field__label">P2P-билет от мастера</span>
+          <input id="join-p2p-ticket" class="field__input" type="text" placeholder="endpoint…" />
         </label>
         <label class="field">
           <span class="field__label">Ваше имя</span>
           <input id="join-name" class="field__input" type="text" maxlength="40" placeholder="Как вас видеть за столом" />
         </label>
         <div class="dialog__actions">
-          <button id="btn-join" class="btn btn--accent" type="button">Подключиться</button>
+          <button id="btn-join-p2p" class="btn btn--accent" type="button">Подключиться по P2P</button>
         </div>
         <div id="join-status" class="status"></div>
 
-        <div class="join-p2p">
-          <div class="join-p2p__divider">— или по P2P, без общей сети и VPN —</div>
-          <label class="field">
-            <span class="field__label">P2P-билет от ДМ</span>
-            <input id="join-p2p-ticket" class="field__input" type="text" placeholder="endpoint…" />
-          </label>
-          <div class="dialog__actions">
-            <button id="btn-join-p2p" class="btn btn--accent" type="button">Подключиться по P2P</button>
-          </div>
-        </div>
-
+        <p class="muted">
+          Нужен доступ в интернет: iroh использует relay и discovery n0. Также
+          разрешите приложению доступ к сети в брандмауэре Windows.
+        </p>
         <p class="muted">
           Ваш локальный идентификатор игрока хранится на этом компьютере. Если вы переподключитесь,
           лист персонажа восстановится автоматически.
@@ -172,14 +166,14 @@
 
           <div class="panel" id="addresses-panel">
             <div class="panel__title panel__title--row">
-              <span>Адреса для подключения</span>
+              <span>Приглашение игроков</span>
               <button id="addresses-toggle" class="btn btn--ghost btn--tiny" type="button" aria-expanded="true">Скрыть ▾</button>
             </div>
             <div id="addresses-summary" class="addr-summary muted" hidden></div>
             <div id="addresses-root"></div>
             <p class="hint">
-              Если игроки не могут подключиться, проверьте, что все находятся в одной локальной или
-              виртуальной сети, и разрешите приложение в брандмауэре.
+              Отправьте игрокам P2P-билет: они вставят его в приложении и
+              подключатся напрямую, без общей сети и VPN.
             </p>
             <div class="addr-actions">
               <button id="btn-import-adventure" class="btn btn--ghost btn--tiny" type="button">

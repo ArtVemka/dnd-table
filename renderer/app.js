@@ -19,11 +19,9 @@
 
   const PLAYER_ID_KEY = 'dnd-table.playerId';
   const PLAYER_NAME_KEY = 'dnd-table.playerName';
-  const LAST_ADDRESS_KEY = 'dnd-table.lastAddress';
   const ADDRESSES_COLLAPSED_KEY = 'dnd-table.addressesCollapsed';
   const LEFT_COLLAPSED_KEY = 'dnd-table.leftPanelCollapsed';
   const RIGHT_COLLAPSED_KEY = 'dnd-table.rightPanelCollapsed';
-  const PORTHOLE_URL = 'https://store.steampowered.com/app/4963920/Porthole__Local_Port_Sharing/';
   /** Размеры клетки сетки, которые предлагаются в настройках (в пикселях). */
   const CELL_CHOICES = [32, 46, 56, 72, 96];
 
@@ -68,7 +66,10 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     p2p: {
       running: false,
       peerConnected: false,
-      peerAddr: null,
+      /** Локальный порт туннеля игрока; 0, пока туннель не поднят. */
+      tunnelPort: 0,
+      /** Попытка поднять endpoint провалилась: билета не будет. */
+      failed: false,
       ticket: null
     }
   };
@@ -541,7 +542,6 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       if (app.role === 'player' && !app.training) {
         localStorage.setItem(PLAYER_ID_KEY, app.playerId);
         localStorage.setItem(PLAYER_NAME_KEY, you.name);
-        localStorage.setItem(LAST_ADDRESS_KEY, url);
       }
       setStatus('#join-status', '');
       showScreen('screen-table');
@@ -554,9 +554,13 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
           ? 'Стол поднят — игроки могут подключаться'
           : 'Вы подключились к столу'), 'ok');
       // Пытаемся запустить P2P-подключение через iroh для прямого обмена данными между участниками.
-      if (!app.training) {
-        startIrohForTable();
-        subscribeToIrohEvents();
+      if (!app.training) startIrohForTable();
+      // Игрок пришёл по туннелю: сам факт соединения доказывает, что туннель
+      // жив. Раньше этот флаг ставил мёртвый обработчик iroh:peer, и badge
+      // «P2P ●» не загорался никогда.
+      if (app.p2p.tunnelPort) {
+        app.p2p.peerConnected = true;
+        updateP2pBadge();
       }
       // Заготовку листа, заполненную без стола, можно перенести на стол.
       if (app.role === 'player') offerDraftSheet();
@@ -569,6 +573,14 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
       mapView.render(app.room, viewer());
       updateTableHeader();
+      // Мастер видит, что кто-то дошёл до стола, по списку участников.
+      if (app.role === 'dm' && app.p2p.running) {
+        const peers = app.room.players.filter((player) => player.role !== 'dm').length;
+        if (app.p2p.peerConnected !== (peers > 0)) {
+          app.p2p.peerConnected = peers > 0;
+          updateP2pBadge();
+        }
+      }
       // У ДМ список игроков в панели листа тоже должен обновляться.
       refreshSheetView();
     });
@@ -697,7 +709,6 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     // или startHost только что подняли: локальный порт закрывается раньше,
     // чем socket.io к нему подключится, и игрок получает ERR_CONNECTION_REFUSED.
     if (!options.keepP2p) stopIrohForTable();
-    unsubscribeFromIrohEvents();
   }
 
   /* ------------------------------------------------------------------ *
@@ -719,10 +730,14 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         // Генерируем билет и показываем его (для ДМ) или подсказываем (для игрока).
         generateP2pTicket();
       } else {
+        app.p2p.failed = true;
         console.warn('[iroh] failed to start:', result.error);
+        if (app.role === 'dm') renderAddresses();
       }
     } catch (error) {
+      app.p2p.failed = true;
       console.warn('[iroh] start error:', error.message);
+      if (app.role === 'dm') renderAddresses();
     }
   }
 
@@ -735,71 +750,19 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       const result = await desktop.irohCreateTicket();
       if (result.ok && result.ticket) {
         app.p2p.ticket = result.ticket;
-        // Показываем кнопку копирования только ДМ — они делятся с игроками.
-        showP2pTicketCopy(result.ticket);
-      }
-    } catch (error) {
-      console.warn('[iroh] ticket creation error:', error.message);
-    }
-  }
-
-  /** Показать кнопку копирования iroh-билета в панели участников. */
-  function showP2pTicketCopy(ticket) {
-    const container = document.querySelector('#addresses-root');
-    if (!container) return;
-
-    // Проверяем, нет ли уже кнопки
-    if (document.getElementById('btn-copy-p2p')) return;
-
-    const row = document.createElement('div');
-    row.style.marginTop = '8px';
-    row.style.paddingTop = '8px';
-    row.style.borderTop = '1px solid var(--border)';
-
-    const label = document.createElement('div');
-    label.className = 'muted';
-    label.style.fontSize = '11px';
-    label.textContent = 'P2P-адрес (кроме сети):';
-    row.appendChild(label);
-
-    const addr = document.createElement('div');
-    addr.style.fontSize = '10px';
-    addr.style.wordBreak = 'break-all';
-    addr.style.color = 'var(--text-dim)';
-    addr.textContent = ticket.slice(0, 60) + '…';
-    row.appendChild(addr);
-
-    const copyBtn = document.createElement('button');
-    copyBtn.id = 'btn-copy-p2p';
-    copyBtn.className = 'btn btn--tiny';
-    copyBtn.type = 'button';
-    copyBtn.textContent = 'Копировать адрес';
-    copyBtn.addEventListener('click', async () => {
-      const ok = await copyText(ticket);
-      toast(ok ? 'P2P-адрес скопирован' : 'Не удалось скопировать', ok ? 'ok' : 'error');
-    });
-    row.appendChild(copyBtn);
-
-    container.appendChild(row);
-  }
-
-  /** Подключение к DM по iroh-билету. */
-  async function connectToPeer(ticket) {
-    const desktop = window.desktop;
-    if (!desktop || !desktop.irohConnect) return;
-
-    try {
-      const result = await desktop.irohConnect(ticket);
-      if (result.ok) {
-        app.p2p.peerConnected = true;
-        updateP2pBadge();
-        toast('P2P-соединение установлено', 'ok');
+        // Билет показываем только мастеру: он его и раздаёт игрокам.
+        if (app.role === 'dm') renderAddresses();
       } else {
-        toast(`P2P подключение не удалось: ${result.error}`, 'error');
+        // Endpoint поднялся, а адрес получить не удалось — показывать
+        // «готовится» дальше бессмысленно, игроки всё равно не войдут.
+        app.p2p.failed = true;
+        console.warn('[iroh] ticket failed:', result && result.error);
+        if (app.role === 'dm') renderAddresses();
       }
     } catch (error) {
-      console.warn('[iroh] connect error:', error.message);
-      toast('Ошибка P2P-подключения', 'error');
+      app.p2p.failed = true;
+      console.warn('[iroh] ticket creation error:', error.message);
+      if (app.role === 'dm') renderAddresses();
     }
   }
 
@@ -833,6 +796,8 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
   function stopIrohForTable() {
     app.p2p.running = false;
     app.p2p.peerConnected = false;
+    app.p2p.tunnelPort = 0;
+    app.p2p.failed = false;
     app.p2p.ticket = null;
     const desktop = window.desktop;
     if (desktop && desktop.irohStop) {
@@ -842,38 +807,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       desktop.irohTunnelStop().catch(() => {});
     }
     updateP2pBadge();
-    removeP2pTicketCopyButton();
-  }
-
-  /** Убрать кнопку копирования билета. */
-  function removeP2pTicketCopyButton() {
-    const btn = document.getElementById('btn-copy-p2p');
-    if (btn) btn.remove();
-  }
-
-  /** Подписаться на события iroh от main-процесса. */
-  let irohSubscribers = [];
-  function subscribeToIrohEvents() {
-    const desktop = window.desktop;
-    if (!desktop) return;
-    // Подписка на обновления списка пиров
-    if (desktop.onIrohPeersUpdate) {
-      irohSubscribers.push(desktop.onIrohPeersUpdate((data) => {
-        if (data && data.peers && data.peers.length > 0) {
-          app.p2p.peerConnected = true;
-          app.p2p.peerAddr = data.peers[0].addr;
-          updateP2pBadge();
-        }
-      }));
-    }
-  }
-
-  /** Отписаться от событий iroh. */
-  function unsubscribeFromIrohEvents() {
-    for (const unsub of irohSubscribers) {
-      try { unsub(); } catch (_) {}
-    }
-    irohSubscribers = [];
+    if (app.role === 'dm') renderAddresses();
   }
 
   /* ------------------------------------------------------------------ *
@@ -1270,7 +1204,9 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     // Картинку массово ставят только тем, у кого это осмысленно: предметам
     // и персонажам. Заметку и таблицу одной картинкой не заменить.
     if (section.key === 'items' || section.key === 'actors') {
-      card.appendChild(makeGroupImageButton(group.name, section.key, group.members));
+      card.appendChild(makeGroupImageButton(group.name, group.members.length, (name, image) => {
+        emit('setAdventureGroupImage', { section: section.key, name, image });
+      }));
     }
 
     // Подробности показываем, когда в группе что-то есть сказать либо когда
@@ -1356,12 +1292,18 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
 
   /**
    * Кнопка «картинка всем сразу»: одна загрузка, а картинка встаёт на всю группу.
+   *
+   * Отправку вызывающий код передаёт сам: у фишек это `setTokenGroupImage`,
+   * у объектов приключения — `setAdventureGroupImage` с полем `section`. Раньше
+   * событие подставлялось здесь же, и для приключения уходило имя секции
+   * вместо имени события — сервер такое событие просто не слушает.
+   *
    * @param {string} name
-   * @param {string} event
-   * @param {object[]} members
+   * @param {number} count сколько объектов в группе
+   * @param {(name: string, dataUrl: string) => void} send
    * @returns {HTMLElement}
    */
-  function makeGroupImageButton(name, event, members) {
+  function makeGroupImageButton(name, count, send) {
     const row = el('label', 'adv-item__row');
     const input = document.createElement('input');
     input.type = 'file';
@@ -1370,14 +1312,15 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     input.addEventListener('change', async () => {
       const file = input.files && input.files[0];
       if (!file) return;
-      const dataUrl = await readImageFile(file);
-      if (!dataUrl) return toast('Не получилось прочитать картинку', 'error');
-      emit(event, { name, image: dataUrl });
-      toast(`Картинка «${name}» назначена: ${members.length} шт.`, 'ok');
+      const read = await readImageFile(file);
+      if (read.canceled) return;
+      if (read.error) return toast(read.error, 'error');
+      send(name, read.dataUrl);
+      toast(`Картинка «${name}» назначена: ${count} шт.`, 'ok');
     });
     row.appendChild(input);
-    row.appendChild(el('span', 'adv-item__filelabel', members.length > 1
-      ? `Картинка всем (${members.length})`
+    row.appendChild(el('span', 'adv-item__filelabel', count > 1
+      ? `Картинка всем (${count})`
       : 'Картинка'));
     return row;
   }
@@ -1389,7 +1332,9 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     head.appendChild(el('div', 'adv-item__title', group.name));
     if (group.members.length > 1) head.appendChild(el('span', 'adv-group__count', `× ${group.members.length}`));
     card.appendChild(head);
-    card.appendChild(makeGroupImageButton(group.name, 'setTokenGroupImage', group.members));
+    card.appendChild(makeGroupImageButton(group.name, group.members.length, (name, image) => {
+      emit('setTokenGroupImage', { name, image });
+    }));
     const withImage = group.members.filter((token) => token.imageUrl).length;
     if (group.members.length > 1) {
       card.appendChild(el('div', 'muted adv-item__text',
@@ -1438,101 +1383,49 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     badge.className = `badge ${training ? 'badge--train' : (online ? 'badge--on' : 'badge--off')}`;
   }
 
+  /**
+   * Панель «Приглашение игроков». Единственный способ попасть на стол — P2P-билет
+   * iroh, поэтому здесь и только он.
+   */
   function renderAddresses() {
     const root = $('#addresses-root');
-    if (!root || !app.host) return;
+    if (!root) return;
     root.innerHTML = '';
+    const ticket = app.p2p.ticket;
 
-    const groups = new Map();
-    const list = [{ kind: 'local', label: 'На этом компьютере', hint: 'Для проверки', address: '127.0.0.1', url: app.host.localUrl }]
-      .concat(app.host.addresses || []);
-
-    for (const entry of list) {
-      const key = entry.kind === 'lan' ? 'lan' : (entry.kind === 'virtual' ? 'virtual' : 'other');
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(entry);
+    if (!ticket) {
+      // Пока endpoint поднимается, билет просто ещё не готов. Сказать
+      // «недоступен» раньше времени значило бы соврать: мастер увидит отказ,
+      // которого не было, и решит звать игроков по старой схеме.
+      const waiting = app.p2p.failed
+        ? 'P2P недоступен: endpoint не поднялся, игроки не смогут войти'
+        : 'Билет готовится…';
+      root.appendChild(el('div', 'addr-note muted', waiting));
+      applyAddressesCollapsed();
+      return;
     }
 
-    const titles = {
-      lan: 'Локальная сеть',
-      virtual: 'Виртуальная сеть (Hamachi / Radmin VPN / ZeroTier / Porthole)',
-      other: 'Прочие адреса'
-    };
+    const block = el('div', 'addr-group');
+    block.appendChild(el('div', 'addr-group__title', 'P2P-билет для игроков'));
 
-    for (const key of ['lan', 'virtual', 'other']) {
-      const entries = groups.get(key);
-      if (!entries || !entries.length) continue;
-      const block = el('div', 'addr-group');
-      block.appendChild(el('div', 'addr-group__title', titles[key]));
-      for (const entry of entries) {
-        const row = el('div', 'addr');
-        const info = el('div', 'addr__info');
-        info.appendChild(el('div', 'addr__url', entry.url));
-        // У локального адреса поля iface нет. Раньше оно подставлялось
-        // безусловно, и в подписи появлялось «На этом компьютере · undefined».
-        const meta = entry.iface && entry.kind !== 'lan' && entry.kind !== 'virtual'
-          ? (entry.label ? `${entry.label} · ${entry.iface}` : entry.iface)
-          : (entry.iface || entry.label || '');
-        info.appendChild(el('div', 'addr__meta muted', meta));
-        row.appendChild(info);
-
-        const copy = el('button', 'btn btn--tiny', 'Скопировать адрес');
-        copy.type = 'button';
-        copy.title = entry.url.replace('http://', '');
-        copy.addEventListener('click', async () => {
-          const ok = await copyText(entry.url);
-          toast(ok ? `Скопировано: ${entry.url}` : 'Не удалось скопировать', ok ? 'ok' : 'error');
-        });
-        row.appendChild(copy);
-        block.appendChild(row);
-      }
-      root.appendChild(block);
-    }
-
-    root.appendChild(buildPortholeBlock());
-    root.appendChild(el('div', 'addr-note muted',
-      'Игрокам нужно ввести адрес целиком, включая порт. Все участники должны быть в одной сети.'));
-    applyAddressesCollapsed();
-  }
-
-  /**
-   * Porthole (Local Port Sharing) не создаёт виртуальную сеть: он прокидывает
-   * выбранный порт через Steam, и на компьютере игрока этот порт открывается
-   * локально. Поэтому игрок вводит 127.0.0.1 с тем же портом, что у ДМ.
-   */
-  function buildPortholeBlock() {
-    const block = el('div', 'addr-group addr-group--porthole');
-    block.appendChild(el('div', 'addr-group__title', 'Porthole (Local Port Sharing)'));
-
-    const url = `http://127.0.0.1:${app.host.port}`;
     const row = el('div', 'addr');
     const info = el('div', 'addr__info');
-    info.appendChild(el('div', 'addr__url', url));
-    info.appendChild(el('div', 'addr__meta muted', `для игрока: тот же порт ${app.host.port}, только на его компьютере`));
+    // Билет длинный, показываем целиком и разрешаем выделение: игроки вставляют
+    // его кнопкой «вставить из буфера», а не переписывают с экрана.
+    const code = el('div', 'addr__url addr__url--ticket');
+    code.textContent = ticket;
+    code.title = 'Нажмите, чтобы скопировать';
+    code.addEventListener('click', async () => {
+      const ok = await copyText(ticket);
+      toast(ok ? 'Билет скопирован' : 'Не удалось скопировать', ok ? 'ok' : 'error');
+    });
+    info.appendChild(code);
+    info.appendChild(el('div', 'addr__meta muted',
+      'Скопируйте и отправьте игрокам: они вставляют его в приложении и подключаются напрямую.'));
     row.appendChild(info);
-
-    const copy = el('button', 'btn btn--tiny', 'Скопировать адрес');
-    copy.type = 'button';
-    copy.addEventListener('click', async () => {
-      const ok = await copyText(url);
-      toast(ok ? `Скопировано: ${url}` : 'Не удалось скопировать', ok ? 'ok' : 'error');
-    });
-    row.appendChild(copy);
     block.appendChild(row);
-
-    const note = el('div', 'addr-note muted',
-      `Порядок: в Porthole поделитесь портом ${app.host.port} с друзьями, они принимают его у себя, `
-      + 'и в приложении вводят этот адрес. Свой порт можно посмотреть в шапке стола.');
-    block.appendChild(note);
-
-    const open = el('button', 'btn btn--tiny', 'Открыть Porthole в Steam');
-    open.type = 'button';
-    open.addEventListener('click', () => {
-      if (desktop.openExternal) desktop.openExternal(PORTHOLE_URL);
-      else window.open(PORTHOLE_URL, '_blank');
-    });
-    block.appendChild(open);
-    return block;
+    root.appendChild(block);
+    applyAddressesCollapsed();
   }
 
   /* ------------------------------------------------------------------ *
@@ -1743,9 +1636,10 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     if (summary) {
       summary.hidden = !collapsed;
       if (collapsed) {
-        const list = (app.host && app.host.addresses) || [];
-        const primary = list.find((entry) => entry.kind === 'lan') || list[0];
-        summary.textContent = primary ? `Игрокам: ${primary.url}` : 'Стол ещё не поднят';
+        const ticket = app.p2p.ticket;
+        summary.textContent = ticket
+          ? `Игрокам: P2P-билет${app.p2p.peerConnected ? ' · подключено' : ''}`
+          : (app.p2p.failed ? 'P2P недоступен' : 'Билет готовится…');
       }
     }
   }
@@ -2054,15 +1948,11 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
 
     $('#btn-start-loaded').addEventListener('click', startTable);
 
-    $('#btn-join').addEventListener('click', doJoin);
-    $('#join-address').addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') doJoin();
-    });
     $('#join-name').addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') doJoin();
+      if (event.key === 'Enter') doJoinP2p();
     });
-    // P2P-подключение живёт на экране подключения: билет всегда приходит от ДМ,
-    // поэтому отдельная кнопка на главном экране была лишней.
+    // P2P-подключение живёт на экране подключения: билет всегда приходит от
+    // мастера, поэтому отдельная кнопка на главном экране была лишней.
     $('#btn-join-p2p').addEventListener('click', doJoinP2p);
     $('#join-p2p-ticket').addEventListener('keydown', (event) => {
       if (event.key === 'Enter') doJoinP2p();
@@ -2096,53 +1986,40 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     desktop.onCampaignError(({ message }) => toast(message, 'error'));
   }
 
-  function doJoin() {
-    const raw = $('#join-address').value.trim();
-    const name = $('#join-name').value.trim();
-    if (!raw) return setStatus('#join-status', 'Введите адрес сервера', 'error');
-    if (!name) return setStatus('#join-status', 'Введите имя', 'error');
-
-    let url = raw;
-    if (!/^https?:\/\//i.test(url)) url = `http://${url}`;
-    url = url.replace(/\/+$/, '');
-    if (!/:\d+$/.test(url)) url = `${url}:32100`;
-
-    localStorage.setItem(PLAYER_NAME_KEY, name.slice(0, DnD.LIMITS.maxNameLength));
-    prepareTableUi();
-    showScreen('screen-table');
-    app.role = 'player';
-    updateRoleUi();
-    connect({ url, name: name.slice(0, DnD.LIMITS.maxNameLength), playerId: localPlayerId() });
-  }
-
   /**
-   * Экран подключения: здесь и обычный адрес ДМ, и его P2P-билет.
+   * Экран подключения: игрок вставляет P2P-билет мастера.
    */
   function openJoinScreen() {
     $('#join-name').value = storedName();
-    $('#join-address').value = localStorage.getItem(LAST_ADDRESS_KEY) || '';
+    $('#join-p2p-ticket').value = '';
+    setStatus('#join-status', '');
     showScreen('screen-join');
-    $('#join-address').focus();
+    $('#join-p2p-ticket').focus();
   }
 
   /**
-   * Подключение к столу ДМ по P2P-билету (iroh). Билет ДМ копирует из своей
-   * панели адресов («P2P-адрес (кроме сети)»). Здесь мы поднимаем локальный
-   * TCP-туннель и направляем socket.io на 127.0.0.1:<локальный порт>.
+   * Подключение к столу мастера по P2P-билету (iroh). Билет мастер копирует из
+   * панели «Приглашение игроков». Здесь мы поднимаем локальный TCP-туннель и
+   * направляем socket.io на 127.0.0.1:<локальный порт>.
    */
   async function doJoinP2p() {
     const ticket = $('#join-p2p-ticket').value.trim();
     const name = $('#join-name').value.trim();
-    if (!ticket) return setStatus('#join-status', 'Вставьте P2P-билет, который дал ДМ', 'error');
+    if (!ticket) return setStatus('#join-status', 'Вставьте P2P-билет, который дал мастер', 'error');
     if (!name) return setStatus('#join-status', 'Введите имя', 'error');
     if (!desktop || !desktop.irohTunnelClient) {
       return setStatus('#join-status', 'P2P недоступен в этом приложении', 'error');
     }
 
     setStatus('#join-status', 'Соединяемся по P2P…');
-    const result = await desktop.irohTunnelClient(ticket);
-    if (!result.ok) {
-      return setStatus('#join-status', `P2P не удалось: ${result.error}`, 'error');
+    let result;
+    try {
+      result = await desktop.irohTunnelClient(ticket);
+    } catch (error) {
+      return setStatus('#join-status', `P2P не удалось: ${error.message}`, 'error');
+    }
+    if (!result || !result.ok) {
+      return setStatus('#join-status', `P2P не удалось: ${(result && result.error) || 'неизвестная ошибка'}`, 'error');
     }
 
     const url = `http://127.0.0.1:${result.localPort}`;
@@ -2151,6 +2028,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     showScreen('screen-table');
     app.role = 'player';
     app.p2p.ticket = ticket;
+    app.p2p.tunnelPort = result.localPort;
     updateRoleUi();
     connect({ url, name: name.slice(0, DnD.LIMITS.maxNameLength), playerId: localPlayerId(), p2p: true, keepP2p: true });
   }

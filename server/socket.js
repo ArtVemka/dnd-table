@@ -33,7 +33,7 @@ const {
   normalizeSheet,
   sanitizeText
 } = require('./state');
-const { getLocalAddresses, findFreePort } = require('./net');
+const { findFreePort } = require('./net');
 const { decodeImage, sniffImageFormat } = require('./image');
 
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
@@ -196,7 +196,9 @@ async function createTableServer(options) {
       }
 
       // ДМ определяется по секретному ключу, который main-процесс передал
-      // своему же окну, и по локальному адресу подключения.
+      // своему же окну, и по локальному адресу подключения. Сервер слушает
+      // лишь 127.0.0.1, так что подключиться извне к нему нельзя вовсе, а
+      // ключ остаётся второй линией защиты.
       const isHost =
         isLoopbackAddress(socket.handshake.address) && safeEqual(data.hostKey, hostKey);
 
@@ -621,10 +623,12 @@ async function createTableServer(options) {
     });
   });
 
+  // Слушаем только 127.0.0.1. Игроки приходят по туннелю iroh, который
+  // прокладывается прямо в этот порт, поэтому наружу сервер выставлять не
+  // нужно: в локальной сети и в интернете он не виден вовсе.
   const port = await new Promise((resolve, reject) => {
     httpServer.once('error', reject);
-    // Слушаем 0.0.0.0, а не только 127.0.0.1 — иначе игроки не подключатся.
-    httpServer.listen(preferredPort, '0.0.0.0', () => {
+    httpServer.listen(preferredPort, '127.0.0.1', () => {
       httpServer.removeListener('error', reject);
       resolve(httpServer.address().port);
     });
@@ -633,18 +637,12 @@ async function createTableServer(options) {
     const fallback = await findFreePort({ preferred: preferredPort + 1 });
     return new Promise((resolve, reject) => {
       httpServer.once('error', reject);
-      httpServer.listen(fallback, '0.0.0.0', () => resolve(httpServer.address().port));
+      httpServer.listen(fallback, '127.0.0.1', () => resolve(httpServer.address().port));
     });
   });
 
-  const addresses = getLocalAddresses().map((entry) => ({
-    ...entry,
-    url: `http://${entry.address}:${port}`
-  }));
-
   return {
     port,
-    addresses,
     localUrl: `http://127.0.0.1:${port}`,
     io,
     httpServer,

@@ -134,8 +134,11 @@ async function main() {
   /* ------------------------------------------------------- сервер и сеть */
 
   console.log('Сервер и сеть');
-  check('слушает 0.0.0.0, а не только 127.0.0.1', () => {
-    assert.strictEqual(server.httpServer.address().address, '0.0.0.0');
+  check('слушает только 127.0.0.1: наружу порт не выставлен', () => {
+    assert.strictEqual(server.httpServer.address().address, '127.0.0.1');
+  });
+  check('список сетевых адресов больше не возвращается', () => {
+    assert.strictEqual(server.addresses, undefined);
   });
   check('порт выбран автоматически', () => {
     assert.ok(Number.isInteger(server.port) && server.port > 0);

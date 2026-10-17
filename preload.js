@@ -44,10 +44,8 @@ contextBridge.exposeInMainWorld('desktop', {
   irohTunnelClient: (ticketStr) => ipcRenderer.invoke('iroh:tunnel-client', ticketStr),
   irohTunnelStop: () => ipcRenderer.invoke('iroh:tunnel-stop'),
 
-  // Подписки на iroh-события
-  onIrohPeerJoined: (callback) => subscribe('iroh:peer-joined', callback),
-  onIrohPeerLeft: (callback) => subscribe('iroh:peer-left', callback),
-  onIrohPeersUpdate: (callback) => subscribe('iroh:peers-update', callback),
+  // Подписки на iroh-события не пробрасываются: список участников приходит
+  // по socket.io (playersUpdate), отдельного канала присутствия у iroh нет.
 
   // Импорт внешнего приключения (Foundry VTT)
   pickAdventureFile: () => ipcRenderer.invoke('adventure:pickFile'),

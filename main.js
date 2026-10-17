@@ -80,7 +80,7 @@ const sheetWindows = new Map();
 let store = null;
 /** Текущая кампания (созданная или загруженная, ещё не обязательно запущенная). */
 let currentCampaign = null;
-/** Запущенный стол: { server, room, hostKey, port, addresses, localUrl }. */
+/** Запущенный стол: { server, room, hostKey, port, localUrl }. */
 let host = null;
 let autosaveTimer = null;
 let dirty = false;
@@ -339,7 +339,6 @@ async function startHost() {
     room,
     hostKey,
     port: server.port,
-    addresses: server.addresses,
     localUrl: server.localUrl
   };
   dirty = false;
@@ -351,7 +350,6 @@ async function startHost() {
   return {
     port: server.port,
     localUrl: server.localUrl,
-    addresses: server.addresses,
     hostKey,
     campaign: campaignMeta(currentCampaign)
   };
@@ -368,7 +366,6 @@ function hostStatus() {
     running: true,
     port: host.port,
     localUrl: host.localUrl,
-    addresses: host.addresses,
     hostKey: host.hostKey,
     campaign: campaignMeta(currentCampaign)
   };

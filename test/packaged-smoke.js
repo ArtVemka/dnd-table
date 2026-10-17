@@ -46,6 +46,7 @@ const REQUIRED_FILES = [
   'preload-sheet.js',
   'renderer/index.html',
   'renderer/styles.css',
+  'renderer/theme.js',
   'renderer/app.js',
   'renderer/dnd5e.js',
   'renderer/sheet.js',
@@ -53,11 +54,17 @@ const REQUIRED_FILES = [
   'renderer/sheet-window.js',
   'renderer/table.js',
   'renderer/local-table.js',
+  // Справочник предметов для ссылок на dnd.su. Без него панель импортированного
+  // приключения открывается, но названия перестают быть кликабельными.
+  'renderer/dnd-items.json',
   'renderer/vendor/socket.io.min.js',
   'server/socket.js',
   'server/state.js',
   'server/campaign.js',
   'server/net.js',
+  'server/image.js',
+  'server/iroh-manager.js',
+  'server/importer/index.js',
   'scripts/copy-vendor.js'
 ];
 /** Папки production-зависимостей — проверяем по префиксу. */

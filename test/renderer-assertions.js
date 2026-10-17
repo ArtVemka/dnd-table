@@ -1239,12 +1239,18 @@
       assert(document.querySelector('#screen-home').classList.contains('is-active'), 'не вернулись на главный экран');
     });
 
-    check('экран подключения содержит адрес, имя и кнопку', () => {
+    check('экран подключения содержит билет, имя и одну кнопку', () => {
       document.querySelector('#btn-go-join').click();
       assert(document.querySelector('#screen-join').classList.contains('is-active'), 'экран подключения не открылся');
-      assert(document.querySelector('#join-address') && document.querySelector('#join-name'), 'нет полей ввода');
-      assert(document.querySelector('#btn-join'), 'нет кнопки подключения');
+      assert(document.querySelector('#join-p2p-ticket'), 'нет поля для P2P-билета');
+      assert(document.querySelector('#join-name'), 'нет поля имени');
+      assert(document.querySelector('#btn-join-p2p'), 'нет кнопки подключения по P2P');
       document.querySelector('[data-back]').click();
+    });
+
+    check('вход по сетевому адресу убран', () => {
+      assert(!document.querySelector('#join-address'), 'осталось поле ввода адреса');
+      assert(!document.querySelector('#btn-join'), 'осталась кнопка подключения по адресу');
     });
 
     document.querySelector('#btn-go-create').click();
@@ -1256,7 +1262,7 @@
     document.querySelector('#create-name').value = 'Смоук-кампания';
     document.querySelector('#btn-create-start').click();
     await waitFor(() => document.querySelector('#screen-table').classList.contains('is-active'), 'экран стола');
-    await waitFor(() => document.querySelectorAll('#addresses-root .addr').length > 0, 'адреса подключения');
+    await waitFor(() => document.querySelector('#addresses-root').textContent.trim().length > 0, 'панель приглашения');
     // Панель карты и участники заполняются, когда ДМ войдёт за стол: до этого
     // в окне ещё могут оставаться данные прошлого стола (например, тренировки).
     await waitFor(() => document.querySelector('#role-badge').textContent === 'ДМ', 'роль ДМ в окне');
@@ -1275,42 +1281,46 @@
     check('кнопки управления кампанией видны только ДМ', () => {
       assert(!document.querySelector('#btn-save-campaign').hidden, 'нет кнопки сохранения кампании');
       assert(!document.querySelector('#btn-stop-host').hidden, 'нет кнопки остановки стола');
-      assert(!document.querySelector('#addresses-panel').hidden, 'нет панели адресов');
+      assert(!document.querySelector('#addresses-panel').hidden, 'нет панели приглашения');
     });
-    check('показаны адреса для подключения с портом и кнопкой копирования', () => {
-      const urls = [...document.querySelectorAll('#addresses-root .addr__url')].map((node) => node.textContent);
-      assert(urls.length >= 1, 'нет ни одного адреса');
-      assert(urls.some((url) => /^http:\/\/127\.0\.0\.1:\d+$/.test(url)), `нет локального адреса: ${urls.join(', ')}`);
-      const copies = [...document.querySelectorAll('#addresses-root .addr button')]
-        .filter((button) => button.textContent.includes('Скопировать адрес'));
-      assert(copies.length === document.querySelectorAll('#addresses-root .addr').length, 'не у каждого адреса есть копирование');
-    });
-    check('адреса разложены по типам сети (локальная / виртуальная)', () => {
-      assert(document.querySelector('#addresses-root .addr-group__title'), 'нет блоков группировки адресов');
-      assert(document.querySelector('#addresses-root').textContent.includes('Локальная сеть'), 'нет блока локальной сети');
-    });
-    check('есть подсказка про брандмауэр и общую сеть', () => {
-      const hint = document.querySelector('#addresses-panel .hint').textContent.replace(/\s+/g, ' ');
-      assert(hint.includes('брандмауэр'), `нет упоминания брандмауэра: ${hint}`);
-      assert(hint.includes('в одной локальной или виртуальной сети'), `нет требования общей сети: ${hint}`);
-    });
-    check('в панели адресов есть блок Porthole (проброс порта через Steam)', () => {
+    check('панель приглашения не показывает ни одного сетевого адреса', () => {
       const panel = document.querySelector('#addresses-panel');
-      assert(panel.textContent.includes('Porthole'), 'нет блока Porthole');
-      const porthole = panel.querySelector('.addr-group--porthole');
-      assert(porthole, 'нет отдельного блока Porthole');
-      const url = porthole.querySelector('.addr__url').textContent;
-      assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(url), `адрес для Porthole: ${url}`);
-      assert(porthole.textContent.includes('Порядок'), 'нет порядка действий для Porthole');
+      assert(!/https?:\/\/(127\.0\.0\.1|10\.|192\.168\.)/.test(panel.textContent),
+        `в панели остался адрес: ${panel.textContent.slice(0, 160)}`);
+      assert(!panel.querySelector('.addr-group--porthole'), 'остался блок Porthole');
+      assert(!panel.textContent.includes('Porthole'), 'осталось упоминание Porthole');
+      assert(!panel.textContent.includes('Hamachi') && !panel.textContent.includes('ZeroTier'),
+        'остались упоминания виртуальных сетей');
     });
-    check('панель адресов сворачивается и разворачивается', () => {
+    check('панель приглашения показывает билет и способ подключения', () => {
+      const panel = document.querySelector('#addresses-panel');
+      const text = panel.textContent.replace(/\s+/g, ' ');
+      assert(panel.querySelector('.addr-group__title'), 'нет заголовка блока');
+      const ticket = panel.querySelector('.addr__url--ticket');
+      if (ticket) {
+        // iroh поднялся: билет обязан быть на месте целиком и копироваться.
+        assert(ticket.textContent.length > 20, `билет подозрительно короткий: ${ticket.textContent}`);
+        assert(!ticket.textContent.includes('…'), 'билет показан обрезанным');
+      } else {
+        // iroh не поднялся (нет сети в проверке) — тогда панель обязана
+        // честно сказать об этом, а не делать вид, что всё в порядке.
+        assert(/Билет готовится|P2P недоступен/.test(text), `нет ни билета, ни сообщения: ${text}`);
+      }
+    });
+    check('подсказка про P2P есть, требования общей сети нет', () => {
+      const hint = document.querySelector('#addresses-panel .hint').textContent.replace(/\s+/g, ' ');
+      assert(hint.includes('P2P-билет'), `нет упоминания билета: ${hint}`);
+      assert(!hint.includes('виртуальной сети'), `осталось требование общей сети: ${hint}`);
+    });
+    check('панель приглашения сворачивается и разворачивается', () => {
       const toggle = document.querySelector('#addresses-toggle');
       assert(toggle, 'нет кнопки сворачивания');
       toggle.click();
       const panel = document.querySelector('#addresses-panel');
       assert(panel.classList.contains('is-collapsed'), 'панель не свернулась');
       const summary = document.querySelector('#addresses-summary');
-      assert(!summary.hidden && summary.textContent.includes('http://'), `сводка при закрытой панели: ${summary.textContent}`);
+      assert(!summary.hidden && summary.textContent.trim().length > 0, `пустая сводка при закрытой панели: ${summary.textContent}`);
+      assert(!summary.textContent.includes('http://'), `в сводке остался адрес: ${summary.textContent}`);
       toggle.click();
       assert(!panel.classList.contains('is-collapsed'), 'панель не развернулась');
       assert(document.querySelector('#addresses-summary').hidden, 'сводка осталась при открытой панели');
@@ -2034,34 +2044,47 @@
       assert(hostAgain.ok === true, `стол не поднялся: ${hostAgain.error}`);
     });
 
-    document.querySelector('#btn-go-join').click();
-    document.querySelector('#join-address').value = hostAgain.localUrl;
-    document.querySelector('#join-name').value = 'Артём';
-    document.querySelector('#btn-join').click();
-    const draftPrompt = await softWait(
-      () => {
-        const overlay = document.querySelector('.modal-overlay');
-        return overlay && overlay.textContent.includes('Отправить лист на стол');
-      },
-      'предложение отправить заготовку листа',
-      10000
-    );
-    check('при подключении к столу предлагают перенести заготовку листа', () => {
-      assert(draftPrompt, 'заготовку не предложили');
-      const text = document.querySelector('.modal-overlay').textContent.replace(/\s+/g, ' ');
-      assert(text.includes('пуст'), `не сказано, почему спрашивают: ${text.slice(0, 140)}`);
+    // Игрок подключается напрямую сокетом, а не через экран входа: единственный
+    // путь в приложении теперь P2P, и поднять второй endpoint iroh на той же
+    // машине в проверке нельзя. Набор событий тот же, что и у игрока.
+    const draft = window.LocalTable.readDraft(trainingPlayerId);
+    check('заготовка листа без стола лежит в локальном хранилище', () => {
+      assert(draft && draft.characterName === 'Тордин', `заготовка: ${draft && draft.characterName}`);
+    });
+    check('при пустом листе на столе заготовку предлагают перенести', () => {
+      const offer = window.LocalTable.shouldOfferDraft({
+        draft,
+        serverSheet: null
+      });
+      assert(offer, 'заготовку не предложили бы при пустом листе на столе');
     });
 
-    const sendDraft = [...document.querySelectorAll('.modal-overlay .modal__actions button')]
-      .find((node) => node.textContent.includes('Отправить'));
-    check('заготовку листа можно отправить на стол', () => {
-      assert(sendDraft, 'нет кнопки «Отправить»');
-      sendDraft.click();
+    const draftSocket = window.io(hostAgain.localUrl, { transports: ['websocket'], forceNew: true });
+    const playerJoined = await new Promise((resolve, reject) => {
+      draftSocket.on('connect', () => {
+        draftSocket.emit('joinRoom', { name: 'Артём', playerId: trainingPlayerId }, resolve);
+      });
+      draftSocket.on('connect_error', (error) => reject(new Error(`игрок не подключился: ${error.message}`)));
     });
-    await waitFor(
-      () => [...document.querySelectorAll('#toasts .toast')].some((node) => node.textContent.includes('отправлен на стол')),
-      'подтверждение отправки листа'
-    );
+    check('игрок видит на столе только свой лист', () => {
+      assert(playerJoined.ok === true, `вход не удался: ${playerJoined.error}`);
+      const sheet = playerJoined.you && playerJoined.you.sheet;
+      assert(!sheet || sheet.characterName === '', `игрок получил чужой лист: ${sheet && sheet.characterName}`);
+    });
+    // Ровно то, что делает подтверждение в окне «Отправить лист на стол?».
+    // Ждём эхо сервера, иначе снимок ДМ может сняться раньше, чем лист дойдёт.
+    const savedEcho = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('сервер не подтвердил сохранение листа')), 10000);
+      draftSocket.on('characterSheetUpdated', (payload) => {
+        if (!payload || payload.playerId !== trainingPlayerId) return;
+        clearTimeout(timer);
+        resolve(payload.sheet);
+      });
+      draftSocket.emit('saveCharacterSheet', { sheet: draft });
+    });
+    check('сервер принял лист и разослал его обратно участникам', () => {
+      assert(savedEcho && savedEcho.characterName === 'Тордин', `в эхо: ${savedEcho && savedEcho.characterName}`);
+    });
 
     const hostAfter = await window.desktop.hostStatus();
     const dmSocket = window.io(hostAfter.localUrl, { transports: ['websocket'], forceNew: true });
@@ -2084,7 +2107,7 @@
     dmSocket.disconnect();
     await window.desktop.stopHost();
 
-    playerSocket.disconnect();
+    draftSocket.disconnect();
     return { checks, campaignId };
   })();
 })();

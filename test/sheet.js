@@ -6,6 +6,9 @@
  *
  * Модель берём из dnd5e.js с подменённым window: файл рассчитан на браузер.
  */
+const fs = require('fs');
+const path = require('path');
+
 global.window = {};
 require('../renderer/dnd5e.js');
 const DnD = global.window.DnD5e;
@@ -56,6 +59,22 @@ check('дробные числа округляются, а не копятся'
   // остаётся 10.7, пока в кампании лежит 11.
   assert.strictEqual(DnD.clampNumber(10.7, 0, 9999, 0), 11);
   assert.strictEqual(DnD.clampNumber(10.2, 0, 9999, 0), 10);
+});
+
+check('стиль печати убирает интерфейс и оставляет белый лист', () => {
+  // Стили подключены ссылкой, и прочесть их из renderer нельзя: чтение файла
+  // запрещено политикой безопасности. Поэтому проверка живёт здесь, где файл
+  // открывается обычным fs.
+  const css = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'styles.css'), 'utf8');
+  const index = css.indexOf('@media print');
+  assert(index >= 0, 'в стилях нет блока для печати');
+  const block = css.slice(index);
+  assert(/visibility:\s*hidden/.test(block), 'печать не прячет интерфейс стола');
+  assert(/background:\s*#fff/.test(block), 'на печати не белый фон: лист уйдёт тёмным');
+  assert(/\.sheet,\s*\n\s*\.sheet \*\s*\{\s*\n\s*visibility:\s*visible/.test(block),
+    'сам лист на печати не виден');
+  // Без этого заголовок листа и подписи полей уедут вниз на белом фоне.
+  assert(/color:\s*#101010/.test(block), 'текст на печати остался тёмным на светлом');
 });
 
 function assert(condition, message) {

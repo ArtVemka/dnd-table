@@ -345,6 +345,27 @@
     const sheetView = new window.SheetView(sheetHost, {});
     sheetView.setSheet(SAMPLE_SHEET);
 
+    check('лист можно унести на бумагу, а из списка игроков печатать нечего', () => {
+      const print = [...sheetHost.querySelectorAll('.btn')].find((button) => button.textContent.includes('Печать'));
+      assert(print, 'в листе нет кнопки печати');
+      assert(!print.hidden, 'кнопка печати скрыта в открытом листе');
+      // Само окно печати в проверке открывать нельзя: оно блокирует процесс.
+      // Поэтому подменяем его и смотрим, что кнопка туда обращается.
+      const original = window.print;
+      let printed = 0;
+      window.print = () => { printed += 1; };
+      try {
+        print.click();
+      } finally {
+        window.print = original;
+      }
+      assert.strictEqual(printed, 1, 'кнопка печати не вызвала печать листа');
+      sheetView.setMode('list');
+      assert(print.hidden, 'печатать предложено из списка игроков, где листа нет');
+      sheetView.setMode('sheet');
+      assert(!print.hidden, 'кнопка печати не вернулась в открытом листе');
+    });
+
     check('лист персонажа заполняется всеми полями 5e', () => {
       const value = (field) => {
         const node = sheetHost.querySelector(`[data-field="${field}"]`);

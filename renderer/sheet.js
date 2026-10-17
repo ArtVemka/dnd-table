@@ -121,6 +121,21 @@
       });
       headTools.appendChild(this.backButton);
 
+      // Печать: игроки держат лист под рукой, и из окна приложения его нужно
+      // унести в PDF. Системное окно печати умеет и «Сохранить как PDF», а
+      // отдельный вызов printToPDF всё равно открывал бы файловый диалог.
+      this.printButton = el('button', 'btn btn--ghost btn--tiny', '⎙ Печать');
+      this.printButton.type = 'button';
+      this.printButton.title = 'Напечатать лист или сохранить в PDF';
+      this.printButton.addEventListener('click', () => {
+        if (this.handlers.onPrint) {
+          this.handlers.onPrint();
+          return;
+        }
+        window.print();
+      });
+      headTools.appendChild(this.printButton);
+
       this.statusNode = el('span', 'sheet__status', '');
       headTools.appendChild(this.statusNode);
       head.appendChild(headTools);
@@ -669,6 +684,8 @@
     // Отдельное окно нужно там, где лист открыт поверх стола. На экране
     // подготовки лист и есть всё окно, и кнопка только мешает.
     this.detachButton.hidden = isList || options.canDetach === false;
+    // Печатать лист из списка игроков нечего: печатают открытый лист.
+    if (this.printButton) this.printButton.hidden = isList;
     this.titleNode.textContent = isList ? 'Листы игроков' : 'Лист персонажа';
   }
 

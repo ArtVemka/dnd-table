@@ -4485,3 +4485,85 @@ body::after {
     transform: none;
   }
 }
+
+/* ---------------------------------------------------------------- Печать */
+
+/*
+ * Игроки держат лист рядом с кубиками: тёмный экран за столом не годится, а
+ * отдельная бумажка расходится с тем, что в приложении. Поэтому на печать
+ * уходит только сам лист, белым по белому, без шапки стола и панелей.
+ *
+ * Цвета заданы прямо здесь, а не взяты из темы: переменные темы ведут к
+ * тёмному фону, и на бумаге получился бы чёрный прямоугольник.
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #101010 !important;
+  }
+
+  /* Всё, кроме листа, на бумагу не попадает. */
+  body * {
+    visibility: hidden;
+  }
+
+  .sheet,
+  .sheet * {
+    visibility: visible;
+  }
+
+  .sheet {
+    position: absolute;
+    inset: 0;
+    width: auto !important;
+    max-height: none;
+    overflow: visible;
+    gap: 8px;
+  }
+
+  /* Кнопки и служебные подписи на бумаге бессмысленны. */
+  .sheet__head,
+  .avatar-pick__side {
+    display: none !important;
+  }
+
+  .sheet__col,
+  .box,
+  .abil,
+  .prof-row {
+    break-inside: avoid;
+    box-shadow: none;
+    border-color: #bbb !important;
+    background: #fff !important;
+  }
+
+  .box__title,
+  .sheet__title,
+  .field__label,
+  .abil__name {
+    color: #101010 !important;
+  }
+
+  /* Пустые поля и заглушки на бумаге не нужны: печатается то, что вписано. */
+  .avatar-pick__preview,
+  .avatar-pick {
+    display: none !important;
+  }
+
+  input, textarea {
+    border-color: transparent !important;
+    background: transparent !important;
+    color: #101010 !important;
+  }
+
+  .mini-grid__value,
+  .sheet__derived,
+  .abil__mod {
+    color: #101010 !important;
+  }
+}

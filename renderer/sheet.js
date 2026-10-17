@@ -511,6 +511,9 @@
       wrap.appendChild(this.avatarNode);
 
       const side = el('div', 'avatar-pick__side');
+      // Поле выбора файла спрятано под кнопку: в `<label>` оно не сработает,
+      // потому что рядом с надписью, а не внутри неё, и без `for` браузер
+      // не знает, что на неё нажимать.
       this.avatarInput = document.createElement('input');
       this.avatarInput.type = 'file';
       this.avatarInput.accept = 'image/png,image/jpeg,image/webp';
@@ -525,7 +528,9 @@
       });
       side.appendChild(this.avatarInput);
 
-      this.avatarLabel = el('label', 'avatar-pick__label', 'Аватар');
+      this.avatarLabel = el('button', 'avatar-pick__label', 'Аватар');
+      this.avatarLabel.type = 'button';
+      this.avatarLabel.addEventListener('click', () => this.avatarInput.click());
       side.appendChild(this.avatarLabel);
 
       this.avatarClear = el('button', 'btn btn--ghost btn--tiny', 'Убрать');
@@ -540,13 +545,12 @@
     }
 
     /**
-     * Показывает аватар, а пока его нет — первую букву имени.
+     * Рисует портрет в кружке, а пока его нет — первую букву имени.
+     * @param {HTMLElement} preview
      * @param {string|null} url
-     * @param {string} [name] имя, из которого берётся буква-заглушка
+     * @param {string} name
      */
-    setAvatar(url, name = '') {
-      this.avatarUrl = url || null;
-      const preview = this.avatarNode;
+    paintAvatar(preview, url, name) {
       if (!preview) return;
       const paint = (hasImage) => {
         preview.innerHTML = '';
@@ -554,7 +558,7 @@
           const img = document.createElement('img');
           img.className = 'avatar-pick__img';
           img.alt = '';
-          img.src = this.avatarUrl;
+          img.src = url;
           // Битая картинка не должна молча оставлять пустой кружок.
           img.addEventListener('error', () => paint(false));
           preview.appendChild(img);
@@ -562,11 +566,73 @@
         }
         const fallback = document.createElement('span');
         fallback.className = 'avatar-pick__fallback';
-        fallback.textContent = initials(name || (this.sheet && this.sheet.characterName) || '');
+        fallback.textContent = initials(name || '');
         preview.appendChild(fallback);
       };
-      paint(Boolean(this.avatarUrl));
+      paint(Boolean(url));
+    }
+
+    /**
+     * Показывает аватар игрока в его листе, а пока его нет — первую букву имени.
+     * @param {string|null} url
+     * @param {string} [name] имя, из которого берётся буква-заглушка
+     */
+    setAvatar(url, name = '') {
+      this.avatarUrl = url || null;
+      const fallbackName = name || (this.sheet && this.sheet.characterName) || '';
+      this.paintAvatar(this.avatarNode, this.avatarUrl, fallbackName);
       if (this.avatarClear) this.avatarClear.hidden = !this.avatarUrl;
+    }
+
+    /**
+     * Портрет самого мастера в списке игроков. Отдельный кружок от того, что в
+     * листе: лист у мастера скрыт, и его блок аватарки в этот момент не в дереве.
+     * @param {string|null} url
+     * @param {string} name
+     */
+    setSelfAvatar(url, name = '') {
+      this.selfAvatarUrl = url || null;
+      this.selfAvatarName = name;
+      this.paintAvatar(this.selfAvatarNode, this.selfAvatarUrl, name);
+      if (this.selfAvatarClear) this.selfAvatarClear.hidden = !this.selfAvatarUrl;
+    }
+
+    /**
+     * Кнопки загрузки и сброса портрета самого мастера.
+     *
+     * Свои, а не переиспользованные из блока листа: тот лежит в скрытой сетке и
+     * пересоздаётся вместе с ней, а мастеру блок нужен в списке игроков.
+     * @returns {HTMLElement}
+     */
+    buildSelfAvatarSide() {
+      const side = el('div', 'avatar-pick__side');
+
+      this.selfAvatarInput = document.createElement('input');
+      this.selfAvatarInput.type = 'file';
+      this.selfAvatarInput.accept = 'image/png,image/jpeg,image/webp';
+      this.selfAvatarInput.className = 'avatar-pick__file';
+      this.selfAvatarInput.addEventListener('change', () => {
+        const file = this.selfAvatarInput.files && this.selfAvatarInput.files[0];
+        this.selfAvatarInput.value = '';
+        if (!file) return;
+        if (this.handlers.onAvatarPick) this.handlers.onAvatarPick(file);
+      });
+      side.appendChild(this.selfAvatarInput);
+
+      const pick = el('button', 'avatar-pick__label', 'Аватар');
+      pick.type = 'button';
+      pick.addEventListener('click', () => this.selfAvatarInput.click());
+      side.appendChild(pick);
+
+      this.selfAvatarClear = el('button', 'btn btn--ghost btn--tiny', 'Убрать');
+      this.selfAvatarClear.type = 'button';
+      this.selfAvatarClear.hidden = true;
+      this.selfAvatarClear.addEventListener('click', () => {
+        if (this.handlers.onAvatarClear) this.handlers.onAvatarClear();
+      });
+      side.appendChild(this.selfAvatarClear);
+
+      return side;
     }
 
     /**
@@ -576,7 +642,9 @@
      */
     setAvatarEditable(editable) {
       if (this.avatarInput) this.avatarInput.disabled = !editable;
-      if (this.avatarLabel) this.avatarLabel.classList.toggle('is-disabled', !editable);
+      // Кнопку гасим по-настоящему, а не классом: у disabled не бывает
+      // наведения и клика, и мастер случайно не откроет выбор файла.
+      if (this.avatarLabel) this.avatarLabel.disabled = !editable;
       if (this.avatarClear) this.avatarClear.disabled = !editable;
     }
 
@@ -614,6 +682,22 @@
           'В лобби сейчас никого нет. Как только игрок подключится к столу, его имя появится здесь.'));
         return;
       }
+      // Портрет мастера. Листа персонажа у него нет, а портрет нужен: он стоит
+      // рядом с его именем в списке и у его бросков в чате. Ставить его больше
+      // негде, поэтому он живёт здесь. В режиме листа этого блока нет, а
+      // список игроков вообще видит только мастер.
+      const mine = el('div', 'sheet__self');
+      mine.appendChild(el('div', 'sheet__self-title', 'Ваш портрет'));
+      const row = el('div', 'avatar-pick');
+      this.selfAvatarNode = el('div', 'avatar-pick__preview');
+      row.appendChild(this.selfAvatarNode);
+      row.appendChild(this.buildSelfAvatarSide());
+      mine.appendChild(row);
+      mine.appendChild(el('div', 'muted',
+        'Виден игрокам в списке участников и рядом с вашими бросками в чате.'));
+      this.listNode.appendChild(mine);
+      this.paintAvatar(this.selfAvatarNode, this.selfAvatarUrl, this.selfAvatarName);
+
       this.listNode.appendChild(el('div', 'muted',
         'Нажмите на имя игрока — откроется его лист персонажа (для ДМ он только для чтения).'));
 

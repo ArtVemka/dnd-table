@@ -1817,9 +1817,13 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       }
       sheetView.setReadOnly(true);
       // Портрет в листе мастера показываем, но править не даём: аватар
-      // меняет сам игрок, а не мастер.
+      // меняет сам игрок. А вот свой мастер меняет — в списке игроков, где
+      // для него и живёт собственный блок портрета.
       sheetView.setAvatarEditable(false);
       sheetView.setPlayerList(targets, app.viewedSheetPlayerId);
+      // Блок мастера пересоздаётся вместе со списком, поэтому портрет ставим
+      // после setPlayerList, а не до.
+      sheetView.setSelfAvatar(assetUrl(ownAvatarOf('dm')), dmName());
 
       // ДМ сам решает, чей лист открыть: сначала он видит список игроков.
       if (!app.viewedSheetPlayerId) {
@@ -1876,6 +1880,12 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
   function ownAvatarOf(playerId) {
     const player = app.room.players.find((entry) => entry.playerId === playerId);
     return player ? player.avatar || '' : '';
+  }
+
+  /** Имя мастера — для буквы-заглушки, пока портрет не поставлен. */
+  function dmName() {
+    const dm = app.room.players.find((entry) => entry.playerId === 'dm');
+    return dm ? dm.name : 'Мастер';
   }
 
   /** Имя персонажа игрока — для буквы-заглушки, пока портрета нет. */

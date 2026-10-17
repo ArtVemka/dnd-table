@@ -414,6 +414,7 @@
         resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
       });
       view.setMode('list');
+      view.setSelfAvatar('avatar-dm.png', 'Мастер');
       view.setPlayerList([
         { playerId: 'p-1', name: 'Артём', role: 'player', online: true, avatar: '/files/arthur.png' },
         { playerId: 'p-2', name: 'Борис', role: 'player', online: false }
@@ -422,6 +423,45 @@
       assert.strictEqual(arthur.querySelector('img').getAttribute('src'), 'http://стол/files/arthur.png');
       assert.strictEqual(boris.querySelector('.player-row__avatar').textContent, 'Б');
       assert(!boris.querySelector('img'), 'у Бориса картинка без аватара');
+    });
+    check('у мастера в списке игроков есть блок его собственного портрета', () => {
+      const host = document.createElement('div');
+      const picked = [];
+      let cleared = 0;
+      const view = new window.SheetView(host, {
+        onAvatarPick: (file) => picked.push(file),
+        onAvatarClear: () => { cleared += 1; }
+      });
+      view.setMode('list');
+      view.setPlayerList([{ playerId: 'p-1', name: 'Артём', role: 'player', online: true }], null);
+
+      const block = host.querySelector('.sheet__self');
+      assert(block, 'нет блока портрета мастера');
+      assert(block.textContent.includes('Ваш портрет'), 'нет заголовка блока');
+
+      const preview = block.querySelector('.avatar-pick__preview');
+      assert.strictEqual(preview.textContent, 'М', `буква-заглушка мастера: ${preview.textContent}`);
+      const clear = block.querySelector('.avatar-pick__side .btn');
+      assert(clear.hidden, 'кнопка «Убрать» видна без аватара');
+
+      view.setSelfAvatar('http://стол/files/dm.png', 'Мастер');
+      assert.strictEqual(preview.querySelector('img').getAttribute('src'), 'http://стол/files/dm.png',
+        'портрет мастера не показан');
+      assert(!clear.hidden, 'кнопка «Убрать» спрятана при наличии аватара');
+      clear.click();
+      assert(cleared === 1, `сброс портрета мастера: ${cleared}`);
+
+      const button = block.querySelector('.avatar-pick__label');
+      assert.strictEqual(button.tagName, 'BUTTON', `кнопка выбора портрета мастера: ${button.tagName}`);
+      let opened = 0;
+      view.selfAvatarInput.click = () => { opened += 1; };
+      button.click();
+      assert.strictEqual(opened, 1, `выбор файла не открылся (нажатий: ${opened})`);
+
+      const file = new File([PNG_1PX], 'dm.png', { type: 'image/png' });
+      Object.defineProperty(view.selfAvatarInput, 'files', { value: [file] });
+      view.selfAvatarInput.dispatchEvent(new Event('change'));
+      assert(picked.length === 1 && picked[0].name === 'dm.png', `выбранные файлы: ${picked.length}`);
     });
     check('в листе есть блок аватарки: круг, загрузка и сброс', () => {
       const host = document.createElement('div');
@@ -455,14 +495,36 @@
       input.dispatchEvent(new Event('change'));
       assert(picked && picked.name === 'portrait.png', `выбранный файл: ${picked && picked.name}`);
     });
+    check('клик по кнопке «Аватар» открывает выбор файла', () => {
+      // Раньше здесь стояла надпись рядом со спрятанным полем: <label> без `for`
+      // и без вложенного поля на клик не реагирует, и кнопка была мёртвой.
+      const host = document.createElement('div');
+      const view = new window.SheetView(host, {});
+      const button = host.querySelector('.avatar-pick__label');
+      assert(button, 'нет кнопки выбора аватара');
+      assert.strictEqual(button.tagName, 'BUTTON', `надпись вместо кнопки: ${button.tagName}`);
+      assert.strictEqual(button.type, 'button', 'кнопка отправит форму вместо выбора файла');
+
+      let opened = 0;
+      view.avatarInput.click = () => { opened += 1; };
+      button.click();
+      assert.strictEqual(opened, 1, `выбор файла не открылся (нажатий: ${opened})`);
+
+      // И у отключённой кнопки нажатия не происходит вовсе.
+      view.setAvatarEditable(false);
+      button.click();
+      assert.strictEqual(opened, 1, 'отключённая кнопка всё равно открыла выбор файла');
+    });
     check('аватар в листе мастер не правит, но видит', () => {
       const host = document.createElement('div');
       const view = new window.SheetView(host, {});
       view.setAvatarEditable(false);
       assert(view.avatarInput.disabled, 'мастер может выбрать файл');
+      assert(view.avatarLabel.disabled, 'мастер может нажать кнопку аватара');
       assert(view.avatarClear.disabled, 'мастер может сбросить чужой аватар');
       view.setAvatarEditable(true);
       assert(!view.avatarInput.disabled, 'игрок не может выбрать файл');
+      assert(!view.avatarLabel.disabled, 'игрок не может нажать кнопку аватара');
     });
     check('лист открывается нажатием на имя игрока в списке', () => {
       let requested = null;

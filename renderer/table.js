@@ -738,7 +738,20 @@
       surface.appendChild(layer);
 
       const empty = el('div', 'map-empty');
-      empty.appendChild(el('div', 'map-empty__icon', '🗺'));
+      // Водяной знак: гранёный куб. Он же и герб игры, и подсказка, что
+      // стол пуст и ждёт карту. Цвет берётся из currentColor, поэтому знак
+      // живёт в теме наравне со всем остальным.
+      const mark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      mark.setAttribute('class', 'map-empty__mark');
+      mark.setAttribute('viewBox', '0 0 100 100');
+      mark.setAttribute('aria-hidden', 'true');
+      const hexagon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      hexagon.setAttribute('points', '50,3 92,26 92,74 50,97 8,74 8,26');
+      const triangle = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      triangle.setAttribute('points', '50,27 73,64 27,64');
+      mark.appendChild(hexagon);
+      mark.appendChild(triangle);
+      empty.appendChild(mark);
       empty.appendChild(el('div', 'map-empty__text', 'Карта ещё не загружена ДМ'));
       this.empty = empty;
 
@@ -1551,6 +1564,9 @@
         row.appendChild(main);
 
         if (this.role === 'dm' && player.role !== 'dm') {
+          // Кнопки собраны в группу: переноситься на другую строку они должны
+          // вместе, иначе одна остаётся внизу, а вторая жмётся в угол.
+          const actions = el('div', 'player-row__actions');
           // Открыть лист — действие почаще, поэтому кнопка первая. Иначе её
           // находили бы только по тексту: «Вывести» стояла бы впереди и
           // перехватывала бы клик по первой кнопке в строке.
@@ -1559,7 +1575,7 @@
           open.addEventListener('click', () => {
             if (this.handlers.onOpenSheet) this.handlers.onOpenSheet(player.playerId);
           });
-          row.appendChild(open);
+          actions.appendChild(open);
           // Вывести фишку из листа можно один раз: пока у игрока её нет,
           // кнопка стоит, а после появления фишки исчезает.
           if (!player.tokenId) {
@@ -1569,8 +1585,9 @@
             spawn.addEventListener('click', () => {
               if (this.handlers.onSpawnToken) this.handlers.onSpawnToken(player.playerId);
             });
-            row.appendChild(spawn);
+            actions.appendChild(spawn);
           }
+          row.appendChild(actions);
         }
         this.listNode.appendChild(row);
       }
@@ -1713,6 +1730,12 @@
       value.classList.add('is-pop');
       this.last.appendChild(value);
       setTimeout(() => value.classList.remove('is-pop'), 600);
+      // Кольцо, расходящееся от места броска: короткое, чтобы не мельтешить.
+      this.last.classList.remove('is-rolling');
+      // Перезапуск анимации: без перечитывания класса она не начнётся снова.
+      void this.last.offsetWidth;
+      this.last.classList.add('is-rolling');
+      setTimeout(() => this.last.classList.remove('is-rolling'), 700);
     }
 
     appendRow(roll) {

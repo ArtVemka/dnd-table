@@ -47,6 +47,14 @@ const REQUIRED_FILES = [
   'renderer/index.html',
   'renderer/styles.css',
   'renderer/theme.js',
+  // Заголовочный шрифт с кириллицей. Без него заголовки уедут в подстановочный
+  // шрифт, и это видно только на русском тексте.
+  'renderer/fonts/fonts.css',
+  'renderer/fonts/cormorant-latin-600.woff2',
+  'renderer/fonts/cormorant-cyrillic-600.woff2',
+  'renderer/fonts/cormorant-latin-700.woff2',
+  'renderer/fonts/cormorant-cyrillic-700.woff2',
+  'renderer/fonts/OFL.txt',
   // Портрет мастера по умолчанию. Без него у стола не будет ведущего, а
   // заметить пропажу в пакете негде: страница грузится, просто пустая.
   'renderer/avatar-dm.png',

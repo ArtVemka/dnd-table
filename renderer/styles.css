@@ -136,8 +136,20 @@
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  /* Основной шрифт: спокойный и разборчивый. Системный, чтобы не тащить
+     в игру второй файл и не зависеть от того, что шрифт загрузится. */
   --font: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-title: "Georgia", "Times New Roman", serif;
+  /* Заголовочный шрифт: тонкая антиква в духе надписи на старинной книге.
+     Лежит рядом с интерфейсом (renderer/fonts) и содержит кириллицу,
+     поэтому русские заголовки набираются той же гарнитурой. */
+  --font-title: "Cormorant", Constantia, "Palatino Linotype", Georgia, serif;
+  /* Числа: та же антиква, но цифры в ней старшего покроя — кубик и
+     характеристика выглядят как вписанные в лист от руки. */
+  --font-num: "Cormorant", Constantia, Georgia, serif;
+  /* Характер заголовков: тема меняет начертание и разрядку, а не
+     сам шрифт. Так все темы звучат по-разному, но читаются одинаково. */
+  --title-weight: 600;
+  --title-tracking: 0.11em;
 
   /*
    * Движение. Общие настройки для всех тем: тема может переопределить
@@ -159,7 +171,6 @@
   /* Подложка фона: своя в каждой теме, иначе на чужом фоне сидел бы
      цвет стандартной темы. */
   --wash: rgba(200, 117, 80, 0.09);
-  --font-num: "Palatino Linotype", "Book Antiqua", Georgia, serif;
 }
 
 /*
@@ -187,8 +198,20 @@
   --radius-sm: 8px;
   --title-glow: none;
   --title-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  /* Основной шрифт: спокойный и разборчивый. Системный, чтобы не тащить
+     в игру второй файл и не зависеть от того, что шрифт загрузится. */
   --font: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-title: Georgia, "Times New Roman", serif;
+  /* Заголовочный шрифт: тонкая антиква в духе надписи на старинной книге.
+     Лежит рядом с интерфейсом (renderer/fonts) и содержит кириллицу,
+     поэтому русские заголовки набираются той же гарнитурой. */
+  --font-title: "Cormorant", Constantia, "Palatino Linotype", Georgia, serif;
+  /* Числа: та же антиква, но цифры в ней старшего покроя — кубик и
+     характеристика выглядят как вписанные в лист от руки. */
+  --font-num: "Cormorant", Constantia, Georgia, serif;
+  /* Характер заголовков: тема меняет начертание и разрядку, а не
+     сам шрифт. Так все темы звучат по-разному, но читаются одинаково. */
+  --title-weight: 600;
+  --title-tracking: 0.11em;
 }
 
 /* Лес: старые книги и почва. Крупные мягкие пятна света, что медленно ползут,
@@ -203,8 +226,8 @@
   --radius-sm: 9px 5px 9px 5px;
   --title-glow: 0 0 14px rgba(111, 174, 90, 0.35);
   --title-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
-  --font: "Segoe UI", Candara, "Trebuchet MS", sans-serif;
-  --font-title: Constantia, Cambria, Georgia, serif;
+  --title-weight: 600;
+  --title-tracking: 0.09em;
   --atmosphere: les;
 }
 
@@ -220,8 +243,9 @@
   --radius-sm: 4px;
   --title-glow: 0 0 16px rgba(155, 124, 232, 0.65);
   --title-shadow: 0 0 3px rgba(155, 124, 232, 0.5);
-  --font: "Segoe UI", Verdana, Tahoma, sans-serif;
-  --font-title: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  /* Магия: тонко и просторно, как рукопись. */
+  --title-weight: 500;
+  --title-tracking: 0.16em;
   --atmosphere: magiya;
 }
 
@@ -237,8 +261,9 @@
   --radius-sm: 14px;
   --title-glow: 0 0 14px rgba(78, 163, 196, 0.4);
   --title-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
-  --font: "Segoe UI", Corbel, Candara, sans-serif;
-  --font-title: "Segoe UI", Bahnschrift, "Gill Sans", Tahoma, sans-serif;
+  /* Океан: светло и просторно. */
+  --title-weight: 500;
+  --title-tracking: 0.13em;
   --atmosphere: okean;
 }
 
@@ -254,8 +279,9 @@
   --radius-sm: 3px;
   --title-glow: 0 0 12px rgba(224, 181, 82, 0.35);
   --title-shadow: 0 2px 4px rgba(0, 0, 0, 0.75);
-  --font: "Segoe UI", Tahoma, Verdana, sans-serif;
-  --font-title: Rockwell, "Bookman Old Style", Georgia, serif;
+  /* Трактир: плотно и весомо, как надпись на вывеске. */
+  --title-weight: 700;
+  --title-tracking: 0.07em;
   --atmosphere: traktir;
 }
 
@@ -289,7 +315,8 @@ h1,
 h2,
 h3 {
   font-family: var(--font-title);
-  font-weight: 600;
+  font-weight: var(--title-weight);
+  letter-spacing: var(--title-tracking);
   margin: 0;
 }
 

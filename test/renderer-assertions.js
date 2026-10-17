@@ -8,7 +8,7 @@
  * запустить стол → фишка/кубик/чат → сохранить кампанию → остановить стол».
  */
 
-(() => {
+(async () => {
   const checks = [];
   const check = (name, fn) => {
     console.log(`ШАГ: ${name}`);
@@ -79,6 +79,31 @@
   const sandbox = document.createElement('div');
   sandbox.style.cssText = 'position:fixed;left:0;top:0;width:1280px;height:900px;overflow:hidden;z-index:-1;opacity:0.01;';
   document.body.appendChild(sandbox);
+
+  /**
+   * Заголовочный шрифт с кириллицей. Грузим заранее: проверка синхронная,
+   * а подгрузка шрифта асинхронна. Если файл шрифта потерялся при сборке,
+   * браузер молча возьмёт подстановочный шрифт, и русские заголовки поедут в
+   * другую гарнитуру — на латинице это незаметно.
+   */
+  const cormorantFaces = await document.fonts.load('16px cormorant', 'Абвгдё');
+  check('заголовочный шрифт загрузился вместе с кириллицей', () => {
+    assert(cormorantFaces.length > 0, 'шрифт не найден среди загруженных');
+    assert(cormorantFaces.every((face) => face.status === 'loaded'), 'подмножество не загрузилось');
+  });
+  check('русские заголовки набираются заголовочным шрифтом, а не подстановкой', () => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    const width = (font) => {
+      context.font = font;
+      return Math.round(context.measureText('Абвгд').width * 100) / 100;
+    };
+    // Ширина кириллицы в заголовке и в основном шрифте разная: значит, глифы
+    // берутся из гарнитуры, а не из подстановки.
+    const heading = width('16px cormorant');
+    const body = width('16px "Segoe UI"');
+    assert(heading !== body, `ширины совпали (${heading}): кириллица ушла в подстановку`);
+  });
 
   const SAMPLE_SHEET = {
     playerName: 'Артём', characterName: 'Тордин', charClass: 'Воин', race: 'Дварф',

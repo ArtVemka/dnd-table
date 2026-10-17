@@ -105,6 +105,98 @@
    * хитов, и показывается само. Истощение тоже не включено: у него уровни от
    * одного до шести, а здесь переключатели включены и выключены.
    */
+  /**
+   * Ячейки заклинаний по уровням: девять ступеней, девятой нет у части классов.
+   *
+   * Список один на клиента и сервер, а таблица по уровням живёт тут: считать
+   * её на сервере нельзя, она пришла бы второй копией и разошлась бы с
+   * интерфейсом при первой же правке правил.
+   */
+  const SPELL_SLOT_LEVELS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+  /**
+   * Ячейки полного заклинателя: строки по уровню персонажа, столбцы по ступени
+   * заклинания.
+   *
+   * Таблица из правил 5e, одинаковая для барда, жреца, друида, чародея и
+   * волшебника. Первая строка это первый уровень персонажа: две ячейки первой
+   * ступени. У пятого уровня жреца четыре ячейки первой, три второй и три
+   * третьей, а девятых нет вовсе.
+   *
+   * Таблица именно двумерная. Раньше здесь лежал ряд «сколько ячеек первого
+   * уровня у персонажа N уровня», и он раздавался девяти ступеням одинаково:
+   * пятиуровневому жрецу показывало по четыре ячейки первого, второго,
+   * третьего и всех остальных уровней сразу.
+   * @type {number[][]}
+   */
+  const FULL_CASTER_SLOTS = [
+    [2, 0, 0, 0, 0, 0, 0, 0, 0],
+    [3, 0, 0, 0, 0, 0, 0, 0, 0],
+    [4, 2, 0, 0, 0, 0, 0, 0, 0],
+    [4, 3, 0, 0, 0, 0, 0, 0, 0],
+    [4, 3, 3, 0, 0, 0, 0, 0, 0],
+    [4, 3, 3, 3, 0, 0, 0, 0, 0],
+    [4, 4, 3, 3, 0, 0, 0, 0, 0],
+    [4, 4, 3, 3, 1, 0, 0, 0, 0],
+    [4, 4, 3, 3, 2, 0, 0, 0, 0],
+    [4, 4, 3, 3, 2, 1, 0, 0, 0],
+    [4, 4, 3, 3, 2, 1, 0, 0, 0],
+    [4, 4, 3, 3, 2, 1, 1, 0, 0],
+    [4, 4, 3, 3, 2, 1, 1, 0, 0],
+    [4, 4, 3, 3, 2, 1, 1, 1, 0],
+    [4, 4, 3, 3, 2, 1, 1, 1, 0],
+    [4, 4, 3, 3, 2, 1, 1, 1, 1],
+    [4, 4, 3, 3, 2, 1, 1, 1, 1],
+    [4, 4, 3, 3, 3, 1, 1, 1, 1],
+    [4, 4, 3, 3, 3, 2, 1, 1, 1],
+    [4, 4, 3, 3, 3, 2, 2, 1, 1]
+  ];
+
+  /**
+   * Классы, у которых ячейки идут по полной таблице.
+   *
+   * Полупоклинатели и warlock сюда не входят намеренно: у них своя арифметика и
+   * свои особые правила, а половина ступеней у них вовсе не считается. Для них
+   * приложение показывает прочерк и предлагает вписать своё число, вместо
+   * того чтобы выдумывать.
+   *
+   * Названия продублированы на английский: класс в листе это свободный текст,
+   * и «Wizard» встречается не реже, чем «волшебник».
+   * @type {string[]}
+   */
+  const FULL_CASTER_CLASSES = [
+    'бард', 'bard', 'жрец', 'cleric', 'друид', 'druid',
+    'чародей', 'sorcerer', 'волшебник', 'wizard'
+  ];
+
+  /**
+   * Сколько ячеек положено классу на уровне персонажа, по каждой ступени.
+   *
+   * @param {string} charClass Класс из листа, в любом регистре.
+   * @param {number} level Уровень персонажа.
+   * @returns {number[]|null} Девять чисел или null, когда класс не заклинатель.
+   */
+  function spellSlotRow(charClass, level) {
+    const name = String(charClass || '').trim().toLowerCase();
+    if (!FULL_CASTER_CLASSES.includes(name)) return null;
+    const lv = Math.max(1, Math.min(20, Math.round(Number(level) || 1)));
+    return (FULL_CASTER_SLOTS[lv - 1] || FULL_CASTER_SLOTS[0]).slice();
+  }
+
+  /**
+   * Одна ступень: сколько ячеек у класса конкретной ступени.
+   * @param {string} charClass
+   * @param {number} level
+   * @param {number} slotLevel
+   * @returns {number|null}
+   */
+  function spellSlotMax(charClass, level, slotLevel) {
+    const row = spellSlotRow(charClass, level);
+    if (!row) return null;
+    const index = SPELL_SLOT_LEVELS.indexOf(slotLevel);
+    return index < 0 ? null : row[index];
+  }
+
   const CONDITIONS = [
     { id: 'blinded', label: 'Слепой', short: 'Слепой' },
     { id: 'deafened', label: 'Глухой', short: 'Глухой' },
@@ -146,6 +238,8 @@
     maxHp: 9999,
     /** Счётчик спасбросков смерти: дальше трёх он не идёт по правилам. */
     maxDeathSaves: 3,
+    /** Ячейки на одной ступени: в правилах больше не бывает. */
+    maxSpellSlotsPerLevel: 9,
     minArmorClass: 0,
     maxArmorClass: 99,
     minInitiativeMisc: -20,
@@ -233,6 +327,13 @@
       // неудачи.
       deathSavesSuccesses: 0,
       deathSavesFailures: 0,
+      /**
+       * Ячейки заклинаний по ступеням, девять чисел: занято и сколько всего.
+       * Хранится парами, а не объектом по уровню: в разметке это девять рядов,
+       * и массив читается глазами быстрее, чем объект с ключами.
+       */
+      spellSlotsUsed: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+      spellSlotsMax: [0, 0, 0, 0, 0, 0, 0, 0, 0],
       hitDice: '1d8',
       armorClass: 10,
       initiativeMisc: 0,
@@ -265,6 +366,37 @@
    * @param {object} sheet
    * @returns {{down: boolean, success: number, failure: number, label: string}}
    */
+  /**
+   * Ячейки заклинаний листа.
+   *
+   * Итог берётся из того, что вписал человек, а подставляется только когда он
+   * пустой и класс известен: у незнакомого класса приложение своё число
+   * выдумывать не станет.
+   *
+   * @param {object} sheet
+   * @returns {{levels: number, rows: {level: number, used: number, max: number|null}[]}}
+   */
+  function computeSpellSlots(sheet) {
+    const raw = sheet && typeof sheet === 'object' ? sheet : {};
+    const used = Array.isArray(raw.spellSlotsUsed) ? raw.spellSlotsUsed : [];
+    const max = Array.isArray(raw.spellSlotsMax) ? raw.spellSlotsMax : [];
+    // Число из листа главнее: вписал человек, значит человек и прав.
+    // Таблица класса только заполняет пустое, иначе приложение затирало бы
+    // собственный подсчёт человека.
+    const automatic = spellSlotRow(raw.charClass, raw.level);
+    const rows = SPELL_SLOT_LEVELS.map((level, index) => {
+      const usedValue = Math.max(0, Math.min(LIMITS.maxSpellSlotsPerLevel, Math.round(Number(used[index]) || 0)));
+      const written = Math.round(Number(max[index]) || 0);
+      return {
+        level,
+        used: usedValue,
+        max: written > 0 ? written : (automatic ? automatic[index] : null)
+      };
+    });
+    const levels = rows.some((row) => (row.max || 0) > 0 || row.used > 0) ? 9 : 0;
+    return { levels, rows };
+  }
+
   function computeVitalState(sheet) {
     const raw = sheet && typeof sheet === 'object' ? sheet : {};
     const hp = Number.isFinite(Number(raw.hp)) ? Number(raw.hp) : 0;
@@ -329,6 +461,9 @@
     ABILITY_LABELS,
     CONDITIONS,
     DICE_SIDES,
+    FULL_CASTER_CLASSES,
+    FULL_CASTER_SLOTS,
+    SPELL_SLOT_LEVELS,
     GRID,
     HIT_DICE,
     LIMITS,
@@ -339,10 +474,13 @@
     abilityModifier,
       clampNumber,
     computeDerived,
+    computeSpellSlots,
     computeVitalState,
     createEmptySheet,
     formatModifier,
-    proficiencyBonus
+    proficiencyBonus,
+    spellSlotMax,
+    spellSlotRow
   };
   // Отдаём себя и через module.exports: сервер требует этот файл ради списка
   // состояний, и в Node окна нет. В браузере module не объявлен, поэтому

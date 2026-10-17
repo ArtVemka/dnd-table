@@ -347,6 +347,75 @@
       death.appendChild(deathActions);
       combat.appendChild(death);
 
+      // Ячейки заклинаний. По умолчанию их нет ни у кого: класс без
+      // заклинательной силы должен показывать честное «ячеек нет», а не пустые
+      // ряды.
+      const slots = el('div', 'spell-slots');
+      slots.appendChild(el('div', 'box__title', 'Ячейки заклинаний'));
+      const slotNote = el('div', 'box__note',
+        'Ячейки восстанавливаются на длинном отдыхе, на коротком не восстанавливаются');
+      slots.appendChild(slotNote);
+      this.slotRows = [];
+      const slotList = el('div', 'spell-slots__rows');
+      for (const level of DnD.SPELL_SLOT_LEVELS) {
+        const row = el('div', 'spell-slots__row');
+        row.appendChild(el('span', 'spell-slots__level', `${level}`));
+        const minus = el('button', 'btn btn--ghost btn--tiny', '−');
+        minus.type = 'button';
+        minus.title = `Вернуть ячейку ${level} уровня`;
+        minus.addEventListener('click', () => this.bumpSpellSlot(level, -1));
+        row.appendChild(minus);
+        const used = el('span', 'spell-slots__used', '0');
+        row.appendChild(used);
+        const plus = el('button', 'btn btn--ghost btn--tiny', '+');
+        plus.type = 'button';
+        plus.title = `Потратить ячейку ${level} уровня`;
+        plus.addEventListener('click', () => this.bumpSpellSlot(level, 1));
+        row.appendChild(plus);
+        const max = el('input', 'spell-slots__max');
+        max.type = 'number';
+        max.min = '0';
+        max.max = String(DnD.LIMITS.maxSpellSlotsPerLevel);
+        max.placeholder = '—';
+        max.title = 'Сколько ячеек всего: подставляется по классу, но можно вписать своё';
+        max.addEventListener('change', () => {
+          if (this.readOnly || !this.handlers.onChange) {
+            this.paintSpellSlots();
+            return;
+          }
+          const sheet = this.collect();
+          const values = DnD.SPELL_SLOT_LEVELS.map((item, index) => (
+            item === level
+              ? DnD.clampNumber(max.value, 0, DnD.LIMITS.maxSpellSlotsPerLevel, 0)
+              : DnD.clampNumber(sheet.spellSlotsMax[index], 0, DnD.LIMITS.maxSpellSlotsPerLevel, 0)
+          ));
+          sheet.spellSlotsMax = values;
+          this.setSheet(sheet);
+          this.refresh();
+        });
+        row.appendChild(max);
+        this.slotRows.push({ level, minus, plus, used, max, row });
+        slotList.appendChild(row);
+      }
+      slots.appendChild(slotList);
+
+      const slotActions = el('div', 'spell-slots__actions');
+      const restore = el('button', 'btn btn--ghost btn--tiny', 'Восстановить все');
+      restore.type = 'button';
+      restore.title = 'Длинный отдых: ячейки восстанавливаются полностью';
+      restore.addEventListener('click', () => {
+        if (this.readOnly || !this.handlers.onChange) return;
+        const sheet = this.collect();
+        sheet.spellSlotsUsed = DnD.SPELL_SLOT_LEVELS.map(() => 0);
+        this.setSheet(sheet);
+        this.refresh();
+      });
+      this.slotRestore = restore;
+      slotActions.appendChild(restore);
+      slots.appendChild(slotActions);
+      this.slotNode = slots;
+      combat.appendChild(slots);
+
       col1.appendChild(combat);
       grid.appendChild(col1);
 
@@ -476,6 +545,16 @@ sheet.deathSavesFailures = DnD.clampNumber(
   current.deathSavesFailures, 0, DnD.LIMITS.maxDeathSaves, 0
 );
 
+// Ячейки заклинаний тоже живут на кнопках и в поле без data-field. Переносим
+// оба ряда целиком: девять ступеней, длина задана правилами.
+const slotLevel = (value, fallback) => DnD.clampNumber(value, 0, DnD.LIMITS.maxSpellSlotsPerLevel, fallback);
+sheet.spellSlotsUsed = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
+  current.spellSlotsUsed ? current.spellSlotsUsed[index] : 0, 0
+));
+sheet.spellSlotsMax = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
+  current.spellSlotsMax ? current.spellSlotsMax[index] : 0, 0
+));
+
       for (const input of this.inputs) {
         const name = input.dataset.field;
         if (!name) continue;
@@ -577,6 +656,7 @@ sheet.deathSavesFailures = DnD.clampNumber(
       this.setDerived('initiative', DnD.formatModifier(d.initiative));
       this.setDerived('passivePerception', String(d.passivePerception));
       this.paintVitalState();
+      this.paintSpellSlots();
     }
 
     /**
@@ -604,6 +684,60 @@ sheet.deathSavesFailures = DnD.clampNumber(
       const canRoll = Boolean(this.handlers.onDeathSave) && !this.readOnly;
       this.deathRollButton.hidden = !canRoll;
       this.deathResetButton.hidden = !canRoll;
+    }
+
+    /**
+     * Тратит или возвращает одну ячейку.
+     *
+     * Занятых ячеек не может быть больше, чем всего: иначе персонаж «тратит»
+     * ячейки, которых у него нет, и счётчик уезжает в отрицательные.
+     * @param {number} level Ступень заклинания.
+     * @param {number} delta
+     */
+    bumpSpellSlot(level, delta) {
+      if (this.readOnly || !this.handlers.onChange) return;
+      const sheet = this.collect();
+      const index = DnD.SPELL_SLOT_LEVELS.indexOf(level);
+      if (index < 0) return;
+      const { rows } = DnD.computeSpellSlots(sheet);
+      const row = rows[index];
+      const ceiling = Math.max(0, row.max || 0);
+      const next = Math.max(0, Math.min(ceiling || DnD.LIMITS.maxSpellSlotsPerLevel, (row.used || 0) + delta));
+      sheet.spellSlotsUsed[index] = next;
+      this.setSheet(sheet);
+      this.refresh();
+    }
+
+    /**
+     * Рисует ячейки: занято, всего и доступность кнопок.
+     *
+     * Прячется весь блок, если ячеек нет: у воина пустые девять рядов выглядели
+     * бы как девять долгов.
+     */
+    paintSpellSlots() {
+      if (!this.slotNode) return;
+      const slots = DnD.computeSpellSlots(this.sheet);
+      const anySlots = slots.rows.some((row) => (row.max || 0) > 0 || row.used > 0);
+      this.slotNode.hidden = !anySlots;
+      if (!anySlots) return;
+      for (const node of this.slotRows) {
+        const row = slots.rows[node.level - 1];
+        node.used.textContent = String(row.used);
+        // Поле «всего» заполняется только когда человек его не трогал: иначе
+        // приложение затирало бы его число своим.
+        // Ноль ячеек этой ступени показываем пустым полем, а не цифрой: у жреца
+        // пятого уровня нет ячеек пятой ступени, и девять нулей в листе
+        // выглядели бы как долг.
+        if (document.activeElement !== node.max) node.max.value = row.max ? String(row.max) : '';
+node.max.disabled = this.readOnly;
+      // Плюс и минус ячеек гасятся не только заморозкой, но и пределом: на
+      // потраченном последнем плюс не нужен.
+      node.minus.disabled = this.readOnly || row.used === 0;
+      node.plus.disabled = this.readOnly || (row.max !== null && row.used >= row.max);
+    }
+    const spent = slots.rows.some((row) => row.used > 0);
+    this.slotRestore.disabled = this.readOnly || !spent;
+    this.slotRestore.dataset.empty = spent ? '0' : '1';
     }
 
     /**
@@ -673,6 +807,19 @@ sheet.deathSavesFailures = DnD.clampNumber(
       for (const box of this.checkboxes) box.disabled = this.readOnly;
 if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
     if (this.manualProfCheck && !this.manualProfCheck.checked) this.manualProfInput.hidden = true;
+    // Кнопки ячеек и счётчиков собраны мимо this.inputs, поэтому гасим их
+    // отдельно: мастер в чужом листе не должен ни тратить ячейки, ни считать
+    // спасброски за игрока.
+    for (const node of (this.slotRows || [])) {
+      node.max.disabled = this.readOnly;
+    }
+    if (this.slotRestore) this.slotRestore.disabled = this.readOnly || this.slotRestore.dataset.empty === '1';
+    for (const node of Object.values(this.deathNodes || {})) {
+      node.minus.disabled = this.readOnly;
+      node.plus.disabled = this.readOnly;
+    }
+    if (this.deathRollButton) this.deathRollButton.disabled = this.readOnly;
+    if (this.deathResetButton) this.deathResetButton.disabled = this.readOnly;
     // Замороженный лист бросать нельзя: мастер смотрит чужой лист и не должен
     // в неё вносить боевые броски от лица игрока.
     this.updateRollAvailability();

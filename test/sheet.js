@@ -93,6 +93,44 @@ check('счётчики спасбросков смерти живут толь�
   assert.strictEqual(wild.failure, 0, `неудач: ${wild.failure}`);
 });
 
+check('ячейки заклинаний считаются только у полных заклинателей', () => {
+  assert.strictEqual(DnD.SPELL_SLOT_LEVELS.length, 9, 'ступеней должно быть девять');
+  // Жрец пятого уровня: четыре ячейки первой ступени и три третьей, а пятой у
+  // него ещё нет.
+  assert.strictEqual(DnD.spellSlotMax('жрец', 5, 1), 4);
+  assert.strictEqual(DnD.spellSlotMax('жрец', 5, 3), 3);
+  assert.strictEqual(DnD.spellSlotMax('жрец', 5, 9), 0);
+  assert.strictEqual(DnD.spellSlotMax('Волшебник', 20, 9), 1);
+  assert.strictEqual(DnD.spellSlotMax('bard', 1, 1), 2);
+  // У полузаклинателя своя арифметика, и выдумывать её нельзя.
+  assert.strictEqual(DnD.spellSlotMax('паладин', 5, 1), null);
+  assert.strictEqual(DnD.spellSlotMax('варлок', 9, 1), null);
+  assert.strictEqual(DnD.spellSlotMax('воин', 20, 1), null);
+  assert.strictEqual(DnD.spellSlotMax('', 5, 1), null);
+  // Таблица не может быть короче двадцати уровней или ступеней.
+  assert.strictEqual(DnD.FULL_CASTER_SLOTS.length, 20, 'уровней в таблице должно быть двадцать');
+  assert(DnD.FULL_CASTER_SLOTS.every((row) => row.length === 9), 'в каждой строке должно быть девять ступеней');
+
+  const cleric = DnD.createEmptySheet();
+  cleric.charClass = 'жрец';
+  cleric.level = 5;
+  cleric.spellSlotsUsed[0] = 2;
+  const slots = DnD.computeSpellSlots(cleric);
+  assert.strictEqual(slots.rows[0].max, 4, 'итог не подставился по классу');
+  assert.strictEqual(slots.rows[0].used, 2);
+  assert.strictEqual(slots.levels, 9);
+
+  const fighter = DnD.createEmptySheet();
+  fighter.charClass = 'воин';
+  fighter.level = 12;
+  assert.strictEqual(DnD.computeSpellSlots(fighter).levels, 0, 'у воина показаны ячейки');
+  // Свое число человек вписать может, и тогда блок появляется.
+  fighter.spellSlotsUsed[0] = 1;
+  const manual = DnD.computeSpellSlots(fighter);
+  assert.strictEqual(manual.rows[0].max, null, 'придумано ячеек у воина');
+  assert.strictEqual(manual.levels, 9, 'ручной счётчик не показан');
+});
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }

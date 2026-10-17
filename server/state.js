@@ -15,6 +15,8 @@ const diceModule = require('../renderer/dice.js');
 // нём нет. Своя копия здесь разъехалась бы на первом же новом состоянии.
 const CONDITIONS = require('../renderer/dnd5e.js').CONDITIONS || [];
 const CONDITION_IDS = new Set(CONDITIONS.map((item) => item.id));
+// Ступени ячеек заклинаний: их девять, и это знает сервер.
+const SPELL_SLOT_LEVELS = require('../renderer/dnd5e.js').SPELL_SLOT_LEVELS || [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 const CAMPAIGN_FORMAT_VERSION = 2;
 
@@ -37,6 +39,8 @@ const LIMITS = {
   maxDeathSaves: 3,
   /** Состояний на одной фишке: столько их есть в правилах 5e. */
   maxTokenConditions: 13,
+  /** Ячейки заклинаний на одной ступени: в правилах больше не бывает. */
+  maxSpellSlotsPerLevel: 9,
   /** Заметка мастера: столько же, сколько заметки в листе. */
   maxDmNote: 4000,
   maxLevel: 20,
@@ -122,6 +126,20 @@ function normalizeConditions(raw) {
     if (seen.size >= LIMITS.maxTokenConditions) break;
   }
   return [...seen];
+}
+
+/**
+ * Приводит ряд ячеек заклинаний к виду из девяти чисел в пределах.
+ *
+ * Значения приходят из файла кампании и из сообщений, поэтому длину и разброс
+ * режем здесь: ступеней в правилах девять, а ячейек на ступени больше девяти
+ * не бывает.
+ * @param {unknown} raw
+ * @returns {number[]}
+ */
+function clampSlotArray(raw) {
+  const rows = Array.isArray(raw) ? raw.slice(0, 9) : [];
+  return SPELL_SLOT_LEVELS.map((level, index) => clampInt(rows[index], 0, LIMITS.maxSpellSlotsPerLevel, 0));
 }
 
 function normalizeInitiative(raw) {
@@ -396,6 +414,11 @@ function normalizeSheet(input, fallbackPlayerName = '') {
     // или быть правлено руками, поэтому числа режутся здесь же.
     sheet.deathSavesSuccesses = clampInt(raw.deathSavesSuccesses, 0, LIMITS.maxDeathSaves, 0);
     sheet.deathSavesFailures = clampInt(raw.deathSavesFailures, 0, LIMITS.maxDeathSaves, 0);
+    // Ячейки заклинаний приходят двумя массивами по девять чисел. Значения могут
+    // достаться из файла кампании или из сообщения, поэтому режем здесь же:
+    // девять ступеней в правилах и не больше.
+    sheet.spellSlotsUsed = clampSlotArray(raw.spellSlotsUsed);
+    sheet.spellSlotsMax = clampSlotArray(raw.spellSlotsMax);
   sheet.hitDice = sanitizeText(raw.hitDice, 20);
   sheet.armorClass = clampInt(raw.armorClass, 0, 99, 10);
   sheet.initiativeMisc = clampInt(raw.initiativeMisc, -20, 20, 0);

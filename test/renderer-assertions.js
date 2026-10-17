@@ -554,6 +554,94 @@
       assert(!deathSaves.includes('чужой'), 'из чужого листа бросили спасбросок');
     });
 
+    /* -------------------------------------------------- ячейки заклинаний */
+
+    const slotSheets = [];
+    const slotHost = document.createElement('div');
+    sandbox.appendChild(slotHost);
+    const slotView = new window.SheetView(slotHost, {
+      onChange: (sheet) => slotSheets.push(sheet)
+    });
+    slotView.setSheet({ ...SAMPLE_SHEET, charClass: 'жрец', level: 5 });
+
+    check('ячейки считаются по классу, а у незнакомого класса блока нет', () => {
+      assert(!slotView.slotNode.hidden, 'у жреца пятого уровня ячейки не показаны');
+      // Жрец пятого уровня: четыре ячейки первой ступени, три второй и три
+      // третьей, а четвёртой и дальше у него ещё нет.
+      assert.strictEqual(slotView.slotRows[0].max.value, '4', `в первой ступени: ${slotView.slotRows[0].max.value}`);
+      assert.strictEqual(slotView.slotRows[1].max.value, '3');
+      assert.strictEqual(slotView.slotRows[3].max.value, '', 'у пятого уровня нет ячеек четвёртой ступени');
+      assert.strictEqual(slotView.slotRows[0].used.textContent, '0');
+
+      const fighterHost = document.createElement('div');
+      sandbox.appendChild(fighterHost);
+      const fighterView = new window.SheetView(fighterHost, {});
+      fighterView.setSheet({ ...SAMPLE_SHEET, charClass: 'воин', level: 12 });
+      // У воина девять пустых рядов выглядели бы как девять долгов.
+      assert(fighterView.slotNode.hidden, 'у воина показаны ячейки');
+    });
+
+    check('ячейки тратятся и возвращаются, не выходя за пределы', () => {
+      const first = slotView.slotRows[0];
+      first.plus.click();
+      first.plus.click();
+      assert.strictEqual(first.used.textContent, '2', `занято: ${first.used.textContent}`);
+      first.minus.click();
+      assert.strictEqual(first.used.textContent, '1');
+      // Больше четырёх жрец пятого уровня не потратит, даже если Very Much click.
+      for (let i = 0; i < 8; i += 1) first.plus.click();
+      assert.strictEqual(first.used.textContent, '4', `занято больше, чем есть: ${first.used.textContent}`);
+      assert(first.plus.disabled, 'кнопка траты не гаснет на пределе');
+      assert.strictEqual(slotSheets[slotSheets.length - 1].spellSlotsUsed[0], 4,
+        'в отправленном листе счётчик не тот');
+      for (let i = 0; i < 6; i += 1) first.minus.click();
+      assert.strictEqual(first.used.textContent, '0', 'счётчик ушёл в минус');
+    });
+
+    check('своё число ячеек вписывается руками', () => {
+      const ninth = slotView.slotRows[8];
+      // У жреца пятого уровня девятой ступени нет: поле остаётся пустым, и
+      // приложение не придумывает число за игрока.
+      assert.strictEqual(ninth.max.value, '', `у девятой ступени: ${ninth.max.value}`);
+      ninth.max.value = '1';
+      ninth.max.dispatchEvent(new Event('change', { bubbles: true }));
+      assert.strictEqual(slotSheets[slotSheets.length - 1].spellSlotsMax[8], 1,
+        'своё число не ушло в лист');
+      assert.strictEqual(ninth.plus.disabled, false, 'ячейку нельзя тратить при нуле занятых');
+    });
+
+    check('длинный отдых восстанавливает все ячейки разом', () => {
+      slotView.slotRows[1].plus.click();
+      slotView.slotRows[2].plus.click();
+      slotView.slotRestore.click();
+      const after = slotSheets[slotSheets.length - 1];
+      assert(after.spellSlotsUsed.every((value) => value === 0), `после отдыха: ${after.spellSlotsUsed.join(',')}`);
+      assert(slotView.slotRestore.disabled, 'кнопка отдыха не гаснет, когда тратить нечего');
+    });
+
+    check('правка соседнего поля не стирает ячейки', () => {
+      slotView.slotRows[0].plus.click();
+      const before = slotView.slotRows[0].used.textContent;
+      const nameInput = slotHost.querySelector('[data-field="characterName"]');
+      nameInput.value = 'Переименованный';
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      // Ячейки живут на кнопках, а collect() собирает лист только из полей
+      // ввода: без переноса правка имени обнуляла бы весь день.
+      assert.strictEqual(slotView.slotRows[0].used.textContent, before,
+        'правка имени стёрла ячейки');
+    });
+
+    check('из чужого листа ячейками не управляют', () => {
+      const frozenHost = document.createElement('div');
+      sandbox.appendChild(frozenHost);
+      const frozenSlots = new window.SheetView(frozenHost, {});
+      frozenSlots.setSheet({ ...SAMPLE_SHEET, charClass: 'жрец', level: 5 });
+      frozenSlots.setReadOnly(true);
+      const node = frozenSlots.slotRows[0];
+      assert(node.max.disabled || node.plus.disabled, 'у чужого листа ячейки можно тратить');
+      assert(frozenSlots.slotRestore.disabled, 'у чужого листа можно восстановить ячейки');
+    });
+
     check('лист персонажа заполняется всеми полями 5e', () => {
       const value = (field) => {
         const node = sheetHost.querySelector(`[data-field="${field}"]`);

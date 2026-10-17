@@ -1340,6 +1340,25 @@
       const label = el('div', 'token__label', token.name);
       node.appendChild(label);
 
+      // Состояния под фишкой видны всем: по ним и ориентируются, кого бить
+      // можно, а кого нельзя.
+      const conditions = Array.isArray(token.conditions) ? token.conditions : [];
+      if (conditions.length) {
+        const badges = el('div', 'token__conditions');
+        for (const id of conditions) {
+          const item = DnD.CONDITIONS.find((entry) => entry.id === id);
+          if (!item) continue;
+          badges.appendChild(el('span', 'token__condition', item.short));
+        }
+        badges.title = conditions
+          .map((id) => (DnD.CONDITIONS.find((entry) => entry.id === id) || {}).label || id)
+          .join(', ');
+        node.appendChild(badges);
+      }
+      // Невидимую фишку видно только мастеру и полупрозрачно: так её не спутать
+      // со снятой картинкой.
+      if (conditions.includes('invisible')) node.classList.add('token--invisible');
+
       if (token.assignedPlayerId) {
         const owner = this.players.find((player) => player.playerId === token.assignedPlayerId);
         if (owner) node.appendChild(el('div', 'token__owner', owner.name));
@@ -2379,6 +2398,7 @@
           const owner = players.find((player) => player.playerId === token.assignedPlayerId);
           row.appendChild(el('span', 'token-row__meta', owner ? `→ ${owner.name}` : 'не назначена'));
           if (token.maxHp) row.appendChild(this.buildHpControl(token));
+          row.appendChild(this.buildConditionsControl(token));
           const eye = el('button',
             `btn btn--tiny ${token.hidden ? 'btn--ghost' : ''}`,
             token.hidden ? 'Скрыта' : 'Видна');
@@ -2453,6 +2473,63 @@
         });
         box.appendChild(button);
       }
+      return box;
+    }
+
+    /**
+     * Состояния фишки: короткая строка с включёнными состояниями и
+     * переключатель всех остальных.
+     *
+     * Тринадцать состояний на каждую строку не поместились бы, поэтому видны
+     * только включённые, а список раскрывается по клику. Состояния видны всем
+     * участникам, поэтому здесь они только у мастера, а на карте показываются
+     * подсказками у всех.
+     * @param {object} token
+     * @returns {HTMLElement}
+     */
+    buildConditionsControl(token) {
+      const active = Array.isArray(token.conditions) ? token.conditions : [];
+      // Текущий выбор живёт здесь, а не перечитывается из фишки: пока сервер не
+      // ответил и панель не перерисовалась, второй клик обязан видеть первый.
+      const selected = new Set(active);
+      const box = el('div', 'token-conditions');
+      const names = active
+        .map((id) => (DnD.CONDITIONS.find((item) => item.id === id) || {}).label || id)
+        .join(', ');
+
+      const head = el('button', 'token-conditions__head');
+      head.type = 'button';
+      head.classList.toggle('is-empty', !names);
+      head.textContent = names || 'состояния';
+      head.title = names ? `Состояния: ${names}` : 'Задать состояния';
+      head.addEventListener('click', () => {
+        box.classList.toggle('is-open');
+      });
+      box.appendChild(head);
+
+      const grid = el('div', 'token-conditions__grid');
+      for (const item of DnD.CONDITIONS) {
+        const chip = el('button', 'token-conditions__chip', item.label);
+        chip.type = 'button';
+        chip.title = item.label;
+        const isOn = active.includes(item.id);
+        chip.classList.toggle('is-on', isOn);
+        chip.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+        chip.addEventListener('click', () => {
+          // Список собирается целиком: сервер ждёт именно перечень, а не
+          // «добавь одно», иначе снятие состояния пришлось бы отдельным
+          // событием.
+          if (selected.has(item.id)) selected.delete(item.id);
+          else selected.add(item.id);
+          chip.classList.toggle('is-on', selected.has(item.id));
+          chip.setAttribute('aria-pressed', selected.has(item.id) ? 'true' : 'false');
+          if (this.handlers.onSetTokenConditions) {
+            this.handlers.onSetTokenConditions(token.id, [...selected]);
+          }
+        });
+        grid.appendChild(chip);
+      }
+      box.appendChild(grid);
       return box;
     }
 

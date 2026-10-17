@@ -11,6 +11,10 @@
 
 const crypto = require('crypto');
 const diceModule = require('../renderer/dice.js');
+// Список состояний один на клиента и сервер: сервер отбрасывает всё, чего в
+// нём нет. Своя копия здесь разъехалась бы на первом же новом состоянии.
+const CONDITIONS = require('../renderer/dnd5e.js').CONDITIONS || [];
+const CONDITION_IDS = new Set(CONDITIONS.map((item) => item.id));
 
 const CAMPAIGN_FORMAT_VERSION = 2;
 
@@ -31,6 +35,8 @@ const LIMITS = {
   maxTokenHp: 9999,
   /** Счётчик спасбросков смерти: дальше трёх он не идёт по правилам. */
   maxDeathSaves: 3,
+  /** Состояний на одной фишке: столько их есть в правилах 5e. */
+  maxTokenConditions: 13,
   maxLevel: 20,
   minAbility: 1,
   maxAbility: 30,
@@ -96,6 +102,26 @@ function newInitiativeId() {
  * @param {unknown} raw
  * @returns {{entries: object[], turnId: string|null, round: number}}
  */
+/**
+ * Оставляет только известные состояния, без повторов.
+ *
+ * Список может прийти из файла кампании, из сообщения или из старой версии
+ * игры, поэтому проверяем каждое значение по списку правил, а не по
+ * количеству. Состояния-призраки на карте выглядели бы как ошибка.
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function normalizeConditions(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  for (const item of raw) {
+    const id = String(item || '');
+    if (CONDITION_IDS.has(id)) seen.add(id);
+    if (seen.size >= LIMITS.maxTokenConditions) break;
+  }
+  return [...seen];
+}
+
 function normalizeInitiative(raw) {
   const state = emptyInitiative();
   if (!raw || typeof raw !== 'object') return state;
@@ -707,7 +733,9 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
       // Прочность. maxHp === null — фишка без здоровья: монетка, метка или
       // просто шарик. У монстра и персонажа она есть.
       maxHp: null,
-      hp: null
+      hp: null,
+      /** Состояния фишки. Видны всем: «сбит с ног» и «парализован» знают все. */
+      conditions: normalizeConditions(token.conditions)
     };
     if (Number.isFinite(Number(token.maxHp)) && Number(token.maxHp) > 0) {
       result.maxHp = clampInt(token.maxHp, 1, LIMITS.maxTokenHp, 1);
@@ -717,6 +745,20 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
       result.hp = Number.isFinite(currentHp) ? clampInt(currentHp, 0, result.maxHp, 0) : result.maxHp;
     }
     return result;
+  }
+
+  /**
+   * Задаёт состояния фишки.
+   *
+   * В отличие от прочности, состояния видны и игрокам: по «сбит с ног» и
+   * «парализован» всё видно и сразу, скрывать тут нечего.
+   * @param {object} token
+   * @param {unknown} list
+   * @returns {object} Обновлённая фишка.
+   */
+  setTokenConditions(token, list) {
+    token.conditions = normalizeConditions(list);
+    return token;
   }
 
   /**

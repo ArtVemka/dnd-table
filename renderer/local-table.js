@@ -595,12 +595,27 @@
           hidden: false,
           color: TOKEN_COLORS[state.tokens.length % TOKEN_COLORS.length],
           // Прочность необязательна: пустое поле у формы — метка без здоровья.
-          maxHp: Number(payload.maxHp) > 0 ? Math.min(9999, Math.round(Number(payload.maxHp))) : null
+          maxHp: Number(payload.maxHp) > 0 ? Math.min(9999, Math.round(Number(payload.maxHp))) : null,
+          conditions: []
         };
         token.hp = token.maxHp;
         state.tokens.push(token);
         emitTo('tokenCreated', { ...token });
         emitTo('playersUpdate', playerList());
+      },
+
+      setTokenConditions(payload) {
+        const token = findToken(payload.tokenId);
+        if (!token) {
+          emitTo('errorMessage', { message: 'Фишка не найдена' });
+          return;
+        }
+        // Тот же список правил, что и на настоящем столе: неизвестные
+        // состояния отбрасываются, а не рисуются как призраки.
+        const known = new Set(DnD.CONDITIONS.map((item) => item.id));
+        const list = Array.isArray(payload.conditions) ? payload.conditions : [];
+        token.conditions = [...new Set(list.filter((id) => known.has(id)))];
+        emitTo('tokenUpdated', { ...token });
       },
 
       setTokenHp(payload) {

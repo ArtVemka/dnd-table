@@ -94,6 +94,33 @@
    */
   const DICE_SIDES = [4, 6, 8, 10, 12, 20, 100];
 
+  /**
+   * Состояния по правилам 5e для фишек и персонажей.
+   *
+   * Список один на клиента и сервер: сервер отбрасывает всё, чего здесь нет, а
+   * интерфейс рисует только то, что есть. Своя копия на стороне сервера
+   * разъехалась бы на первом же новом состоянии.
+   *
+   * «Без сознания» здесь нет намеренно: оно не состояние, а следствие нулевых
+   * хитов, и показывается само. Истощение тоже не включено: у него уровни от
+   * одного до шести, а здесь переключатели включены и выключены.
+   */
+  const CONDITIONS = [
+    { id: 'blinded', label: 'Слепой', short: 'Слепой' },
+    { id: 'deafened', label: 'Глухой', short: 'Глухой' },
+    { id: 'dazzled', label: 'Ослеплён', short: 'Ослеп' },
+    { id: 'frightened', label: 'Испуган', short: 'Испуг' },
+    { id: 'grappled', label: 'Схвачен', short: 'Схват' },
+    { id: 'incapacitated', label: 'Недееспособен', short: 'Недеесп.' },
+    { id: 'invisible', label: 'Невидим', short: 'Невид.' },
+    { id: 'paralyzed', label: 'Парализован', short: 'Парал.' },
+    { id: 'petrified', label: 'Окаменел', short: 'Окамен.' },
+    { id: 'poisoned', label: 'Отравлен', short: 'Отравл.' },
+    { id: 'prone', label: 'Сбит с ног', short: 'Лежит' },
+    { id: 'restrained', label: 'Опутан', short: 'Опут.' },
+    { id: 'stunned', label: 'Оглушён', short: 'Оглуш.' }
+  ];
+
   const LIMITS = {
     maxNameLength: 40,
     maxChatLength: 1000,
@@ -101,6 +128,8 @@
     // Прочность фишки. Те же числа, что в LIMITS в server/state.js: поле
     // ввода показывает этот предел, и сервер обязан соглашаться.
     maxTokenHp: 9999,
+    // Состояний на одной фишке не бывает больше, чем есть в правилах.
+    maxTokenConditions: 13,
     // Аватар ездит вместе с игроком и рисуется в кружке 30px, поэтому его
     // предел заметно меньше карты. Те же числа, что в server/state.js.
     maxAvatarBytes: 2 * 1024 * 1024,
@@ -296,6 +325,7 @@
     ABILITY_KEYS,
     ABILITIES,
     ABILITY_LABELS,
+    CONDITIONS,
     DICE_SIDES,
     GRID,
     HIT_DICE,
@@ -312,4 +342,8 @@
     formatModifier,
     proficiencyBonus
   };
-})(window);
+  // Отдаём себя и через module.exports: сервер требует этот файл ради списка
+  // состояний, и в Node окна нет. В браузере module не объявлен, поэтому
+  // условие ложно и всё остаётся как было.
+  if (typeof module === 'object' && module.exports) module.exports = global.DnD5e;
+})(typeof window !== 'undefined' ? window : globalThis);

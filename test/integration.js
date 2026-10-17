@@ -78,6 +78,11 @@ const TRACKED = [
  * @param {number} die
  * @returns {{hp: number, deathSavesSuccesses: number, deathSavesFailures: number}}
  */
+/** Список состояний из клиентской модели, тот же, что берёт сервер. */
+function windowlessConditionIds() {
+  return require('../renderer/dnd5e.js').CONDITIONS.map((item) => item.id);
+}
+
 function reviveOnTwenty(sheet, die) {
   const max = LIMITS_MAX_DEATH_SAVES;
   const next = { ...sheet };
@@ -1459,7 +1464,67 @@ async function main() {
   emit(p1, 'saveCharacterSheet', { sheet: { ...room.sheets.get(P1), hp: 7 } });
   await wait(80);
 
-  /* ------------------------------------------------------ порядок боя */  /* ------------------------------------------------------ порядок боя */
+  /* -------------------------------------------------------- состояния */
+
+  console.log('\nСостояния фишки');
+  dm.log.tokenCreated.length = 0;
+  emit(dm, 'createToken', { name: 'Огр', mapType: 'world' });
+  const condToken = await waitFor(
+    () => dm.log.tokenCreated.find((item) => item.name === 'Огр'),
+    'фишка для состояний'
+  );
+  emit(dm, 'setTokenHidden', { tokenId: condToken.id, hidden: false });
+  await waitFor(() => p2.log.tokenCreated.find((item) => item.id === condToken.id), 'фишка видна игроку');
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenConditions', { tokenId: condToken.id, conditions: ['prone'] });
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пробовал задать состояние');
+  check('состояния фишки задаёт только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.deepStrictEqual(room.tokens.find((item) => item.id === condToken.id).conditions, []);
+  });
+
+  dm.log.tokenUpdated.length = 0;
+  p2.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenConditions', { tokenId: condToken.id, conditions: ['prone', 'poisoned', 'выдуманное'] });
+  await waitFor(() => dm.log.tokenUpdated.find((item) => item.id === condToken.id), 'состояния заданы');
+  check('мастер задаёт состояния, а сервер отбрасывает неизвестные', () => {
+    const stored = room.tokens.find((item) => item.id === condToken.id);
+    assert.deepStrictEqual(stored.conditions, ['prone', 'poisoned']);
+  });
+  check('состояния видны игроку: по ним и ориентируются, кого можно бить', () => {
+    const seen = p2.log.tokenUpdated.find((item) => item.id === condToken.id);
+    assert(seen, 'игрок не увидел обновление состояний');
+    // В отличие от прочности, состояния прятать нечего, поэтому они уходят
+    // игроку как есть.
+    assert.deepStrictEqual(seen.conditions, ['prone', 'poisoned']);
+  });
+
+  emit(dm, 'setTokenConditions', { tokenId: condToken.id, conditions: ['prone', 'poisoned', 'prone'] });
+  await waitFor(
+    () => room.tokens.find((item) => item.id === condToken.id).conditions.length === 2,
+    'повтор в списке состояний'
+  );
+  check('повтор состояния не двоится', () => {
+    assert.deepStrictEqual(
+      room.tokens.find((item) => item.id === condToken.id).conditions,
+      ['prone', 'poisoned']
+    );
+  });
+
+  const condSaved = new RoomState({ state: room.serialize() });
+  check('состояния переживают сохранение кампании', () => {
+    const saved = condSaved.tokens.find((item) => item.name === 'Огр');
+    assert.deepStrictEqual(saved.conditions, ['prone', 'poisoned']);
+  });
+
+  check('состояний ровно столько, сколько есть в правилах', () => {
+    assert.ok(windowlessConditionIds().length >= 13, 'список состояний потерялся');
+  });
+  emit(dm, 'deleteToken', { tokenId: condToken.id });
+  await waitFor(() => !room.tokens.some((item) => item.id === condToken.id), 'уборка фишки состояний');
+
+  /* ------------------------------------------------------ порядок боя */  /* ------------------------------------------------------ порядок боя */  /* ------------------------------------------------------ порядок боя */
 
   console.log('\nПорядок боя');
   p2.log.errorMessage.length = 0;

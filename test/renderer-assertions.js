@@ -1845,6 +1845,76 @@
       assert.strictEqual(tokensHost.querySelectorAll('.token-hp').length, 0, 'игрок видит полосы прочности монстров');
     });
 
+    /* ------------------------------------------------------- состояния */
+
+    const conditionChanges = [];
+    const condTokens = TOKENS.concat([
+      { id: 't6', name: 'Огр', mapType: 'world', x: 0.5, y: 0.5, imageUrl: null, assignedPlayerId: null, color: '#8fb04a', conditions: ['prone', 'poisoned'] },
+      { id: 't7', name: 'Монета', mapType: 'world', x: 0.3, y: 0.3, imageUrl: null, assignedPlayerId: null, color: '#c9a34a', conditions: [] }
+    ]);
+    const condPanel = new window.TableUI.TokenPanel(document.createElement('div'), {
+      onSetTokenConditions: (tokenId, conditions) => conditionChanges.push({ tokenId, conditions })
+    });
+    sandbox.appendChild(condPanel.root);
+    condPanel.render(condTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
+
+    check('включённые состояния показаны именами, а не значками', () => {
+      const rows = [...condPanel.root.querySelectorAll('.token-row')];
+      const ogre = rows.find((row) => row.textContent.includes('Огр'));
+      const head = ogre.querySelector('.token-conditions__head');
+      // Список должен читаться без подсказки: три буквы ничего не говорят.
+      assert(head.textContent === 'Сбит с ног, Отравлен', `подпись состояний: ${head.textContent}`);
+      const coin = rows.find((row) => row.textContent.includes('Монета'));
+      assert(coin.querySelector('.token-conditions__head').classList.contains('is-empty'),
+        'у фишки без состояний подпись выглядит как заполненная');
+    });
+
+    check('список всех состояний раскрывается и отправляется целиком', () => {
+      const rows = [...condPanel.root.querySelectorAll('.token-row')];
+      const ogre = rows.find((row) => row.textContent.includes('Огр'));
+      const box = ogre.querySelector('.token-conditions');
+      const chips = [...box.querySelectorAll('.token-conditions__chip')];
+      assert.strictEqual(chips.length, window.DnD5e.CONDITIONS.length, 'перечислены не все состояния');
+      assert(!box.classList.contains('is-open'), 'список состояний открыт сразу');
+      box.querySelector('.token-conditions__head').click();
+      assert(box.classList.contains('is-open'), 'список состояний не раскрылся');
+      assert(chips.filter((chip) => chip.classList.contains('is-on')).length === 2,
+        'отмечено не два состояния');
+      chips.find((chip) => chip.textContent === 'Слепой').click();
+      const sent = conditionChanges[conditionChanges.length - 1];
+      // Сервер ждёт перечень, а не «добавь одно»: снятие состояния пришлось бы
+      // вторым событием.
+      assert.strictEqual(sent.tokenId, 't6');
+      assert.strictEqual(sent.conditions.length, 3, `отправлено ${sent.conditions.length} состояний`);
+      assert(sent.conditions.includes('blinded') && sent.conditions.includes('prone'),
+        `состояния: ${sent.conditions.join(', ')}`);
+      const poisoned = chips.find((chip) => chip.textContent === 'Отравлен');
+      poisoned.click();
+      const after = conditionChanges[conditionChanges.length - 1];
+      assert(!after.conditions.includes('poisoned'), 'состояние не сняли');
+      assert.strictEqual(after.conditions.length, 2, 'после снятия осталось не два состояния');
+    });
+
+    check('подсказки состояний видны на карте всем, включая игрока', () => {
+      const state = { ...MAP_STATE, tokens: MAP_STATE.tokens.map((token) => (
+        token.id === 't1' ? { ...token, conditions: ['prone', 'poisoned'] } : token
+      )) };
+      mapView.render(state, { role: 'dm', playerId: 'dm' });
+      const badges = [...mapHost.querySelectorAll('[data-token-id="t1"] .token__condition')]
+        .map((node) => node.textContent);
+      assert(badges.join(', ') === 'Лежит, Отравл.', `подсказки: ${badges.join(', ')}`);
+
+      // Невидимую фишку видно только мастеру, и она полупрозрачна.
+      const invisible = { ...MAP_STATE, tokens: [{ ...MAP_STATE.tokens[0], conditions: ['invisible'] }] };
+      mapView.render(invisible, { role: 'dm', playerId: 'dm' });
+      const seen = mapHost.querySelector('[data-token-id="t1"]');
+      assert(seen.classList.contains('token--invisible'), 'невидимая фишка не выделена');
+      mapView.render(state, { role: 'player', playerId: 'p-1' });
+      assert.strictEqual([...mapHost.querySelectorAll('[data-token-id="t1"] .token__condition')].length, 2,
+        'игрок не видит состояния фишки');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
     // Возвращаем панель в обычное состояние: дальше идут проверки фишек.
     tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
     check('в панели фишек есть спавн из листа для игроков без фишки', () => {

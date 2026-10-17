@@ -655,7 +655,10 @@ async function createTableServer(options) {
         // хитами, и дописывать их потом отдельной правкой неудобно.
         maxHp: Number.isFinite(Number(payload && payload.maxHp)) && Number(payload.maxHp) > 0
           ? clampInt(payload.maxHp, 1, LIMITS.maxTokenHp, 1)
-          : null
+          : null,
+        // Поле состояний нужно уже у новой фишки: иначе её форма в интерфейсе
+        // отличается от фишки, загруженной из кампании.
+        conditions: []
       };
       token.hp = token.maxHp;
       room.tokens.push(token);
@@ -672,6 +675,21 @@ async function createTableServer(options) {
      * понял бы, где правда. Фишка без прочности (maxHp === null) — метка,
      * здоровья у неё нет, и сервер молча игнорирует правку.
      */
+    /**
+     * Состояния фишки: слепой, парализован, сбит с ног и прочие.
+     *
+     * В отличие от прочности, состояния видны и игрокам: по «сбит с ног» и
+     * «парализован» всё видно и сразу, скрывать тут нечего. Правит мастер.
+     */
+    socket.on('setTokenConditions', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      room.setTokenConditions(token, payload && payload.conditions);
+      markDirty();
+      emitToken('tokenUpdated', token);
+    });
+
     socket.on('setTokenHp', (payload) => {
       if (!requireDm(socket)) return;
       const token = findToken(payload && payload.tokenId);

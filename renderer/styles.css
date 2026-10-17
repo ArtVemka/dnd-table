@@ -4792,3 +4792,103 @@ body::after {
   flex: 1;
   font-size: 12px;
 }
+/* ------------------------------------------------------- Состояния фишки */
+
+.token-conditions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.token-conditions__head {
+  appearance: none;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-conditions__head.is-empty {
+  border-style: dotted;
+  opacity: 0.6;
+}
+
+/* Включённые состояния показываем именами, а не значками: список должен
+   читаться без подсказки, иначе три буквы ничего не говорят. */
+.token-conditions:not(.is-open) .token-conditions__head {
+  border-style: solid;
+  color: var(--gold);
+  border-color: var(--border-strong);
+}
+
+.token-conditions__grid {
+  display: none;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: 230px;
+}
+
+.token-conditions.is-open .token-conditions__grid {
+  display: flex;
+}
+
+.token-conditions__chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.token-conditions__chip:hover {
+  color: var(--text);
+}
+
+.token-conditions__chip.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Подсказки состояний под фишкой на карте. */
+.token__conditions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  justify-content: center;
+  max-width: 140px;
+}
+
+.token__condition {
+  font-size: 9px;
+  line-height: 1.3;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(12, 9, 6, 0.82);
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+/* Невидимая фишка видна только мастеру и полупрозрачно. */
+.token--invisible .token__circle {
+  opacity: 0.35;
+}
+
+.token--invisible .token__conditions {
+  opacity: 0.6;
+}

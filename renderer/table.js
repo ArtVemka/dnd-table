@@ -1625,10 +1625,82 @@
             });
             actions.appendChild(spawn);
           }
+          // Заметка мастера: игроки её не видят и не должны даже знать, что она
+          // есть. Пометка на кнопке показывает, что заметка не пустая, иначе
+          // мастер забыл бы про неё к следующей сессии.
+          const note = el('button', 'btn btn--tiny btn--ghost', 'Заметка');
+          note.type = 'button';
+          note.classList.toggle('has-note', Boolean(player.dmNote));
+          note.title = player.dmNote
+            ? `Заметка мастера: ${player.dmNote}`
+            : 'Заметка для себя об этом игроке';
+          note.addEventListener('click', () => this.openNote(player));
+          actions.appendChild(note);
           row.appendChild(actions);
+        }
+        if (ctx.role === 'dm' && player.role !== 'dm' && player.dmNote) {
+          const noteLine = el('div', 'player-row__note', player.dmNote);
+          row.appendChild(noteLine);
         }
         this.listNode.appendChild(row);
       }
+    }
+
+    /**
+     * Заметка мастера об игроке.
+     *
+     * Отдельная форма поверх списка, а не поле в строке: строка и так тесная, а
+     * поле в ней прыгало бы при каждой рассылке списка участников.
+     * @param {object} player
+     */
+    openNote(player) {
+      this.closeNote();
+      const form = el('form', 'dm-note');
+      const head = el('div', 'dm-note__head');
+      head.appendChild(el('span', 'dm-note__title', `Заметка об ${player.name}`));
+      const close = el('button', 'btn btn--ghost btn--tiny', 'Закрыть');
+      close.type = 'button';
+      close.addEventListener('click', () => this.closeNote());
+      head.appendChild(close);
+      form.appendChild(head);
+
+      const area = el('textarea', 'dm-note__area');
+      area.value = player.dmNote || '';
+      area.maxLength = DnD.LIMITS.maxDmNote;
+      area.placeholder = 'Что игрок на самом деле скрывает. Игроки этого не видят.';
+      form.appendChild(area);
+
+      const actions = el('div', 'dm-note__actions');
+      const save = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
+      save.type = 'submit';
+      actions.appendChild(save);
+      form.appendChild(actions);
+
+      let timer = null;
+      // Отправляем на лету: заметка мастера это то, о чём вспоминают через
+      // десять минут, и терять её из-за того, что не нажали «Сохранить», нельзя.
+      form.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (this.handlers.onSetDmNote) this.handlers.onSetDmNote(player.playerId, area.value);
+        }, 400);
+      });
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        clearTimeout(timer);
+        if (this.handlers.onSetDmNote) this.handlers.onSetDmNote(player.playerId, area.value);
+        this.closeNote();
+      });
+
+      this.noteForm = form;
+      this.root.appendChild(form);
+      area.focus();
+    }
+
+    /** Убирает форму заметки, если она открыта. */
+    closeNote() {
+      if (this.noteForm) this.noteForm.remove();
+      this.noteForm = null;
     }
   }
 

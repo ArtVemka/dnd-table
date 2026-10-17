@@ -367,7 +367,9 @@
       diceHistory: [],
       chatHistory: [],
       /** Аватар игрока как data URL: сервера нет, файлы никто не сохраняет. */
-      avatar: null
+      avatar: null,
+      /** Заметки мастера об игроках. */
+      dmNotes: {}
     };
     // Недоигранный черновик становится листом персонажа тренировочного стола.
     const draft = readDraft(playerId);
@@ -381,6 +383,9 @@
       // тренировочный аватар живёт как data URL прямо в состоянии.
       avatar: state.avatar || null,
       online: true,
+      // Заметка мастера: в тренировочном столе игрок один, но поле нужно,
+      // чтобы список участников совпадал с настоящим столом.
+      dmNote: state.dmNotes[playerId] || '',
       hasSheet: Boolean(state.sheets[playerId]),
       tokenId: (state.tokens.find((token) => token.assignedPlayerId === playerId) || {}).id || null
     }];
@@ -601,6 +606,18 @@
         token.hp = token.maxHp;
         state.tokens.push(token);
         emitTo('tokenCreated', { ...token });
+        emitTo('playersUpdate', playerList());
+      },
+
+      /**
+       * Заметка мастера об игроке. В тренировочном столе игрок один и он же
+       * мастер, так что заметка уходит ему же, как и на настоящем столе.
+       */
+      setDmNote(payload) {
+        const player = playerList().find((item) => item.playerId === String(payload.playerId || ''));
+        if (!player) return;
+        state.dmNotes[player.playerId] = sanitizeText(payload.note, DnD.LIMITS.maxDmNote);
+        emitTo('dmNoteUpdated', { playerId: player.playerId, note: state.dmNotes[player.playerId] });
         emitTo('playersUpdate', playerList());
       },
 

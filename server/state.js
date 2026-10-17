@@ -37,6 +37,8 @@ const LIMITS = {
   maxDeathSaves: 3,
   /** Состояний на одной фишке: столько их есть в правилах 5e. */
   maxTokenConditions: 13,
+  /** Заметка мастера: столько же, сколько заметки в листе. */
+  maxDmNote: 4000,
   maxLevel: 20,
   minAbility: 1,
   maxAbility: 30,
@@ -474,6 +476,9 @@ class RoomState {
         avatar: typeof player.avatar === 'string' && player.avatar
           ? sanitizeText(player.avatar, LIMITS.maxAvatarRef)
           : null,
+        // Заметка мастера лежит у игрока, а не в листе: лист игрок видит
+        // целиком, и заметка уехала бы вместе с ним.
+        dmNote: sanitizeText(player.dmNote, LIMITS.maxDmNote),
         online: false,
         sockets: new Set(),
         joinedAt: player.joinedAt || new Date().toISOString()
@@ -789,6 +794,9 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
         name: player.name,
         role: player.role,
         avatar: player.avatar || null,
+        // Заметка мастера едет в кампании вместе с игроком. Без неё мастер
+        // терял все свои заготовки при первом же сохранении.
+        dmNote: player.dmNote || '',
         joinedAt: player.joinedAt
       });
     }
@@ -907,7 +915,7 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
    * @param {boolean} includeTokens
    * @returns {object[]}
    */
-  playerList(includeTokens = true) {
+  playerList(includeTokens = true, includeDmNotes = false) {
     const list = [];
     // Кто на какой фишке: раньше внутри цикла по игрокам искали фишку поиском,
     // то есть на каждой рассылке списка выполнялось «игроки × фишки». Словарь
@@ -934,6 +942,10 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
         avatar: player.avatar || (player.role === ROLE_DM ? DEFAULT_DM_AVATAR : null),
         online: player.online,
         hasSheet: this.sheets.has(player.playerId),
+        // Заметка мастера игрокам не отдаётся: в этом весь её смысл. Поле у всех,
+        // но игрокам пустое, чтобы форма записи не прыгала, когда мастер
+        // переключает окно между листом и списком.
+        dmNote: includeDmNotes ? (player.dmNote || '') : '',
         tokenId: includeTokens
           ? (tokenIdByPlayer.get(player.playerId) || null)
           : null
@@ -974,7 +986,7 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
       // отдельного экрана для них пока нет, а лишние данные на клиенте
       // только мешают.
       adventure: isDm ? this.adventure : null,
-      players: this.playerList(),
+      players: this.playerList(true, isDm),
       sheets,
       maps: this.maps,
       activeMap: this.activeMap,

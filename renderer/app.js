@@ -700,6 +700,15 @@ let chosenSheetId = null;
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
     });
 
+    // Заметка мастера может прийти из другого окна или после переподключения:
+      // список перерисовывается, и пометка «заметка есть» должна обновиться.
+      socket.on('dmNoteUpdated', ({ playerId, note } = {}) => {
+        const player = app.room.players.find((item) => item.playerId === playerId);
+        if (!player) return;
+        player.dmNote = note || '';
+        playersList.render(app.room.players, viewer());
+      });
+
     // Порядок боя приходит и снимком, и отдельным событием: мастер меняет его
     // кнопками, игроки получают рассылку. Рисуем одним и тем же.
     socket.on('initiativeUpdated', (initiative) => {
@@ -930,6 +939,9 @@ let chosenSheetId = null;
         onOpenSheet: (playerId) => openPlayerSheet(playerId),
         // И выводит его фишку на поле одним нажатием, прямо из листа.
         onSpawnToken: spawnTokenFromSheet,
+        // Заметку мастера сервер отдаёт только мастеру, поэтому отправка
+        // без проверки роли безопасна: игрок её просто не увидит.
+        onSetDmNote: (playerId, note) => emit('setDmNote', { playerId, note }),
         resolveUrl: assetUrl
       });
     }

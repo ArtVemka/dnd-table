@@ -64,7 +64,7 @@ const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
   'tokensUpdated',
-  'diceRollResult', 'chatMessage', 'errorMessage'
+  'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated'
 ];
 
 /**
@@ -1464,7 +1464,63 @@ async function main() {
   emit(p1, 'saveCharacterSheet', { sheet: { ...room.sheets.get(P1), hp: 7 } });
   await wait(80);
 
-  /* -------------------------------------------------------- состояния */
+  /* ------------------------------------------------- заметки мастера */
+
+  console.log('\nЗаметки мастера');
+  dm.log.dmNoteUpdated.length = 0;
+  p1.log.dmNoteUpdated.length = 0;
+  emit(dm, 'setDmNote', { playerId: P1, note: 'на самом деле подслушивает для гильдии' });
+  await waitFor(() => dm.log.dmNoteUpdated.length > 0, 'заметка мастера сохранена');
+  check('заметка мастера доходит только до мастера', () => {
+    assert.strictEqual(dm.log.dmNoteUpdated[0].note, 'на самом деле подслушивает для гильдии');
+    assert.strictEqual(p1.log.dmNoteUpdated.length, 0, 'игрок получил заметку мастера');
+  });
+
+  emit(dm, 'setDmNote', { playerId: P1, note: 'вербовщик, своего не знает' });
+  await wait(120);
+
+  // Список участников не рассылается после заметки: она нужна только мастеру,
+  // и он получает своё событие. Проверяем, что игрок увидит пустую заметку в
+  // списке, если список у него запросят в следующий раз.
+  const dmListForPlayer = room.playerList(true, false);
+  const dmListForDm = room.playerList(true, true);
+  check('список участников собирается отдельно для мастера и для игроков', () => {
+    const playerSide = dmListForPlayer.find((item) => item.playerId === P1);
+    const dmSide = dmListForDm.find((item) => item.playerId === P1);
+    assert.strictEqual(playerSide.dmNote, '', `игроку отдан текст: ${playerSide.dmNote}`);
+    assert.strictEqual(dmSide.dmNote, 'вербовщик, своего не знает');
+  });
+
+  const playerSnapshotNote = room.snapshotFor({ playerId: P1, role: ROLE_PLAYER });
+  const dmSnapshotNote = room.snapshotFor({ playerId: P1, role: ROLE_DM });
+  check('в снимке состояния заметка есть только у мастера', () => {
+    assert.strictEqual(
+      playerSnapshotNote.players.find((item) => item.playerId === P1).dmNote,
+      '',
+      'заметка утекла в снимок игрока'
+    );
+    assert.strictEqual(
+      dmSnapshotNote.players.find((item) => item.playerId === P1).dmNote,
+      'вербовщик, своего не знает'
+    );
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setDmNote', { playerId: P2, note: 'я тоже мастер' });
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пишет заметку');
+  check('заметку мастера пишет только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.strictEqual(room.players.get(P2).dmNote || '', '');
+  });
+
+  const noteSaved = new RoomState({ state: room.serialize() });
+  check('заметка переживает сохранение кампании', () => {
+    assert.strictEqual(noteSaved.players.get(P1).dmNote, 'вербовщик, своего не знает');
+  });
+  emit(dm, 'setDmNote', { playerId: P1, note: '' });
+  await wait(120);
+
+  /* -------------------------------------------------------- состояния */  /* -------------------------------------------------------- состояния */
 
   console.log('\nСостояния фишки');
   dm.log.tokenCreated.length = 0;

@@ -1310,12 +1310,82 @@
 
     const playersHost = document.createElement('div');
     sandbox.appendChild(playersHost);
+    const dmNotesSent = [];
     const playersList = new window.TableUI.PlayersList(playersHost, {
+      onSetDmNote: (playerId, note) => dmNotesSent.push({ playerId, note }),
       resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
     });
     playersList.render(PLAYERS.concat([
-      { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null, avatar: '/files/boris.png' }
+      { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null, avatar: '/files/boris.png', dmNote: 'свой человек гильдии' }
     ]), { role: 'dm', playerId: 'dm' });
+
+    check('мастер видит пометку «заметка есть» и подсказку под строкой', () => {
+      const rows = [...playersHost.querySelectorAll('.player-row')];
+      const boris = rows.find((row) => row.textContent.includes('Борис'));
+      const noteLine = boris.querySelector('.player-row__note');
+      assert(noteLine, 'под строкой игрока нет заметки');
+      assert.strictEqual(noteLine.textContent, 'свой человек гильдии');
+      const artem = rows.find((row) => row.textContent.includes('Артём'));
+      assert(!artem.querySelector('.player-row__note'), 'у игрока без заметки показана пустая');
+      assert(!artem.querySelector('.btn.has-note'), 'пустая заметка помечена как заполненная');
+      assert(boris.querySelector('.btn.has-note'), 'заполненная заметка не помечена');
+    });
+
+    check('заметка открывается формой с уже написанным текстом', () => {
+      const borisRow = [...playersHost.querySelectorAll('.player-row')]
+        .find((row) => row.textContent.includes('Борис'));
+      const noteButton = [...borisRow.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Заметка');
+      assert(noteButton, 'в строке игрока нет кнопки заметки');
+      noteButton.click();
+      const form = playersHost.querySelector('.dm-note');
+      assert(form, 'форма заметки не открылась');
+      assert.strictEqual(form.querySelector('.dm-note__area').value, 'свой человек гильдии',
+        'в форме не та заметка, что в списке');
+      // Форма переживает перерисовку списка: несохранённый текст не должен
+      // пропасть из-за чужого изменения участников, а обрыв ссылки на форму
+      // оставил бы её на экране навсегда.
+      playersList.render(PLAYERS.concat([
+        { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null, avatar: null, dmNote: 'свой человек гильдии' }
+      ]), { role: 'dm', playerId: 'dm' });
+      assert(playersHost.querySelector('.dm-note'), 'форма заметки пропала при перерисовке списка');
+      assert.strictEqual(playersHost.querySelector('.dm-note__area').value, 'свой человек гильдии',
+        'текст в форме потерялся при перерисовке списка');
+      playersHost.querySelector('.dm-note .btn--ghost').click();
+      assert(!playersHost.querySelector('.dm-note'), 'кнопка «Закрыть» не убирает форму');
+    });
+
+    check('заметка уходит на лету, без кнопки «Сохранить»', () => {
+      const borisRow = [...playersHost.querySelectorAll('.player-row')]
+        .find((row) => row.textContent.includes('Борис'));
+      [...borisRow.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Заметка').click();
+      const area = playersHost.querySelector('.dm-note__area');
+      area.value = 'свой человек, но брать на испытание';
+      area.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // Отправка отложена: мастер пишет быстро, а ждать сервер на каждый
+    // ввод незачем.
+    await wait(600);
+    check('правка заметки уехала на сервер', () => {
+      assert.strictEqual(dmNotesSent.length, 1, `отправлено ${dmNotesSent.length} раз`);
+      assert.strictEqual(dmNotesSent[0].playerId, 'p-2');
+      assert(dmNotesSent[0].note.includes('испытание'), `отправлено: ${dmNotesSent[0].note}`);
+    });
+
+    check('игроку кнопки заметки нет', () => {
+      playersList.render(PLAYERS.concat([
+        { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null, avatar: null, dmNote: '' }
+      ]), { role: 'player', playerId: 'p-1' });
+      const borisRow = [...playersHost.querySelectorAll('.player-row')]
+        .find((row) => row.textContent.includes('Борис'));
+      const buttons = [...borisRow.querySelectorAll('button')].map((button) => button.textContent);
+      assert(!buttons.includes('Заметка'), `игроку видна заметка: ${buttons.join(', ')}`);
+      assert(!borisRow.querySelector('.player-row__note'), 'игрок видит подсказку о чужой заметке');
+      playersList.render(PLAYERS.concat([
+        { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null, avatar: '/files/boris.png', dmNote: 'свой человек гильдии' }
+      ]), { role: 'dm', playerId: 'dm' });
+    });
 
     check('список участников: имя, роль и статус онлайн/офлайн', () => {
       assert(playersHost.querySelectorAll('.player-row').length === 3, 'строк в списке');

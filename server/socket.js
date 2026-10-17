@@ -141,8 +141,16 @@ async function createTableServer(options) {
     socket.emit('errorMessage', { message });
   };
 
-  const broadcastPlayers = () => {
-    io.emit('playersUpdate', room.playerList());
+  /**
+   * Список участников рассылается двумя списками, а не одним.
+   *
+   * В списке есть заметки мастера, и отдать их игрокам нельзя: список уходит
+   * на каждое изменение, и одна рассылка на всех утекла бы заметку сразу.
+   * @param {boolean} [onlyOnline] Только те, кто сейчас за столом.
+   */
+  const broadcastPlayers = (onlyOnline = false) => {
+    io.to('table').except('dm-sockets').emit('playersUpdate', room.playerList(!onlyOnline, false));
+    io.to('dm-sockets').emit('playersUpdate', room.playerList(!onlyOnline, true));
   };
 
   const broadcastMapUpdate = (type) => {
@@ -681,6 +689,24 @@ async function createTableServer(options) {
      * В отличие от прочности, состояния видны и игрокам: по «сбит с ног» и
      * «парализован» всё видно и сразу, скрывать тут нечего. Правит мастер.
      */
+    /**
+     * Заметка мастера об игроке.
+     *
+     * Только мастер и только себе: игроки заметку не получают даже при
+     * просмотре состояния. Хранится у записи игрока, а не в листе, потому что
+     * лист игрок видит целиком и заметка уехала бы вместе с ним.
+     */
+    socket.on('setDmNote', (payload) => {
+      if (!requireDm(socket)) return;
+      const playerId = String((payload && payload.playerId) || '');
+      const player = room.players.get(playerId);
+      if (!player) return emitError(socket, 'Игрок не найден');
+      player.dmNote = sanitizeText(payload && payload.note, LIMITS.maxDmNote);
+      markDirty();
+      // Заметку получает только мастер, даже сам игрок.
+      io.to('dm-sockets').emit('dmNoteUpdated', { playerId, note: player.dmNote });
+    });
+
     socket.on('setTokenConditions', (payload) => {
       if (!requireDm(socket)) return;
       const token = findToken(payload && payload.tokenId);

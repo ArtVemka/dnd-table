@@ -619,7 +619,12 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     });
 
     socket.on('tokenCreated', (token) => {
-      app.room.tokens.push(token);
+      // Фишка могла уже быть в списке: при показе скрытой мастер получает и
+      // tokenHidden, и tokenCreated — как «новую». Без проверки она попала бы
+      // в список вторым экземпляром, и в панели фишек появился бы дубль.
+      const index = app.room.tokens.findIndex((item) => item.id === token.id);
+      if (index >= 0) app.room.tokens[index] = token;
+      else app.room.tokens.push(token);
       mapView.render(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
     });
@@ -936,6 +941,11 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         mapId: activeMapId()
       }),
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
+        // Скрытость решает только мастер, но сервер всё равно проверяет.
+        // Обработчики нужны и здесь, и в карте: правый клик по фишке и кнопки
+        // в списке должны делать одно и то же.
+        onToggleTokenHidden: (tokenId, hidden) => emit('setTokenHidden', { tokenId, hidden }),
+        onSetAllTokensHidden: (hidden) => emit('setAllTokensHidden', { hidden }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
           if (result.canceled) return;

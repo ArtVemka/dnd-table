@@ -22,6 +22,15 @@
   const assert = (condition, message) => {
     if (!condition) throw new Error(message || 'утверждение не выполнено');
   };
+  // Строгое сравнение, как в test/sheet.js: без него «0» и «false» считались бы
+  // равными, а проверки портретов и фишек на этом ломались бы тихо.
+  assert.strictEqual = (actual, expected, message) => {
+    if (actual !== expected) {
+      throw new Error(message
+        ? `${message} (получено ${JSON.stringify(actual)}, ждали ${JSON.stringify(expected)})`
+        : `получено ${JSON.stringify(actual)}, ждали ${JSON.stringify(expected)}`);
+    }
+  };
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const waitFor = async (fn, label, timeout = 20000) => {
     const start = Date.now();
@@ -439,6 +448,9 @@
       assert(block, 'нет блока портрета мастера');
       assert(block.textContent.includes('Ваш портрет'), 'нет заголовка блока');
 
+      // Приложение передаёт портрет сразу после списка игроков: блок живёт
+      // внутри списка и пересоздаётся вместе с ним.
+      view.setSelfAvatar(null, 'Мастер');
       const preview = block.querySelector('.avatar-pick__preview');
       assert.strictEqual(preview.textContent, 'М', `буква-заглушка мастера: ${preview.textContent}`);
       const clear = block.querySelector('.avatar-pick__side .btn');
@@ -1142,6 +1154,12 @@
       assert(tokensHost.querySelectorAll('.token-row button').length >= 1, 'нет кнопки удаления');
     });
     check('в панели фишек есть спавн из листа для игроков без фишки', () => {
+      // В PLAYERS у обоих игроков уже есть фишка, поэтому для проверки списка
+      // спавна нужен отдельный состав: без фишки только у Бориса.
+      const withWaiting = PLAYERS.concat([
+        { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null }
+      ]);
+      tokenPanel.render(TOKENS, withWaiting, { role: 'dm', playerId: 'dm' });
       const block = tokensHost.querySelector('.token-spawn');
       assert(block, 'нет блока спавна');
       assert(!block.hidden, 'блок спавна скрыт у мастера');
@@ -1252,10 +1270,14 @@
       assert(cards.some((text) => text.includes('Загрузить кампанию')), 'нет загрузки кампании');
       assert(cards.some((text) => text.includes('Подключиться к столу')), 'нет подключения');
     });
-    check('на главном экране написано, что приложение не создаёт сеть', () => {
+    check('на главном экране сказано, что общая сеть не нужна', () => {
+      // С прошлых времён тут было «приложение не создаёт сеть». Теперь сети
+      // нет вовсе, а игроки ходят к мастеру по P2P, и сказать надо именно об
+      // этом: иначе игрок пойдёт искать Hamachi.
       const notice = document.querySelector('.home__notice').textContent;
-      assert(notice.includes('не создаёт сеть'), 'нет предупреждения о сети');
-      assert(notice.includes('Hamachi'), 'нет упоминания виртуальных сетей');
+      assert(notice.includes('Общей сети не нужно'), `нет пояснения про сеть: ${notice}`);
+      assert(notice.includes('P2P-билет'), `нет упоминания билета: ${notice}`);
+      assert(!notice.includes('Hamachi'), 'осталось упоминание виртуальных сетей');
     });
 
     /* ------------------------- стол без сервера: запуск из настроек */
@@ -1559,9 +1581,11 @@
     check('панель приглашения показывает билет и способ подключения', () => {
       const panel = document.querySelector('#addresses-panel');
       const text = panel.textContent.replace(/\s+/g, ' ');
-      assert(panel.querySelector('.addr-group__title'), 'нет заголовка блока');
       const ticket = panel.querySelector('.addr__url--ticket');
       if (ticket) {
+        // Заголовок блока есть только когда билет уже получен: без билета
+        // панель говорит, что он готовится, и блока с ним нет.
+        assert(panel.querySelector('.addr-group__title'), 'нет заголовка блока');
         // iroh поднялся: билет обязан быть на месте целиком и копироваться.
         assert(ticket.textContent.length > 20, `билет подозрительно короткий: ${ticket.textContent}`);
         assert(!ticket.textContent.includes('…'), 'билет показан обрезанным');
@@ -1640,10 +1664,11 @@
 
     const hostInfo = await window.desktop.hostStatus();
     const playerSocket = window.io(hostInfo.localUrl, { transports: ['websocket'], forceNew: true });
-    const playerInbox = { joined: null, errors: [], tokens: [], grid: null, maps: [] };
+    const playerInbox = { joined: null, errors: [], tokens: [], hidden: [], grid: null, maps: [] };
     playerSocket.on('joined', (payload) => { playerInbox.joined = payload; });
     playerSocket.on('errorMessage', (message) => playerInbox.errors.push(message.message));
     playerSocket.on('tokenCreated', (token) => playerInbox.tokens.push(token));
+    playerSocket.on('tokenHidden', (event) => playerInbox.hidden.push(event));
     playerSocket.on('gridUpdated', (grid) => { playerInbox.grid = grid; });
     playerSocket.on('mapUpdated', (update) => playerInbox.maps.push(update));
 
@@ -1684,10 +1709,17 @@
     check('подключившийся игрок появился в списке участников у ДМ', () => {
       assert(playerRow.querySelector('.dot--on'), 'игрок не помечен как в сети');
       assert(playerRow.querySelector('.badge--player'), 'нет роли «игрок»');
-      assert(playerRow.querySelector('button').textContent === 'Открыть лист', 'нет кнопки открытия листа');
+      // Кнопку ищем по тексту: в строке их может быть несколько, и «первая
+      // кнопка в строке» перестала быть «Открыть лист», когда рядом появилась
+      // кнопка вывода фишки.
+      const openButton = [...playerRow.querySelectorAll('button')]
+        .find((node) => node.textContent === 'Открыть лист');
+      assert(openButton, 'нет кнопки открытия листа');
     });
 
-    playerRow.querySelector('button').click();
+    const openSheetButton = [...playerRow.querySelectorAll('button')]
+      .find((node) => node.textContent === 'Открыть лист');
+    openSheetButton.click();
     await waitFor(
       () => document.querySelector('#tab-sheet .sheet__status').textContent.includes('Просмотр'),
       'лист игрока у ДМ'
@@ -2186,13 +2218,65 @@
     check('фишка, созданная ДМ, вернулась с сервера', () => {
       assert(document.querySelectorAll('#tab-tokens .token-row').length >= 1, 'фишка не появилась');
     });
-    check('игрок тоже получил событие о новой фишке', () => {
-      assert(playerInbox.tokens.length === 1, `событий tokenCreated: ${playerInbox.tokens.length}`);
-      assert(playerInbox.tokens[0].name === 'Смоук-фишка', 'имя фишки');
-      assert(playerInbox.tokens[0].assignedPlayerId === null, 'фишка не назначена никому');
+    check('новая фишка скрыта, и игрок о ней не знает', () => {
+      assert(playerInbox.tokens.length === 0, `игрок получил скрытую фишку: ${playerInbox.tokens.length}`);
+      const row = [...document.querySelectorAll('#tab-tokens .token-row')]
+        .find((node) => node.textContent.includes('Смоук-фишка'));
+      assert(row && row.classList.contains('token-row--hidden'), 'у мастера фишка не помечена как скрытая');
+      assert(row.textContent.includes('Скрыта'), `нет подписи «Скрыта»: ${row.textContent}`);
     });
 
+    // Мастер открывает фишку кнопкой в списке. Это ровно тот путь, которым
+    // пользуется мастер за столом, и он же ловит дубль: показ приходит и как
+    // tokenHidden, и как tokenCreated, и в списке могла бы появиться вторая
+    // строка той же фишки.
+    const rowsBeforeReveal = document.querySelectorAll('#tab-tokens .token-row').length;
+    const revealButton = [...document.querySelectorAll('#tab-tokens .token-row button')]
+      .find((node) => node.textContent === 'Скрыта');
+    check('у скрытой фишки есть кнопка показа', () => {
+      assert(revealButton, 'нет кнопки «Скрыта» у фишки');
+    });
+    revealButton.click();
+    await waitFor(
+      () => playerInbox.tokens.length === 1,
+      'показ фишки игрокам'
+    );
+    check('показанная фишка доехала до игрока', () => {
+      assert(playerInbox.tokens[0].name === 'Смоук-фишка', 'имя фишки');
+      assert(playerInbox.tokens[0].hidden === false, 'фишка осталась скрытой');
+    });
+    check('после показа в списке мастера не появилось дубля', () => {
+      const rows = [...document.querySelectorAll('#tab-tokens .token-row')]
+        .filter((node) => node.textContent.includes('Смоук-фишка'));
+      assert(rows.length === 1, `строк с этой фишкой: ${rows.length}`);
+      assert(rows[0].textContent.includes('Видна'), `подпись: ${rows[0].textContent}`);
+      assert(
+        document.querySelectorAll('#tab-tokens .token-row').length === rowsBeforeReveal,
+        'в списке фишек изменилось число строк'
+      );
+    });
     const smokeTokenId = playerInbox.tokens[0].id;
+
+    // И обратно: спрятать показанную фишку. Игрок должен получить уведомление,
+    // чтобы убрать её у себя с карты.
+    playerInbox.hidden.length = 0;
+    const hideButton = [...document.querySelectorAll('#tab-tokens .token-row button')]
+      .find((node) => node.textContent === 'Видна');
+    check('у показанной фишки есть кнопка скрытия', () => {
+      assert(hideButton, 'нет кнопки «Видна» у фишки');
+    });
+    hideButton.click();
+    await waitFor(() => playerInbox.hidden.length === 1, 'скрытие фишки игрокам');
+    check('игрок узнаёт, что фишку скрыли', () => {
+      assert(playerInbox.hidden[0].tokenId === smokeTokenId, 'не та фишка');
+      assert(playerInbox.hidden[0].hidden === true, 'пришло не о скрытии');
+    });
+    check('скрытая снова помечена в списке мастера', () => {
+      const row = [...document.querySelectorAll('#tab-tokens .token-row')]
+        .find((node) => node.textContent.includes('Смоук-фишка'));
+      assert(row.classList.contains('token-row--hidden'), 'строка не помечена как скрытая');
+      assert(row.textContent.includes('Скрыта'), `подпись: ${row.textContent}`);
+    });
     playerInbox.errors.length = 0;
     playerSocket.emit('moveToken', { tokenId: smokeTokenId, x: 0.1, y: 0.1 });
     playerSocket.emit('deleteToken', { tokenId: smokeTokenId });
@@ -2337,9 +2421,11 @@
     });
     // Ровно то, что делает подтверждение в окне «Отправить лист на стол?».
     // Ждём эхо сервера, иначе снимок ДМ может сняться раньше, чем лист дойдёт.
+    // Свой лист сервер возвращает игроку как characterSheetData, а
+    // characterSheetUpdated уходит только мастеру.
     const savedEcho = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('сервер не подтвердил сохранение листа')), 10000);
-      draftSocket.on('characterSheetUpdated', (payload) => {
+      draftSocket.on('characterSheetData', (payload) => {
         if (!payload || payload.playerId !== trainingPlayerId) return;
         clearTimeout(timer);
         resolve(payload.sheet);

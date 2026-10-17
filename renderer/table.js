@@ -1551,6 +1551,15 @@
         row.appendChild(main);
 
         if (this.role === 'dm' && player.role !== 'dm') {
+          // Открыть лист — действие почаще, поэтому кнопка первая. Иначе её
+          // находили бы только по тексту: «Вывести» стояла бы впереди и
+          // перехватывала бы клик по первой кнопке в строке.
+          const open = el('button', 'btn btn--tiny', 'Открыть лист');
+          open.type = 'button';
+          open.addEventListener('click', () => {
+            if (this.handlers.onOpenSheet) this.handlers.onOpenSheet(player.playerId);
+          });
+          row.appendChild(open);
           // Вывести фишку из листа можно один раз: пока у игрока её нет,
           // кнопка стоит, а после появления фишки исчезает.
           if (!player.tokenId) {
@@ -1562,12 +1571,6 @@
             });
             row.appendChild(spawn);
           }
-          const open = el('button', 'btn btn--tiny', 'Открыть лист');
-          open.type = 'button';
-          open.addEventListener('click', () => {
-            if (this.handlers.onOpenSheet) this.handlers.onOpenSheet(player.playerId);
-          });
-          row.appendChild(open);
         }
         this.listNode.appendChild(row);
       }

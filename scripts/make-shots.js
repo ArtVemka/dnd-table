@@ -53,6 +53,25 @@ const TABLE_FIXTURE = `
     const dice = new ui.DicePanel(document.querySelector('#tab-dice'), {});
     dice.renderAll([{ playerName: 'Артём', sides: 20, result: 17, time: new Date().toISOString() }]);
 
+    // Порядок боя: список участников с итогами и выделенным ходом.
+    const initiative = new ui.InitiativePanel(document.querySelector('#tab-initiative'), {});
+    initiative.render(
+      {
+        entries: [
+          { id: 'i-1', kind: 'player', refId: 'p-1', name: 'Артём', modifier: 3, total: 21 },
+          { id: 'i-2', kind: 'token', refId: 't1', name: 'Гоблин', modifier: 2, total: 17 },
+          { id: 'i-3', kind: 'player', refId: 'p-2', name: 'Борис', modifier: 1, total: 9 },
+          { id: 'i-4', kind: 'other', refId: '', name: 'Кобольд', modifier: 0, total: null }
+        ],
+        turnId: 'i-1',
+        round: 2
+      },
+      players,
+      tokens,
+      { role: 'dm', playerId: 'dm' },
+      { 'p-1': { abilities: { dex: 16 }, initiativeMisc: 0, level: 5 } }
+    );
+
     const map = new ui.MapView(document.querySelector('#map-root'), { resolveUrl: (url) => url || '' });
     map.render({
       maps: { world: { items: [], activeId: null }, battle: { items: [], activeId: null }, sketch: { items: [], activeId: null } },
@@ -113,6 +132,14 @@ app.whenReady().then(async () => {
   await new Promise((resolve) => setTimeout(resolve, 500));
   let image = await win.webContents.capturePage();
   fs.writeFileSync(path.join(outDir, 'table-dice.png'), image.toPNG());
+
+  // Порядок боя: чей ход видно сразу, без прокрутки.
+  await win.webContents.executeJavaScript(
+    "document.querySelector('.tabs__btn[data-tab=\"initiative\"]').click(); true"
+  );
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'table-initiative.png'), image.toPNG());
 
   // Лист персонажа: самая плотная страница приложения.
   await win.webContents.executeJavaScript(`

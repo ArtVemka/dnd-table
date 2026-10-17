@@ -23,6 +23,8 @@ const LIMITS = {
   // заметно меньше карты. 2 МБ хватает даже для фото с телефона.
   maxAvatarBytes: 2 * 1024 * 1024, // 2 МБ
   maxDiceHistory: 200,
+  /** Порядок боя длиннее сорока человек не бывает. */
+  maxInitiativeEntries: 40,
   maxChatHistory: 300,
   maxTokens: 200,
   maxLevel: 20,
@@ -62,6 +64,63 @@ const DEFAULT_DM_AVATAR = 'avatar-dm.png';
 const DICE_SIDES = [4, 6, 8, 10, 12, 20, 100];
 
 const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+
+/**
+ * Порядок боя.
+ *
+ * `INITIATIVE_KINDS` — откуда взялся участник: игрок, фишка или названная
+ * вручную строка вроде «Солдат-нежить». Предел модификатора совпадает с
+ * пределом прочего бонуса к инициативе в листе (LIMITS.minInitiativeMisc),
+ * чтобы одно и то же число нельзя было протащить двумя путями.
+ */
+const INITIATIVE_KINDS = ['player', 'token', 'other'];
+const INITIATIVE = { minModifier: -20, maxModifier: 20 };
+
+/** @returns {{entries: object[], turnId: string|null, round: number}} */
+function emptyInitiative() {
+  return { entries: [], turnId: null, round: 1 };
+}
+
+function newInitiativeId() {
+  return `i-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+/**
+ * Приводит сохранённый порядок боя к виду, которым дальше пользуется сервер.
+ * Файл кампании может достаться от другой версии игры или быть правлен руками,
+ * поэтому доверять ему нельзя.
+ * @param {unknown} raw
+ * @returns {{entries: object[], turnId: string|null, round: number}}
+ */
+function normalizeInitiative(raw) {
+  const state = emptyInitiative();
+  if (!raw || typeof raw !== 'object') return state;
+  const source = /** @type {any} */ (raw);
+  const entries = Array.isArray(source.entries) ? source.entries.slice(0, LIMITS.maxInitiativeEntries) : [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || !entry.id) continue;
+    const total = Number(entry.total);
+    state.entries.push({
+      id: String(entry.id),
+      kind: INITIATIVE_KINDS.includes(entry.kind) ? entry.kind : 'other',
+      refId: sanitizeText(entry.refId, 64),
+      name: sanitizeText(entry.name, LIMITS.maxNameLength) || 'Участник',
+      modifier: clampInt(entry.modifier, INITIATIVE.minModifier, INITIATIVE.maxModifier, 0),
+      total: Number.isFinite(total) ? clampInt(total, -99, 199, 0) : null
+    });
+  }
+  // turnId === null означает «бой ещё не начат», и это состояние важно
+  // сохранить: подставлять первого участника значило бы показывать игрокам
+  // ход, которого мастер ещё не объявил.
+  const turnId = typeof source.turnId === 'string' && state.entries.some((entry) => entry.id === source.turnId)
+    ? source.turnId
+    : null;
+  return {
+    entries: state.entries,
+    turnId,
+    round: clampInt(source.round, 1, 999, 1)
+  };
+}
 
 const ABILITY_LABELS = {
   str: 'Сила',
@@ -339,6 +398,16 @@ class RoomState {
     this.grid = { enabled: false, cell: GRID.defaultCell, columns: 0 };
     /** @type {object[]} */
     this.tokens = [];
+    /**
+     * Порядок боя: кто за кем ходит.
+     *
+     * Считает его мастер, видят все. Инициатива игроков берётся из листа
+     * (Dex + прочий бонус), но модификатор присылает мастер вместе с записью:
+     * производные значения листа считает клиент, и вторая копия расчёта на
+     * сервере разошлась бы с первой.
+     * @type {{entries: object[], turnId: string|null, round: number}}
+     */
+    this.initiative = emptyInitiative();
     /** @type {object[]} */
     this.diceHistory = [];
     /** @type {object[]} */
@@ -411,7 +480,148 @@ class RoomState {
     this.chatHistory = Array.isArray(data.chatHistory)
       ? data.chatHistory.slice(-LIMITS.maxChatHistory)
       : [];
+    this.initiative = normalizeInitiative(data.initiative);
     this.adventure = normalizeAdventure(data.adventure);
+  }
+
+  /* ----------------------------------------------------------- инициатива */
+
+  /**
+   * Добавляет участника боя.
+   *
+   * Модификатор приходит от мастера: инициатива игрока считается из его листа
+   * в интерфейсе, а у фишки модификатора нет вовсе, и мастер вписывает его руками.
+   * @param {{kind: string, refId?: string, name?: string, modifier?: number}} input
+   * @returns {object|null} Новая запись или null, если добавлять нельзя.
+   */
+  addInitiativeEntry(input) {
+    const raw = input && typeof input === 'object' ? input : {};
+    const kind = INITIATIVE_KINDS.includes(raw.kind) ? raw.kind : 'other';
+    const refId = kind === 'other' ? '' : sanitizeText(raw.refId, 64);
+    if ((kind === 'player' || kind === 'token') && !refId) return null;
+    if (this.initiative.entries.length >= LIMITS.maxInitiativeEntries) return null;
+    // Один участник не должен попасть в список дважды: иначе «следующий»
+    // дважды задержится на нём, а удаление уберёт только одну запись.
+    if (refId && this.initiative.entries.some((entry) => entry.refId === refId)) return null;
+    const fallbackName = kind === 'token' ? 'Существо' : 'Участник';
+    const entry = {
+      id: newInitiativeId(),
+      kind,
+      refId,
+      name: sanitizeText(raw.name, LIMITS.maxNameLength) || fallbackName,
+      modifier: clampInt(raw.modifier, INITIATIVE.minModifier, INITIATIVE.maxModifier, 0),
+      total: null
+    };
+    this.initiative.entries.push(entry);
+    return entry;
+  }
+
+  /** @param {string} entryId */
+  removeInitiativeEntry(entryId) {
+    const id = String(entryId || '');
+    const index = this.initiative.entries.findIndex((entry) => entry.id === id);
+    if (index < 0) return false;
+    this.initiative.entries.splice(index, 1);
+    if (this.initiative.turnId === id) {
+      // Кто ходил, того больше нет: действует следующий по списку.
+      const next = this.initiative.entries[index] || this.initiative.entries[index - 1] || null;
+      this.initiative.turnId = next ? next.id : null;
+    }
+    return true;
+  }
+
+  /**
+   * Бросает инициативу и пересобирает порядок.
+   *
+   * Бросок один на всех: d20 плюс модификатор записи. Порядок считает сервер,
+   * иначе у игроков разный порядок из-за разной сортировки одинаковых чисел.
+   * @param {crypto.RandomInt} randomInt
+   * @param {string|null} [onlyId] Перебросить одного участника, а не всех.
+   */
+  rollInitiative(randomInt, onlyId) {
+    const id = onlyId ? String(onlyId) : null;
+    const entries = this.initiative.entries;
+    for (const entry of entries) {
+      if (id && entry.id !== id) continue;
+      entry.roll = randomInt(1, 20);
+      entry.total = entry.roll + entry.modifier;
+    }
+    if (!entries.some((entry) => entry.total !== null)) return;
+    // Порядок боя: больше итог — раньше. При равенстве больше модификатор, а
+    // потом порядок добавления: иначе одинаковые броски прыгали бы у игроков.
+    const order = new Map(entries.map((entry, index) => [entry.id, index]));
+    entries.sort((a, b) => {
+      if ((b.total ?? -Infinity) !== (a.total ?? -Infinity)) return (b.total ?? -Infinity) - (a.total ?? -Infinity);
+      if (b.modifier !== a.modifier) return b.modifier - a.modifier;
+      return order.get(a.id) - order.get(b.id);
+    });
+    if (!id) {
+      this.initiative.round = 1;
+      this.initiative.turnId = entries.length ? entries[0].id : null;
+    }
+  }
+
+  /** Делает активной запись, по которой кликнули. @param {string} entryId */
+  setInitiativeTurn(entryId) {
+    const id = String(entryId || '');
+    if (!this.initiative.entries.some((entry) => entry.id === id)) return false;
+    this.initiative.turnId = id;
+    return true;
+  }
+
+  /**
+   * Переход к следующему или предыдущему участнику.
+   *
+   * Переход с последнего на первого считается новым раундом: за столом
+   * считают раунды, и молчаливый возврат к началу путает.
+   * @param {number} dir 1 или -1
+   * @returns {boolean} Сдвинулся ли список.
+   */
+  stepInitiativeTurn(dir) {
+    const entries = this.initiative.entries;
+    if (!entries.length) return false;
+    const step = dir >= 0 ? 1 : -1;
+    const current = entries.findIndex((entry) => entry.id === this.initiative.turnId);
+    if (current < 0) {
+      this.initiative.turnId = entries[0].id;
+      return true;
+    }
+    const next = current + step;
+    if (next >= entries.length) {
+      this.initiative.turnId = entries[0].id;
+      this.initiative.round += 1;
+      return true;
+    }
+    if (next < 0) {
+      // Назад из первого: не крутим раунд, а просто остаёмся в текущем раунде.
+      this.initiative.turnId = entries[0].id;
+      return true;
+    }
+    this.initiative.turnId = entries[next].id;
+    return true;
+  }
+
+  /** Полный сброс боя: список пуст, первый ход никому не принадлежит. */
+  resetInitiative() {
+    this.initiative = emptyInitiative();
+  }
+
+/**
+   * Убирает участника боя вслед за исчезновением того, на кого он ссылается:
+   * удалённая фишка не должна оставаться в порядке боя.
+   * @param {string} refId
+   * @returns {number} Сколько записей убрано: вызывающий знает, что пора слать
+   *   рассылку. Раньше возврата не было, и удаление фишки молча не доходило до
+   *   игроков: в их порядке боя оставался призрак.
+   */
+  dropInitiativeByRef(refId) {
+    const id = String(refId || '');
+    if (!id) return 0;
+    let removed = 0;
+    for (const entry of [...this.initiative.entries]) {
+if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
+    }
+    return removed;
   }
 
   /**
@@ -511,6 +721,8 @@ class RoomState {
       activeMap: this.activeMap,
       grid: this.grid,
       tokens: this.tokens,
+      // Порядок боя видят все: он и есть объявление для игроков.
+      initiative: this.initiative,
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory),
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory),
       adventure: this.adventure,
@@ -671,6 +883,8 @@ class RoomState {
       // Фильтруем здесь, а не в интерфейсе: иначе фишка утекает в снимок
       // состояния, который игрок получает целиком.
       tokens: isDm ? this.tokens : this.tokens.filter((token) => !token.hidden),
+      // Порядок боя общий: мастер его объявляет, и игроки видят, кто ходит.
+      initiative: this.initiative,
       // Тайный бросок мастера хранится целиком: файл кампании и снимок для
       // мастера должны видеть число. Игроку достаётся бросок без результата —
       // иначе «слепой» бросок утечёт в состояние, которое игрок получает целиком.
@@ -700,6 +914,7 @@ module.exports = {
   DEFAULT_DM_AVATAR,
   DICE_SIDES,
   DM_PLAYER_ID,
+  INITIATIVE,
   GRID,
   LIMITS,
   MAP_TYPES,

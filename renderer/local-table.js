@@ -227,6 +227,8 @@
       activeMap: null,
       grid: { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
       tokens: [],
+      /** Порядок боя. Тренировочный стол — тоже стол: порядок нужен и здесь. */
+      initiative: { entries: [], turnId: null, round: 1 },
       diceHistory: [],
       chatHistory: [],
       /** Аватар игрока как data URL: сервера нет, файлы никто не сохраняет. */
@@ -257,6 +259,11 @@
       activeMap: state.activeMap,
       grid: state.grid,
       tokens: state.tokens.map((token) => ({ ...token })),
+      initiative: {
+        entries: state.initiative.entries.map((entry) => ({ ...entry })),
+        turnId: state.initiative.turnId,
+        round: state.initiative.round
+      },
       diceHistory: state.diceHistory.slice(),
       chatHistory: state.chatHistory.slice()
     });
@@ -282,6 +289,12 @@
     };
 
     const findToken = (tokenId) => state.tokens.find((token) => token.id === String(tokenId || ''));
+
+    const cloneInitiative = () => ({
+      entries: state.initiative.entries.map((entry) => ({ ...entry })),
+      turnId: state.initiative.turnId,
+      round: state.initiative.round
+    });
 
     const mapUpdated = (type) => {
       const slot = state.maps[type];
@@ -532,6 +545,89 @@
         state.tokens = state.tokens.filter((item) => item.id !== token.id);
         emitTo('tokenDeleted', { tokenId: token.id });
         emitTo('playersUpdate', playerList());
+      },
+
+      /* ------------------------------------------------------ порядок боя */
+
+      initiativeAdd(payload) {
+        const raw = payload || {};
+        const kind = ['player', 'token', 'other'].includes(raw.kind) ? raw.kind : 'other';
+        const refId = kind === 'other' ? '' : String(raw.refId || '');
+        if ((kind === 'player' || kind === 'token') && !refId) return;
+        if (state.initiative.entries.some((entry) => entry.refId && entry.refId === refId)) return;
+        const modifier = Math.round(Number(raw.modifier));
+        state.initiative.entries.push({
+          id: `i-local-${state.initiative.entries.length + 1}-${Date.now()}`,
+          kind,
+          refId,
+          name: sanitizeText(raw.name, DnD.LIMITS.maxNameLength) || 'Участник',
+          modifier: Number.isFinite(modifier) ? Math.max(-20, Math.min(20, modifier)) : 0,
+          total: null
+        });
+        emitTo('initiativeUpdated', cloneInitiative());
+      },
+
+      initiativeRemove(payload) {
+        const id = String((payload && payload.id) || '');
+        const index = state.initiative.entries.findIndex((entry) => entry.id === id);
+        if (index < 0) return;
+        state.initiative.entries.splice(index, 1);
+        if (state.initiative.turnId === id) {
+          const next = state.initiative.entries[index] || state.initiative.entries[index - 1];
+          state.initiative.turnId = next ? next.id : null;
+        }
+        emitTo('initiativeUpdated', cloneInitiative());
+      },
+
+      initiativeRoll(payload) {
+        if (!state.initiative.entries.length) return;
+        const onlyId = payload && payload.id ? String(payload.id) : null;
+        for (const entry of state.initiative.entries) {
+          if (onlyId && entry.id !== onlyId) continue;
+          entry.roll = randomInt(1, 20);
+          entry.total = entry.roll + entry.modifier;
+        }
+        const order = new Map(state.initiative.entries.map((entry, index) => [entry.id, index]));
+        state.initiative.entries.sort((a, b) => {
+          if ((b.total ?? -Infinity) !== (a.total ?? -Infinity)) return (b.total ?? -Infinity) - (a.total ?? -Infinity);
+          if (b.modifier !== a.modifier) return b.modifier - a.modifier;
+          return order.get(a.id) - order.get(b.id);
+        });
+        if (!onlyId) {
+          state.initiative.round = 1;
+          state.initiative.turnId = state.initiative.entries[0].id;
+        }
+        emitTo('initiativeUpdated', cloneInitiative());
+      },
+
+      initiativeTurn(payload) {
+        const id = String((payload && payload.id) || '');
+        if (!state.initiative.entries.some((entry) => entry.id === id)) return;
+        state.initiative.turnId = id;
+        emitTo('initiativeUpdated', cloneInitiative());
+      },
+
+      initiativeStep(payload) {
+        const entries = state.initiative.entries;
+        if (!entries.length) return;
+        const dir = Number(payload && payload.dir) >= 0 ? 1 : -1;
+        const current = entries.findIndex((entry) => entry.id === state.initiative.turnId);
+        if (current < 0) state.initiative.turnId = entries[0].id;
+        else if (dir > 0) {
+          const next = current + 1;
+          if (next >= entries.length) {
+            state.initiative.turnId = entries[0].id;
+            state.initiative.round += 1;
+          } else state.initiative.turnId = entries[next].id;
+        } else {
+          state.initiative.turnId = entries[current - 1] || entries[0].id;
+        }
+        emitTo('initiativeUpdated', cloneInitiative());
+      },
+
+      initiativeReset() {
+        state.initiative = { entries: [], turnId: null, round: 1 };
+        emitTo('initiativeUpdated', cloneInitiative());
       },
 
       rollDice(payload) {

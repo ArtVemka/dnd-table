@@ -1282,6 +1282,147 @@
       assert(diceHost.querySelector('.dice__last').textContent.includes('Артём бросил d12'), 'крупный результат');
     });
 
+    /* ------------------------------------------------ панель порядка боя */
+
+    const initiativeHost = document.createElement('div');
+    sandbox.appendChild(initiativeHost);
+    const initCalls = [];
+    const initiativePanel = new window.TableUI.InitiativePanel(initiativeHost, {
+      onAdd: (entry) => initCalls.push(['add', entry]),
+      onAddPlayers: () => initCalls.push(['addPlayers']),
+      onRemove: (id) => initCalls.push(['remove', id]),
+      onRoll: () => initCalls.push(['roll']),
+      onRollOne: (id) => initCalls.push(['rollOne', id]),
+      onSetTurn: (id) => initCalls.push(['turn', id]),
+      onStep: (dir) => initCalls.push(['step', dir]),
+      onReset: () => initCalls.push(['reset'])
+    });
+    const initiativePlayers = [
+      { playerId: 'p-1', name: 'Артём', role: 'player', online: true },
+      { playerId: 'p-2', name: 'Борис', role: 'player', online: true }
+    ];
+    const initiativeTokens = [{ id: 't-1', name: 'Гоблин' }];
+    // Инициатива Артёма считается из его листа: Dex 16 -> +3, прочий бонус 0.
+    const initiativeSheets = { 'p-1': { abilities: { dex: 16 }, initiativeMisc: 0, level: 5 } };
+    const emptyInitiative = { entries: [], turnId: null, round: 1 };
+    initiativePanel.render(emptyInitiative, initiativePlayers, initiativeTokens, { role: 'dm', playerId: 'dm' }, initiativeSheets);
+
+    check('пустой порядок боя объясняет, что делать', () => {
+      assert(initiativeHost.textContent.includes('Список пуст'), 'нет подсказки о пустом списке');
+      assert(initiativeHost.querySelectorAll('.initiative__row').length === 0);
+    });
+
+    check('в списке выбора есть игроки, фишки и своё имя', () => {
+      const values = [...initiativeHost.querySelectorAll('.initiative__form .select option')]
+        .map((option) => option.value);
+      assert(values.includes('player:p-1'), `нет игрока: ${values.join(', ')}`);
+      assert(values.includes('token:t-1'), `нет фишки: ${values.join(', ')}`);
+      assert(values.includes('custom'), 'нет варианта «Другое имя»');
+    });
+
+    const initSelect = initiativeHost.querySelector('.initiative__form .select');
+    initSelect.value = 'player:p-1';
+    initSelect.dispatchEvent(new Event('change'));
+    check('модификатор игрока подставляется из его листа', () => {
+      assert.strictEqual(initiativeHost.querySelector('.initiative__modifier').value, '3');
+    });
+    initiativeHost.querySelector('.initiative__form').requestSubmit();
+    check('игрок уходит в бой с модификатором из листа', () => {
+      const call = initCalls.find((item) => item[0] === 'add');
+      assert(call, 'добавление не отправлено');
+      assert.strictEqual(call[1].kind, 'player');
+      assert.strictEqual(call[1].refId, 'p-1');
+      assert.strictEqual(call[1].name, 'Артём');
+      assert.strictEqual(call[1].modifier, 3);
+    });
+
+    check('уже добавленный игрок исчезает из списка выбора', () => {
+      const taken = { entries: [{ id: 'i-1', kind: 'player', refId: 'p-1', name: 'Артём', modifier: 3, total: 18 }], turnId: null, round: 1 };
+      initiativePanel.render(taken, initiativePlayers, initiativeTokens, { role: 'dm', playerId: 'dm' }, initiativeSheets);
+      const values = [...initiativeHost.querySelectorAll('.initiative__form .select option')]
+        .map((option) => option.value);
+      assert(!values.includes('player:p-1'), 'добавленный игрок снова в списке выбора');
+      assert(values.includes('player:p-2'), 'второй игрок пропал из списка');
+    });
+
+    check('порядок боя показывает участников, итоги и чей ход', () => {
+      const state = {
+        entries: [
+          { id: 'i-1', kind: 'player', refId: 'p-1', name: 'Артём', modifier: 3, total: 18 },
+          { id: 'i-2', kind: 'token', refId: 't-1', name: 'Гоблин', modifier: 2, total: 9 },
+          { id: 'i-3', kind: 'other', refId: '', name: 'Страж', modifier: 0, total: null }
+        ],
+        turnId: 'i-1',
+        round: 2
+      };
+      initiativePanel.render(state, initiativePlayers, initiativeTokens, { role: 'dm', playerId: 'dm' }, initiativeSheets);
+      const rows = [...initiativeHost.querySelectorAll('.initiative__row')];
+      assert(rows.length === 3, `строк: ${rows.length}`);
+      assert(rows[0].classList.contains('is-current'), 'текущий ход не выделен');
+      assert(rows[1].classList.contains('is-current') === false, 'выделено несколько строк');
+      assert(rows[0].textContent.includes('Артём') && rows[0].textContent.includes('18'), `строка: ${rows[0].textContent}`);
+      assert(rows[1].textContent.includes('+2'), `модификатор: ${rows[1].textContent}`);
+      assert(rows[2].textContent.includes('—'), 'неброшенному участнику показан итог');
+      assert(initiativeHost.textContent.includes('Раунд 2'), 'раунд не показан');
+      assert(initiativeHost.textContent.includes('Ходит: Артём'), 'чей ход не показан');
+    });
+
+    check('клик по строке объявляет ход, кнопки строки убирают и перебрасывают', () => {
+      initiativeHost.querySelectorAll('.initiative__row')[1].click();
+      const turn = initCalls.find((item) => item[0] === 'turn');
+      assert(turn && turn[1] === 'i-2', `ход отправлен не туда: ${JSON.stringify(turn)}`);
+      const row = initiativeHost.querySelectorAll('.initiative__row')[1];
+      const buttons = [...row.querySelectorAll('.initiative__row-actions .btn')];
+      assert.strictEqual(buttons.length, 2, `кнопок в строке: ${buttons.length}`);
+      buttons[0].click();
+      assert(initCalls.some((item) => item[0] === 'rollOne' && item[1] === 'i-2'), 'переброс не отправлен');
+      buttons[1].click();
+      assert(initCalls.some((item) => item[0] === 'remove' && item[1] === 'i-2'), 'удаление не отправлено');
+      // Клик по кнопке не должен объявлять ход той же строки.
+      assert(!initCalls.filter((item) => item[0] === 'turn').some((item) => item[1] === 'i-2' && item[2]),
+        'клик по кнопке объявил ход');
+    });
+
+    check('игрок видит тот же порядок, но без кнопок мастера', () => {
+      const state = {
+        entries: [{ id: 'i-1', kind: 'player', refId: 'p-1', name: 'Артём', modifier: 3, total: 18 }],
+        turnId: 'i-1',
+        round: 1
+      };
+      initiativePanel.render(state, initiativePlayers, initiativeTokens, { role: 'player', playerId: 'p-2' }, {});
+      assert(initiativeHost.querySelector('.initiative__row').classList.contains('is-current'), 'игрок не видит чей ход');
+      assert.strictEqual(initiativeHost.querySelectorAll('.initiative__row-actions').length, 0, 'у игрока есть кнопки мастера');
+      assert(initiativeHost.querySelector('.initiative__form').hidden, 'у игрока видна форма добавления');
+      assert(initiativeHost.querySelector('.initiative__actions .btn--accent').hidden, 'игроку доступен бросок');
+      assert(initiativeHost.querySelector('.initiative__stepper .btn--accent').hidden, 'игрок может листать ход');
+    });
+
+    check('мастер добавляет всех игроков и чистит бой', () => {
+      initiativePanel.render(emptyInitiative, initiativePlayers, initiativeTokens, { role: 'dm', playerId: 'dm' }, initiativeSheets);
+      initiativeHost.querySelector('.initiative__actions .btn').click();
+      assert(initCalls.some((item) => item[0] === 'addPlayers'), 'добавление игроков не отправлено');
+      initiativeHost.querySelector('.initiative__actions .btn--ghost').click();
+      assert(initCalls.some((item) => item[0] === 'reset'), 'очистка боя не отправлена');
+      initiativeHost.querySelector('.initiative__stepper .btn--accent').click();
+      assert(initCalls.some((item) => item[0] === 'step' && item[1] === 1), 'переход вперёд не отправлен');
+    });
+
+    check('своё имя добавляется как отдельное существо', () => {
+      initiativePanel.render(emptyInitiative, initiativePlayers, initiativeTokens, { role: 'dm', playerId: 'dm' }, initiativeSheets);
+      const select = initiativeHost.querySelector('.initiative__form .select');
+      select.value = 'custom';
+      select.dispatchEvent(new Event('change'));
+      const customInput = initiativeHost.querySelectorAll('.initiative__form .input')[0];
+      assert(!customInput.hidden, 'поле своего имени не показалось');
+      customInput.value = 'Солдат-нежить';
+      initiativeHost.querySelector('.initiative__modifier').value = '4';
+      initiativeHost.querySelector('.initiative__form').requestSubmit();
+      const call = initCalls.filter((item) => item[0] === 'add').pop();
+      assert.strictEqual(call[1].kind, 'other');
+      assert.strictEqual(call[1].name, 'Солдат-нежить');
+      assert.strictEqual(call[1].modifier, 4);
+    });
+
     /* ------------------------------------------------ панель фишек */
 
     const tokensHost = document.createElement('div');
@@ -1794,12 +1935,18 @@
 
       rightButton.click();
       assert(layout.classList.contains('is-right-collapsed'), 'правая панель не свернулась');
-      // Считаем видимые подписи: вкладка справочника приключения появляется
-      // только после импорта, и проверка не должна ломаться на её отсутствии.
+      // Подписи вкладок при свернутой узкой панели спрятаны, иконки остаются.
+      // Вкладка справочника приключения появляется только после импорта, а
+      // вкладок со временем станет больше: считаем по содержимому, а не
+      // зашитым числом.
+      const tabButtons = [...document.querySelectorAll('.tabs__btn:not([hidden])')];
       const labels = [...document.querySelectorAll('.tabs__btn:not([hidden]) .tabs__label')];
-      assert(labels.length === 4, `видимых подписей вкладок: ${labels.length}`);
+      assert(labels.length === tabButtons.length, `подписей ${labels.length} при вкладках ${tabButtons.length}`);
       assert(labels.every((node) => getComputedStyle(node).display === 'none'), 'подписи вкладок остались видны');
-      assert(document.querySelectorAll('.tabs__icon').length === 5, 'иконки вкладок пропали');
+      assert(
+        tabButtons.every((button) => button.querySelector('.tabs__icon')),
+        'у вкладки нет иконки'
+      );
 
       document.querySelector('.tabs__btn[data-tab="dice"]').click();
       assert(!layout.classList.contains('is-right-collapsed'), 'панель не развернулась по клику на иконку');

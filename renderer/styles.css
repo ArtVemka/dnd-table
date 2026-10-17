@@ -1035,6 +1035,42 @@ code {
   border-radius: var(--radius);
   padding: 4px;
   flex-shrink: 0;
+  /* Вкладок стало шесть, а колонка узкая: подписи не влезают и начинают
+     переноситься на две строки, из-за чего панель прыгает. Справочник
+     приключения у мастера — самая редкая вкладка, поэтому у неё только
+     иконка, а остальные подписи ужимаются шрифтом. */
+  container-type: inline-size;
+}
+
+.tabs__label {
+  white-space: nowrap;
+}
+
+/* Справочник приключения: иконка с подсказкой вместо длинного слова. */
+.tabs__btn--compact .tabs__label {
+  display: none;
+}
+
+@container (max-width: 330px) {
+  /* Совсем узкое окно: оставляем только иконки, иначе подписи ломают строку. */
+  .tabs__label {
+    display: none;
+  }
+
+  .tabs__btn {
+    padding: 7px 2px;
+  }
+}
+
+@container (max-width: 460px) {
+  .tabs__btn {
+    font-size: 11.5px;
+    gap: 3px;
+  }
+
+  .tabs__icon {
+    font-size: 12px;
+  }
 }
 
 .tabs__btn {
@@ -2232,6 +2268,168 @@ code {
 .dice__row-time {
   font-size: 11px;
   color: var(--muted);
+}
+
+/* ------------------------------------------------------------- Порядок боя */
+
+.initiative__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.initiative__actions .btn {
+  flex: 1;
+  min-width: 78px;
+  font-size: 12.5px;
+  padding: 6px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.initiative__form {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.initiative__form .select {
+  flex: 1;
+  min-width: 0;
+}
+
+.initiative__form .input {
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.initiative__modifier {
+  width: 64px;
+  flex: none;
+  text-align: center;
+  font-family: var(--font-num);
+}
+
+.initiative__status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.initiative__round {
+  font-family: var(--font-title);
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+.initiative__current {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.initiative__hint {
+  color: var(--muted);
+}
+
+.initiative__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 2px;
+}
+
+.initiative__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.initiative__row:hover {
+  border-color: var(--border);
+}
+
+/* Чей ход: подсветка и золотая цифра. Игрок видит то же, что мастер. */
+.initiative__row.is-current {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.initiative__index {
+  font-family: var(--font-num);
+  font-size: 15px;
+  color: var(--muted);
+  min-width: 16px;
+  text-align: center;
+}
+
+.initiative__row.is-current .initiative__index {
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.initiative__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.initiative__total {
+  font-family: var(--font-num);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--gold);
+  min-width: 26px;
+  text-align: right;
+}
+
+.initiative__modifier {
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: var(--muted);
+  min-width: 26px;
+  text-align: right;
+}
+
+.initiative__row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.initiative__row-actions .btn {
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+.initiative__stepper {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.initiative__stepper .btn {
+  flex: 1;
+  font-size: 12.5px;
 }
 
 /* ------------------------------------------------------------- Лист персонажа */

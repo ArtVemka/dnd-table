@@ -22,6 +22,7 @@ const {
   DEFAULT_DM_AVATAR,
   DM_PLAYER_ID,
   GRID,
+  INITIATIVE,
   LIMITS,
   MAP_TYPES,
   ROLE_DM,
@@ -718,9 +719,103 @@ async function createTableServer(options) {
       const token = findToken(payload && payload.tokenId);
       if (!token) return emitError(socket, 'Фишка не найдена');
       room.tokens = room.tokens.filter((item) => item.id !== token.id);
+      // Фишка исчезла с поля, значит её нет и в порядке боя: иначе в инициативе
+      // остался бы призрак, которого никто не видит.
+      if (room.dropInitiativeByRef(token.id)) {
+        markDirty();
+        emitInitiative();
+      }
       markDirty();
       emitToken('tokenDeleted', token, { tokenId: token.id });
       broadcastPlayers();
+    });
+
+    /* ------------------------------------------------------------------ *
+     * Порядок боя
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Порядок боя объявляет мастер, видят все. Поэтому рассылка идёт всем, и
+     * игрок получает ровно то же, что мастер.
+     */
+    const emitInitiative = () => {
+      io.emit('initiativeUpdated', room.initiative);
+    };
+
+    socket.on('initiativeAdd', (payload) => {
+      if (!requireDm(socket)) return;
+      const entry = room.addInitiativeEntry(payload);
+      if (!entry) return emitError(socket, 'Такой участник боя уже есть в списке');
+      markDirty();
+      emitInitiative();
+    });
+
+    socket.on('initiativeRemove', (payload) => {
+      if (!requireDm(socket)) return;
+      if (!room.removeInitiativeEntry(payload && payload.id)) {
+        return emitError(socket, 'Участник боя не найден');
+      }
+      markDirty();
+      emitInitiative();
+    });
+
+    socket.on('initiativeRoll', (payload) => {
+      if (!requireDm(socket)) return;
+      if (!room.initiative.entries.length) return emitError(socket, 'Список боя пуст');
+      // Модификатор инициативы игрока присылает мастер из его листа: сервер
+      // производные значения листа не считает, а вторая копия расчёта
+      // разошлась бы с клиентской.
+      if (payload && payload.id) {
+        const entry = room.initiative.entries.find((item) => item.id === String(payload.id));
+        if (!entry) return emitError(socket, 'Участник боя не найден');
+        if (Number.isFinite(Number(payload.modifier))) {
+          entry.modifier = Math.max(
+            INITIATIVE.minModifier,
+            Math.min(INITIATIVE.maxModifier, Math.round(Number(payload.modifier)))
+          );
+        }
+        room.rollInitiative((min, max) => crypto.randomInt(min, max + 1), entry.id);
+      } else {
+        room.rollInitiative((min, max) => crypto.randomInt(min, max + 1));
+      }
+      markDirty();
+      emitInitiative();
+    });
+
+    socket.on('initiativeSetTotal', (payload) => {
+      if (!requireDm(socket)) return;
+      const entry = room.initiative.entries.find((item) => item.id === String(payload && payload.id));
+      if (!entry) return emitError(socket, 'Участник боя не найден');
+      const total = Math.round(Number(payload.total));
+      if (!Number.isFinite(total)) return emitError(socket, 'Итог должен быть числом');
+      entry.total = total;
+      markDirty();
+      emitInitiative();
+    });
+
+    socket.on('initiativeTurn', (payload) => {
+      if (!requireDm(socket)) return;
+      if (!room.setInitiativeTurn(payload && payload.id)) {
+        return emitError(socket, 'Участник боя не найден');
+      }
+      markDirty();
+      emitInitiative();
+    });
+
+    socket.on('initiativeStep', (payload) => {
+      if (!requireDm(socket)) return;
+      if (!room.stepInitiativeTurn(Number(payload && payload.dir))) {
+        return emitError(socket, 'Список боя пуст');
+      }
+      markDirty();
+      emitInitiative();
+    });
+
+    socket.on('initiativeReset', () => {
+      if (!requireDm(socket)) return;
+      room.resetInitiative();
+      markDirty();
+      emitInitiative();
     });
 
     /* ------------------------------------------------------------------ *

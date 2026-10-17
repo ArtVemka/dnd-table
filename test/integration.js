@@ -13,6 +13,7 @@
 const assert = require('assert');
 // Тот же модуль, что требует сервер: список настоящих костей проверяем оттуда.
 const diceModule = require('../renderer/dice.js');
+const LIMITS_MAX_INITIATIVE = 40;
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -21,7 +22,7 @@ const { io } = require('socket.io-client');
 
 const { CampaignStore } = require('../server/campaign');
 const { createTableServer } = require('../server/socket');
-const { RoomState, ROLE_DM } = require('../server/state');
+const { RoomState, ROLE_DM, ROLE_PLAYER } = require('../server/state');
 
 const HOST_KEY = 'test-host-key-0123456789';
 /** Настоящий PNG 1x1. */
@@ -1157,6 +1158,153 @@ async function main() {
     assert.ok(withDrop, 'бросок с отброшенными костями не объяснён в чате');
     assert.match(withDrop.text, /^бросил 4d6dl1: \d+ \(отброшено \d\)$/, `текст: ${withDrop.text}`);
   });
+
+  /* ------------------------------------------------------ порядок боя */
+
+  console.log('\nПорядок боя');
+  p2.log.errorMessage.length = 0;
+  emit(dm, 'initiativeAdd', { kind: 'player', refId: P1, name: 'Артём', modifier: 3 });
+  emit(dm, 'initiativeAdd', { kind: 'player', refId: P2, name: 'Борис', modifier: 1 });
+  emit(dm, 'initiativeAdd', { kind: 'other', name: 'Гоблин', modifier: 2 });
+  await waitFor(() => room.initiative.entries.length === 3, 'участники боя');
+  check('мастер добавляет участников боя', () => {
+    assert.strictEqual(room.initiative.entries.length, 3);
+    assert.strictEqual(room.initiative.entries[0].name, 'Артём');
+    assert.strictEqual(room.initiative.entries[0].modifier, 3);
+    assert.strictEqual(room.initiative.turnId, null, 'до броска ход не объявлен');
+  });
+
+  emit(dm, 'initiativeAdd', { kind: 'player', refId: P1, name: 'Артём', modifier: 3 });
+  await wait(150);
+  check('один участник не попадает в список дважды', () => {
+    assert.strictEqual(room.initiative.entries.length, 3);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'initiativeAdd', { kind: 'other', name: 'Самозванец', modifier: 0 });
+  emit(p1, 'initiativeRoll', {});
+  emit(p1, 'initiativeStep', { dir: 1 });
+  await waitFor(() => p1.log.errorMessage.length >= 3, 'игрок не управляет боем');
+  check('игрок не может вести порядок боя', () => {
+    assert.strictEqual(p1.log.errorMessage.length, 3);
+    assert.ok(p1.log.errorMessage.every((item) => item.message.includes('только ДМ')));
+    assert.strictEqual(room.initiative.entries.length, 3, 'в списке появился посторонний');
+  });
+
+  const initEvents = [];
+  const collectInitiative = (state) => initEvents.push(state);
+  p2.on('initiativeUpdated', collectInitiative);
+  // Отказы от предыдущей проверки уже накопились, а рассылка порядка боя не
+  // должна вызывать у игрока ни одной новой ошибки.
+  p1.log.errorMessage.length = 0;
+  emit(dm, 'initiativeRoll', {});
+  await waitFor(() => initEvents.length >= 1, 'бросок инициативы игроку');
+  check('бросок инициативы объявляет порядок всем, кроме игроков', () => {
+    const announced = initEvents[initEvents.length - 1];
+    assert.strictEqual(announced.entries.length, 3);
+    // Больше итог — раньше: проверяем, что порядок действительно по сумме.
+    const totals = announced.entries.map((entry) => entry.total);
+    assert.deepStrictEqual(totals, totals.slice().sort((a, b) => b - a), `порядок: ${totals}`);
+    assert.ok(announced.entries.every((entry) => entry.total >= entry.modifier + 1), 'итог меньше броска');
+    assert.ok(announced.entries.every((entry) => entry.total <= entry.modifier + 20), 'итог больше броска');
+    assert.strictEqual(announced.turnId, announced.entries[0].id, 'первым ходит лидер');
+    assert.strictEqual(announced.round, 1, 'бой начался с первого раунда');
+    assert.strictEqual(p1.log.errorMessage.length, 0, 'игрок не должен ругаться на рассылку');
+  });
+
+  initEvents.length = 0;
+  emit(dm, 'initiativeStep', { dir: 1 });
+  await waitFor(() => initEvents.length >= 1, 'переход к следующему');
+  check('ход переходит к следующему участнику', () => {
+    const state = initEvents[initEvents.length - 1];
+    assert.strictEqual(state.turnId, state.entries[1].id);
+    assert.strictEqual(state.round, 1);
+  });
+
+  emit(dm, 'initiativeStep', { dir: 1 });
+  emit(dm, 'initiativeStep', { dir: 1 });
+  await waitFor(
+    () => initEvents.length >= 3 && initEvents[initEvents.length - 1].round === 2,
+    'переход с последнего на первый'
+  );
+  check('переход с последнего на первый считается новым раундом', () => {
+    const state = initEvents[initEvents.length - 1];
+    assert.strictEqual(state.turnId, state.entries[0].id);
+    assert.strictEqual(state.round, 2, `раунд: ${state.round}`);
+  });
+
+  initEvents.length = 0;
+  emit(dm, 'initiativeTurn', { id: room.initiative.entries[2].id });
+  await waitFor(() => initEvents.length >= 1, 'объявление хода кликом по строке');
+  check('ход можно объявить кликом по строке', () => {
+    assert.strictEqual(initEvents[initEvents.length - 1].turnId, room.initiative.entries[2].id);
+  });
+
+  initEvents.length = 0;
+  emit(dm, 'initiativeRemove', { id: room.initiative.entries[2].id });
+  await waitFor(() => initEvents.length >= 1, 'убираем участника боя');
+  check('после удаления текущего ход переходит к следующему', () => {
+    const state = initEvents[initEvents.length - 1];
+    assert.strictEqual(state.entries.length, 2);
+    assert.ok(state.turnId && state.entries.some((entry) => entry.id === state.turnId),
+      `ход остался на удалённом: ${state.turnId}`);
+  });
+
+  initEvents.length = 0;
+  const doomedToken = { id: 't-init-test', name: 'Зомби', x: 0.5, y: 0.5, color: '#888', image: null, hidden: false, assignedPlayerId: null };
+  room.tokens.push(doomedToken);
+  emit(dm, 'initiativeAdd', { kind: 'token', refId: doomedToken.id, name: 'Зомби', modifier: 0 });
+  await waitFor(() => room.initiative.entries.some((entry) => entry.refId === doomedToken.id), 'фишка в бою');
+  emit(dm, 'deleteToken', { tokenId: doomedToken.id });
+  await waitFor(
+    () => initEvents.some((state) => !state.entries.some((entry) => entry.refId === doomedToken.id)),
+    'удаление фишки убирает её из боя'
+  );
+  check('удалённая фишка исчезает и из порядка боя', () => {
+    const latest = initEvents[initEvents.length - 1];
+    assert.ok(!latest.entries.some((entry) => entry.refId === doomedToken.id), 'в бою осталась удалённая фишка');
+  });
+
+  initEvents.length = 0;
+  emit(dm, 'initiativeReset', {});
+  await waitFor(() => initEvents.length >= 1, 'очистка боя');
+  check('очистка боя сбрасывает и список, и раунд', () => {
+    const state = initEvents[initEvents.length - 1];
+    assert.strictEqual(state.entries.length, 0);
+    assert.strictEqual(state.turnId, null);
+    assert.strictEqual(state.round, 1);
+  });
+  p2.off('initiativeUpdated', collectInitiative);
+
+  // Порядок боя переживает переподключение: он живёт в состоянии стола, а не
+  // в памяти окна мастера.
+  emit(dm, 'initiativeAdd', { kind: 'other', name: 'Страж', modifier: 0 });
+  emit(dm, 'initiativeRoll', {});
+  await waitFor(() => room.initiative.entries.length === 1, 'бой снова собран');
+  const dmView = room.snapshotFor({ playerId: P1, role: ROLE_DM });
+  const playerView = room.snapshotFor({ playerId: P1, role: ROLE_PLAYER });
+  check('порядок боя одинаков у мастера и игрока', () => {
+    assert.strictEqual(dmView.initiative.entries.length, 1);
+    assert.deepStrictEqual(
+      playerView.initiative.entries.map((entry) => entry.id),
+      dmView.initiative.entries.map((entry) => entry.id)
+    );
+    assert.strictEqual(playerView.initiative.round, dmView.initiative.round);
+  });
+
+  // Предел списка боя: сорок существ — это уже не бой, а толпа. Лишние должны
+  // отклоняться, иначе мастер мог бы набить список хоть тысячей записей.
+  for (let i = 0; i < LIMITS_MAX_INITIATIVE + 5; i += 1) {
+    emit(dm, 'initiativeAdd', { kind: 'other', name: `Гоблин ${i + 1}`, modifier: 0 });
+  }
+  await waitFor(() => room.initiative.entries.length === LIMITS_MAX_INITIATIVE, 'предел списка боя');
+  check('список боя ограничен сорока участниками', () => {
+    assert.strictEqual(room.initiative.entries.length, LIMITS_MAX_INITIATIVE);
+    assert.ok(dm.log.errorMessage.length > 0, 'мастер не предупреждён о лишних участниках');
+  });
+
+  emit(dm, 'initiativeReset', {});
+  await waitFor(() => room.initiative.entries.length === 0, 'бой очищен перед следующими проверками');
 
   /* --------------------------------------------------------------- чат */
 

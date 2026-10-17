@@ -10,6 +10,9 @@
 (function (global) {
   const DnD = global.DnD5e;
 
+  /** Значение списка выбора, за которым стоит свободная строка имени. */
+  const CUSTOM_PICK = 'custom';
+
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -1893,6 +1896,270 @@
   }
 
   /* ====================================================================== *
+   * Порядок боя
+   *
+   * Список ведёт мастер, видят его все: «кто за кем ходит» и есть объявление
+   * для игроков. Модификатор игрока берётся из его листа, но присылает его
+   * мастер вместе с записью: производные значения листа считает интерфейс,
+   * и вторая копия расчёта на сервере разошлась бы с первой.
+   * ==================================================================== */
+
+  class InitiativePanel {
+    constructor(root, handlers = {}) {
+      this.root = root;
+      this.handlers = handlers;
+      this.isDm = false;
+      this.players = [];
+      this.tokens = [];
+      this.sheets = {};
+      this.state = { entries: [], turnId: null, round: 1 };
+      this.build();
+    }
+
+    build() {
+      this.root.appendChild(el('div', 'panel__title', 'Порядок боя'));
+
+      this.actions = el('div', 'initiative__actions');
+      const addPlayersButton = el('button', 'btn', 'Все игроки');
+      addPlayersButton.type = 'button';
+      addPlayersButton.title = 'Добавить в бой всех игроков стола';
+      addPlayersButton.addEventListener('click', () => {
+        if (this.handlers.onAddPlayers) this.handlers.onAddPlayers();
+      });
+      this.actions.appendChild(addPlayersButton);
+      this.addPlayersButton = addPlayersButton;
+
+      this.rollButton = el('button', 'btn btn--accent', 'Бросить');
+      this.rollButton.type = 'button';
+      this.rollButton.addEventListener('click', () => {
+        if (this.handlers.onRoll) this.handlers.onRoll();
+      });
+      this.actions.appendChild(this.rollButton);
+
+      this.resetButton = el('button', 'btn btn--ghost', 'Очистить');
+      this.resetButton.type = 'button';
+      this.resetButton.addEventListener('click', () => {
+        if (this.handlers.onReset) this.handlers.onReset();
+      });
+      this.actions.appendChild(this.resetButton);
+      this.root.appendChild(this.actions);
+
+      // Кого добавлять: игроки из списка участников, фишки с поля и свободная
+      // строка для того, чего на столе нет: «Солдат-нежить».
+      const form = el('form', 'initiative__form');
+      this.pick = el('select', 'select');
+      form.appendChild(this.pick);
+
+      this.customName = el('input', 'input');
+      this.customName.type = 'text';
+      this.customName.placeholder = 'Своё имя';
+      this.customName.maxLength = DnD.LIMITS.maxNameLength;
+      this.customName.hidden = true;
+      form.appendChild(this.customName);
+
+      this.modifier = el('input', 'input initiative__modifier');
+      this.modifier.type = 'number';
+      this.modifier.min = String(-20);
+      this.modifier.max = String(20);
+      this.modifier.step = '1';
+      this.modifier.title = 'Модификатор инициативы';
+      form.appendChild(this.modifier);
+
+      const add = el('button', 'btn btn--accent', 'Добавить');
+      add.type = 'submit';
+      form.appendChild(add);
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        this.add();
+      });
+      this.pick.addEventListener('change', () => {
+        const custom = this.pick.value === CUSTOM_PICK;
+        this.customName.hidden = !custom;
+        if (custom) this.customName.focus();
+        else this.modifier.value = String(this.pickModifier());
+      });
+      this.form = form;
+      this.root.appendChild(form);
+
+      this.status = el('div', 'initiative__status');
+      this.root.appendChild(this.status);
+
+      this.list = el('div', 'initiative__list');
+      this.root.appendChild(this.list);
+
+      const stepper = el('div', 'initiative__stepper');
+      const back = el('button', 'btn btn--ghost', 'Назад');
+      back.type = 'button';
+      back.addEventListener('click', () => {
+        if (this.handlers.onStep) this.handlers.onStep(-1);
+      });
+      stepper.appendChild(back);
+      this.forward = el('button', 'btn btn--accent', 'Следующий');
+      this.forward.type = 'button';
+      this.forward.addEventListener('click', () => {
+        if (this.handlers.onStep) this.handlers.onStep(1);
+      });
+      stepper.appendChild(this.forward);
+      this.root.appendChild(stepper);
+    }
+
+    /**
+     * Модификатор выбранного игрока: инициатива из его листа считается
+     * интерфейсом, и мастеру остаётся только подтвердить число.
+     * @returns {number}
+     */
+    pickModifier() {
+      const value = this.pick.value;
+      if (!value || value === CUSTOM_PICK) return 0;
+      if (value.startsWith('player:')) {
+        const sheet = this.sheets[value.slice(7)];
+        if (!sheet) return 0;
+        return DnD.computeDerived(sheet).initiative;
+      }
+      return 0;
+    }
+
+    /** Отправляет выбранного участника в список боя. */
+    add() {
+      const value = this.pick.value;
+      const modifier = Number(this.modifier.value);
+      const payload = { modifier: Number.isFinite(modifier) ? Math.round(modifier) : 0 };
+      if (value === CUSTOM_PICK) {
+        payload.kind = 'other';
+        payload.name = this.customName.value;
+      } else if (value) {
+        const kind = value.slice(0, value.indexOf(':'));
+        payload.kind = kind;
+        payload.refId = value.slice(kind.length + 1);
+        const known = kind === 'player'
+          ? this.players.find((player) => player.playerId === payload.refId)
+          : this.tokens.find((token) => token.id === payload.refId);
+        if (!known) return;
+        payload.name = known.name;
+      } else {
+        return;
+      }
+      if (this.handlers.onAdd) this.handlers.onAdd(payload);
+      this.customName.value = '';
+    }
+
+    /**
+     * @param {{entries: object[], turnId: string|null, round: number}} state
+     * @param {object[]} players
+     * @param {object[]} tokens
+     * @param {{role: string}} viewer
+     * @param {Record<string, object>} sheets
+     */
+    render(state, players, tokens, viewer, sheets) {
+      this.state = state && Array.isArray(state.entries) ? state : { entries: [], turnId: null, round: 1 };
+      this.players = players || [];
+      this.tokens = tokens || [];
+      this.sheets = sheets || {};
+      this.isDm = Boolean(viewer && viewer.role === 'dm');
+
+      for (const button of [this.addPlayersButton, this.rollButton, this.resetButton, this.forward]) {
+        button.hidden = !this.isDm;
+      }
+      // Форму целиком, а не по кнопкам: иначе у игрока осталась бы одна
+      // кнопка «Добавить» без полей.
+      this.form.hidden = !this.isDm;
+      this.fillPick();
+      this.renderStatus();
+      this.renderList();
+    }
+
+    /** Наполняет список выбора игроками и фишками, кроме уже добавленных. */
+    fillPick() {
+      const taken = new Set(this.state.entries.map((entry) => entry.refId));
+      const previous = this.pick.value;
+      this.pick.innerHTML = '';
+      const players = this.players.filter((player) => !taken.has(player.playerId));
+      if (players.length) {
+        const group = document.createElement('optgroup');
+        group.label = 'Игроки';
+        for (const player of players) {
+          group.appendChild(el('option', null, player.name)).value = `player:${player.playerId}`;
+        }
+        this.pick.appendChild(group);
+      }
+      const tokens = this.tokens.filter((token) => !taken.has(token.id));
+      if (tokens.length) {
+        const group = document.createElement('optgroup');
+        group.label = 'Фишки';
+        for (const token of tokens) {
+          group.appendChild(el('option', null, token.name)).value = `token:${token.id}`;
+        }
+        this.pick.appendChild(group);
+      }
+      if (players.length || tokens.length) {
+        const custom = el('option', null, 'Другое имя');
+        custom.value = CUSTOM_PICK;
+        this.pick.appendChild(custom);
+      }
+      // Возвращаем прежний выбор, если он ещё доступен: мастер добавляет
+      // участников по одному, и сбрасывать выбор после каждого неудобно.
+      if (previous && [...this.pick.options].some((option) => option.value === previous)) {
+        this.pick.value = previous;
+      }
+      if (this.pick.value !== CUSTOM_PICK) this.modifier.value = String(this.pickModifier());
+    }
+
+    renderStatus() {
+      const { entries, turnId, round } = this.state;
+      const current = entries.find((entry) => entry.id === turnId);
+      this.status.innerHTML = '';
+      if (!entries.length) {
+        this.status.appendChild(el('span', 'initiative__hint', 'Список пуст: добавьте игроков и фишек'));
+        return;
+      }
+      const rolled = entries.some((entry) => entry.total !== null && entry.total !== undefined);
+      this.status.appendChild(el('span', 'initiative__round', `Раунд ${round}`));
+      this.status.appendChild(el('span', 'initiative__current',
+        current ? `Ходит: ${current.name}` : (rolled ? 'Ход не объявлен' : 'Бросьте инициативу')));
+    }
+
+    renderList() {
+      this.list.innerHTML = '';
+      const { entries, turnId } = this.state;
+      if (!entries.length) return;
+      entries.forEach((entry, index) => {
+        const row = el('div', 'initiative__row');
+        if (entry.id === turnId) row.classList.add('is-current');
+        row.appendChild(el('span', 'initiative__index', String(index + 1)));
+        row.appendChild(el('span', 'initiative__name', entry.name));
+        const total = entry.total === null || entry.total === undefined ? '—' : String(entry.total);
+        row.appendChild(el('span', 'initiative__total', total));
+        row.appendChild(el('span', 'initiative__modifier',
+          `${entry.modifier >= 0 ? '+' : ''}${entry.modifier}`));
+        if (this.isDm) {
+          const actions = el('span', 'initiative__row-actions');
+          const reroll = el('button', 'btn btn--ghost', 'Бросить');
+          reroll.type = 'button';
+          reroll.title = 'Перебросить инициативу этого участника';
+          reroll.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (this.handlers.onRollOne) this.handlers.onRollOne(entry.id);
+          });
+          actions.appendChild(reroll);
+          const remove = el('button', 'btn btn--ghost', 'Убрать');
+          remove.type = 'button';
+          remove.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (this.handlers.onRemove) this.handlers.onRemove(entry.id);
+          });
+          actions.appendChild(remove);
+          row.appendChild(actions);
+          // Клик по строке объявляет, чей ход: удобнее, чем искать кнопку.
+          row.addEventListener('click', () => {
+            if (this.handlers.onSetTurn) this.handlers.onSetTurn(entry.id);
+          });
+        }
+        this.list.appendChild(row);
+      });
+    }
+  }
+
+  /* ====================================================================== *
    * Панель фишек ДМ
    * ====================================================================== */
 
@@ -2094,5 +2361,5 @@
     }
   }
 
-  global.TableUI = { MapView, PlayersList, ChatPanel, DicePanel, TokenPanel, SketchEditor, formatTime };
+  global.TableUI = { MapView, PlayersList, ChatPanel, DicePanel, InitiativePanel, TokenPanel, SketchEditor, formatTime };
 })(window);

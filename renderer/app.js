@@ -83,6 +83,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
   let chatPanel = null;
   let dicePanel = null;
   let tokenPanel = null;
+let initiativePanel = null;
 
   /* ------------------------------------------------------------------ *
    * Утилиты
@@ -532,6 +533,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         activeMap: state.activeMap || null,
         grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
         tokens: state.tokens || [],
+        initiative: state.initiative || { entries: [], turnId: null, round: 1 },
         diceHistory: state.diceHistory || [],
         chatHistory: state.chatHistory || []
       };
@@ -572,6 +574,9 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       app.room.players = players || [];
       playersList.render(app.room.players, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
+      // Список выбора в панели боя собран из игроков и фишек: новый участник
+      // должен появиться в нём сразу.
+      renderInitiativePanel();
       mapView.render(app.room, viewer());
       updateTableHeader();
       // Мастер видит, что кто-то дошёл до стола, по списку участников.
@@ -680,6 +685,13 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       token.hidden = Boolean(hidden);
       mapView.render(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
+    });
+
+    // Порядок боя приходит и снимком, и отдельным событием: мастер меняет его
+    // кнопками, игроки получают рассылку. Рисуем одним и тем же.
+    socket.on('initiativeUpdated', (initiative) => {
+      app.room.initiative = initiative || { entries: [], turnId: null, round: 1 };
+      renderInitiativePanel();
     });
 
     socket.on('diceRollResult', (roll) => {
@@ -969,6 +981,51 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         resolveUrl: assetUrl
       });
     }
+    if (!initiativePanel) {
+      initiativePanel = new window.TableUI.InitiativePanel($('#tab-initiative'), {
+        onAdd: (entry) => emit('initiativeAdd', entry),
+        // Модификатор игрока присылает мастер из его листа: сервер производные
+        // значения листа не считает, а вторая копия расчёта разошлась бы.
+        onAddPlayers: () => addPlayersToInitiative(),
+        onRemove: (id) => emit('initiativeRemove', { id }),
+        onRoll: () => emit('initiativeRoll', {}),
+        onRollOne: (id) => emit('initiativeRoll', { id }),
+        onSetTurn: (id) => emit('initiativeTurn', { id }),
+        onStep: (dir) => emit('initiativeStep', { dir }),
+        onReset: () => emit('initiativeReset', {})
+      });
+    }
+  }
+
+  /**
+   * Добавляет в бой всех игроков стола, кроме тех, кто уже в списке.
+   *
+   * Модификатор инициативы берётся из листа игрока: производные значения
+   * считает интерфейс, и сервер получает готовое число.
+   */
+  function addPlayersToInitiative() {
+    const taken = new Set((app.room.initiative?.entries || []).map((entry) => entry.refId));
+    for (const player of app.room.players) {
+      if (player.role === 'dm' || taken.has(player.playerId)) continue;
+      const sheet = app.room.sheets ? app.room.sheets[player.playerId] : null;
+      const initiative = sheet ? window.DnD5e.computeDerived(sheet).initiative : 0;
+      emit('initiativeAdd', { kind: 'player', refId: player.playerId, name: player.name, modifier: initiative });
+    }
+  }
+
+  /**
+   * Перерисовывает порядок боя. Состояние приходит снимком и отдельным
+   * событием, поэтому функция одна на оба случая.
+   */
+  function renderInitiativePanel() {
+    if (!initiativePanel) return;
+    initiativePanel.render(
+      app.room.initiative,
+      app.room.players,
+      app.room.tokens,
+      viewer(),
+      app.room.sheets
+    );
   }
 
   /**
@@ -1013,6 +1070,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     chatPanel.renderAll(app.room.chatHistory);
     dicePanel.renderAll(app.room.diceHistory);
     tokenPanel.render(app.room.tokens, app.room.players, ctx);
+    renderInitiativePanel();
     renderAdventurePanel();
     updateTableHeader();
     updateRoleUi();
@@ -1997,7 +2055,8 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     app.room = {
       players: [], sheets: {}, maps: normalizeMapSlots(null),
       activeMap: null, grid: { enabled: false, cell: 46 },
-      tokens: [], diceHistory: [], chatHistory: []
+      tokens: [], initiative: { entries: [], turnId: null, round: 1 },
+      diceHistory: [], chatHistory: []
     };
     app.sheetShownFor = null;
     app.viewedSheetPlayerId = null;

@@ -1830,6 +1830,55 @@ code {
   touch-action: none;
 }
 
+/* Прочность на самой фишке: полоса под кружком и число вида «7/12». */
+.token__hp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px;
+  background: rgba(12, 9, 6, 0.82);
+  border-radius: 6px;
+}
+
+.token__hp-track {
+  width: 34px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.token__hp-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--success, #6fb45f);
+  transition: width var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.token--hurt .token__hp-fill {
+  background: var(--gold);
+}
+
+.token--down .token__hp-fill {
+  background: var(--danger);
+}
+
+/* Павший: кружок гаснет, но остаётся видимым — надо знать, где он лежит. */
+.token--down .token__circle {
+  filter: grayscale(0.85) brightness(0.55);
+}
+
+.token--down .token__hp-value {
+  color: var(--danger);
+}
+
+.token__hp-value {
+  font-family: var(--font-num);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
 .token__circle {
   width: var(--cell, 46px);
   height: var(--cell, 46px);
@@ -2012,6 +2061,64 @@ code {
 
 .token-form .input {
   flex: 1;
+}
+
+.token-form__hp {
+  max-width: 88px;
+  flex: none;
+  text-align: center;
+  font-family: var(--font-num);
+}
+
+/* Прочность фишки: полоса, число и кнопки урона. */
+.token-hp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.token-hp__track {
+  width: 44px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.token-hp__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--success, #6fb45f);
+  transition: width var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+/* Половина или меньше: ранен. */
+.token-hp.is-low .token-hp__fill {
+  background: var(--gold);
+}
+
+/* Ноль: павший. */
+.token-hp.is-down .token-hp__fill {
+  background: var(--danger);
+}
+
+.token-hp__value {
+  width: 48px;
+  padding: 2px 4px;
+  font-family: var(--font-num);
+  font-size: 12px;
+  text-align: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+}
+
+.token-hp__btn {
+  font-family: var(--font-num);
+  font-size: 11px;
+  padding: 2px 5px;
 }
 
 /* Массовые переключатели скрытости: конец подготовки или откат одним нажатием. */

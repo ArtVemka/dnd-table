@@ -851,6 +851,102 @@ async function main() {
   emit(dm, 'moveToken', { tokenId: 'no-such-token', x: 0.5, y: 0.5 });
   await waitFor(() => dm.log.errorMessage.find((item) => item.message.includes('Фишка не найдена')), 'несуществующая фишка');
 
+  /* -------------------------------------------------------- прочность */
+
+  console.log('\nПрочность');
+  dm.log.tokenCreated.length = 0;
+  emit(dm, 'createToken', { name: 'Гоблин', mapType: 'world', maxHp: 7 });
+  const hpToken = await waitFor(
+    () => dm.log.tokenCreated.filter((item) => item.name === 'Гоблин' && item.maxHp).pop(),
+    'фишка с прочностью'
+  );
+  check('фишка создаётся сразу с полной прочностью', () => {
+    assert.strictEqual(hpToken.maxHp, 7);
+    assert.strictEqual(hpToken.hp, 7, 'новая фишка должна быть целой');
+  });
+
+  // Пока фишка скрыта, о ней знает только мастер: показываем её игрокам,
+  // иначе проверка «игрок увидел прочность» проверяла бы не то. Показ скрытой
+  // фишки игрокам приходит как tokenCreated: для них она просто новая.
+  p2.log.tokenCreated.length = 0;
+  emit(dm, 'setTokenHidden', { tokenId: hpToken.id, hidden: false });
+  await waitFor(
+    () => p2.log.tokenCreated.find((item) => item.id === hpToken.id),
+    'фишка показана игрокам'
+  );
+
+  dm.log.tokenUpdated.length = 0;
+  p2.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenHp', { tokenId: hpToken.id, hp: 4 });
+  await waitFor(() => dm.log.tokenUpdated.find((item) => item.id === hpToken.id), 'урон нанесён');
+  check('урон уменьшает прочность и расходится всем', () => {
+    const updated = dm.log.tokenUpdated.find((item) => item.id === hpToken.id);
+    assert.strictEqual(updated.hp, 4);
+    const seenByPlayer = p2.log.tokenUpdated.find((item) => item.id === hpToken.id);
+    assert(seenByPlayer && seenByPlayer.hp === 4, 'игрок не увидел прочность после урона');
+  });
+
+  emit(dm, 'setTokenHp', { tokenId: hpToken.id, hp: -5 });
+  emit(dm, 'setTokenHp', { tokenId: hpToken.id, hp: 999 });
+  await wait(150);
+  const afterClamp = room.tokens.find((item) => item.id === hpToken.id);
+  check('прочность не уходит ниже нуля и выше максимума', () => {
+    assert.strictEqual(afterClamp.hp, 7, `прочность: ${afterClamp.hp}`);
+  });
+
+  emit(dm, 'setTokenHp', { tokenId: hpToken.id, hp: 0 });
+  await waitFor(
+    () => room.tokens.find((item) => item.id === hpToken.id).hp === 0,
+    'фишка пала в ноль'
+  );
+  check('нулевая прочность означает павшего, а не ошибку', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === hpToken.id).hp, 0);
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'createToken', { name: 'Монета', mapType: 'world' });
+  const plainToken = await waitFor(
+    () => dm.log.tokenCreated.filter((item) => item.name === 'Монета').pop(),
+    'фишка без прочности'
+  );
+  check('фишка без прочности создаётся без неё', () => {
+    assert.strictEqual(plainToken.maxHp, null);
+    assert.strictEqual(plainToken.hp, null);
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'setTokenHp', { tokenId: plainToken.id, hp: 3 });
+  await waitFor(() => dm.log.errorMessage.length > 0, 'урон по фишке без прочности');
+  check('урон по фишке без прочности отвергается с объяснением', () => {
+    assert.ok(dm.log.errorMessage.some((item) => /нет прочности/.test(item.message)), dm.log.errorMessage[0].message);
+    assert.strictEqual(room.tokens.find((item) => item.id === plainToken.id).hp, null);
+  });
+
+  dm.log.errorMessage.length = 0;
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenHp', { tokenId: hpToken.id, hp: 7 });
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пробовал править прочность');
+  check('прочность фишки меняет только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.strictEqual(room.tokens.find((item) => item.id === hpToken.id).hp, 0, 'игрок всё-таки снял урон');
+  });
+
+  // Прочность переживает перезапуск кампании. RoomState ждёт состояние в
+  // поле state — так устроена загрузка кампании из файла.
+  const hpBefore = room.tokens.find((item) => item.id === hpToken.id).hp;
+  const reloaded = new RoomState({ state: room.serialize() });
+  check('прочность сохраняется с кампанией', () => {
+    const saved = reloaded.tokens.find((item) => item.id === hpToken.id);
+    assert(saved, 'фишка не пережила сохранение');
+    assert.strictEqual(saved.maxHp, 7);
+    assert.strictEqual(saved.hp, hpBefore, `после загрузки ${saved.hp}, было ${hpBefore}`);
+  });
+
+  for (const id of [hpToken.id, plainToken.id]) {
+    emit(dm, 'deleteToken', { tokenId: id });
+  }
+  await waitFor(() => !room.tokens.some((item) => item.id === hpToken.id || item.id === plainToken.id), 'уборка фишек прочности');
+
   /* ------------------------------------------------------------- аватары */
 
   console.log('\nАватары');

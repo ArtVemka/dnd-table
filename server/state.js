@@ -27,6 +27,8 @@ const LIMITS = {
   maxInitiativeEntries: 40,
   maxChatHistory: 300,
   maxTokens: 200,
+  /** Прочность фишки: в кампании панцирь дракона из «Стимпанка» не поместится. */
+  maxTokenHp: 9999,
   maxLevel: 20,
   minAbility: 1,
   maxAbility: 30,
@@ -674,7 +676,7 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
    * @returns {object}
    */
   normalizeToken(token) {
-    return {
+    const result = {
       id: String(token.id),
       name: sanitizeText(token.name, LIMITS.maxNameLength) || 'Фишка',
       mapType: MAP_TYPES.includes(token.mapType) ? token.mapType : 'battle',
@@ -695,8 +697,39 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
       // игроки её не видят вовсе. Сервер такие фишки игрокам не отдаёт, поле
       // нужно самому мастеру, чтобы отличить заготовку от готовой.
       hidden: Boolean(token.hidden),
-      color: typeof token.color === 'string' ? token.color : TOKEN_PALETTE[0]
+      color: typeof token.color === 'string' ? token.color : TOKEN_PALETTE[0],
+      // Прочность. maxHp === null — фишка без здоровья: монетка, метка или
+      // просто шарик. У монстра и персонажа она есть.
+      maxHp: null,
+      hp: null
     };
+    if (Number.isFinite(Number(token.maxHp)) && Number(token.maxHp) > 0) {
+      result.maxHp = clampInt(token.maxHp, 1, LIMITS.maxTokenHp, 1);
+      const currentHp = Number(token.hp);
+      // Текущее здоровье не равно максимуму при загрузке, и оно не может быть
+      // вне 0..maxHp: урон ниже нуля и лечение выше максимума не приводят.
+      result.hp = Number.isFinite(currentHp) ? clampInt(currentHp, 0, result.maxHp, 0) : result.maxHp;
+    }
+    return result;
+  }
+
+  /**
+   * Меняет прочность фишки.
+   *
+   * Ноль означает павшего: такую фишку видно, но водить её незачем. Прочность
+   * ведёт мастер, а игрок правит своё здоровье в листе персонажа: две правки
+   * одного и того же числа разошлись бы, и в бою никто не понял бы, где
+   * правда.
+   * @param {object} token
+   * @param {number} value Новое здоровье.
+   * @returns {object} Обновлённая фишка.
+   */
+  setTokenHp(token, value) {
+    if (token.maxHp === null || token.maxHp === undefined) return token;
+    const next = Math.round(Number(value));
+    if (!Number.isFinite(next)) return token;
+    token.hp = clampInt(next, 0, token.maxHp, 0);
+    return token;
   }
 
   /** @returns {object} сериализуемое состояние для сохранения в кампанию */

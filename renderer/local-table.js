@@ -458,11 +458,33 @@
           // Скрывать некому: в тренировочном столе игрок один и он же мастер
           // за неимением лучшего. Поле держим, чтобы модель совпадала.
           hidden: false,
-          color: TOKEN_COLORS[state.tokens.length % TOKEN_COLORS.length]
+          color: TOKEN_COLORS[state.tokens.length % TOKEN_COLORS.length],
+          // Прочность необязательна: пустое поле у формы — метка без здоровья.
+          maxHp: Number(payload.maxHp) > 0 ? Math.min(9999, Math.round(Number(payload.maxHp))) : null
         };
+        token.hp = token.maxHp;
         state.tokens.push(token);
         emitTo('tokenCreated', { ...token });
         emitTo('playersUpdate', playerList());
+      },
+
+      setTokenHp(payload) {
+        const token = findToken(payload.tokenId);
+        if (!token) {
+          emitTo('errorMessage', { message: 'Фишка не найдена' });
+          return;
+        }
+        if (token.maxHp === null || token.maxHp === undefined) {
+          emitTo('errorMessage', { message: `У фишки «${token.name}» нет прочности` });
+          return;
+        }
+        const value = Math.round(Number(payload.hp));
+        if (!Number.isFinite(value)) {
+          emitTo('errorMessage', { message: 'Прочность должна быть числом' });
+          return;
+        }
+        token.hp = Math.max(0, Math.min(token.maxHp, value));
+        emitTo('tokenUpdated', { ...token });
       },
 
       renameToken(payload) {

@@ -1311,6 +1311,22 @@
       node.style.left = `${token.x * 100}%`;
       node.style.top = `${token.y * 100}%`;
 
+      // Прочность видна прямо на поле, а не только в списке фишек: за боком
+      // мастер смотрит на карту, а не в правую колонку.
+      if (token.maxHp) {
+        const hp = Math.max(0, Math.min(Number(token.maxHp), Number(token.hp)));
+        const hpNode = el('div', 'token__hp');
+        const track = el('div', 'token__hp-track');
+        const fill = el('div', 'token__hp-fill');
+        fill.style.width = `${Math.round((hp / Number(token.maxHp)) * 100)}%`;
+        if (hp === 0) node.classList.add('token--down');
+        else if (hp * 2 <= Number(token.maxHp)) node.classList.add('token--hurt');
+        track.appendChild(fill);
+        hpNode.appendChild(track);
+        hpNode.appendChild(el('span', 'token__hp-value', `${hp}/${token.maxHp}`));
+        node.appendChild(hpNode);
+      }
+
       const circle = el('div', 'token__circle');
       if (token.imageUrl) {
         circle.style.backgroundImage = `url("${this.resolveUrl(token.imageUrl)}")`;
@@ -2179,14 +2195,30 @@
       input.placeholder = 'Имя фишки (например, «Гоблин 1»)';
       input.maxLength = DnD.LIMITS.maxNameLength;
       form.appendChild(input);
+      // Прочность при создании: монстра заводят на стол вместе с его хитами.
+      // Пустое поле означает фишку без здоровья: метку или шарик, которому
+      // урон не наносится.
+      const hpInput = el('input', 'input token-form__hp');
+      hpInput.type = 'number';
+      hpInput.min = '1';
+      hpInput.max = String(DnD.LIMITS.maxTokenHp);
+      hpInput.placeholder = 'Прочность';
+      hpInput.title = 'Максимальная прочность фишки (необязательно)';
+      form.appendChild(hpInput);
+      this.hpInput = hpInput;
+
       const create = el('button', 'btn btn--accent', 'Создать фишку');
       create.type = 'submit';
       form.appendChild(create);
       form.addEventListener('submit', (event) => {
         event.preventDefault();
         const name = input.value.trim();
-        if (this.handlers.onCreate) this.handlers.onCreate(name);
+        const maxHp = Number(hpInput.value);
+        if (this.handlers.onCreate) {
+          this.handlers.onCreate(name, Number.isFinite(maxHp) && maxHp > 0 ? maxHp : null);
+        }
         input.value = '';
+        hpInput.value = '';
       });
       this.root.appendChild(form);
       // Фишки создаёт ДМ; игроку эта форма не нужна — кроме тренировочного
@@ -2265,6 +2297,7 @@
           row.appendChild(el('span', 'token-row__meta', DnD.MAP_LABELS[token.mapType]));
           const owner = players.find((player) => player.playerId === token.assignedPlayerId);
           row.appendChild(el('span', 'token-row__meta', owner ? `→ ${owner.name}` : 'не назначена'));
+          if (token.maxHp) row.appendChild(this.buildHpControl(token));
           const eye = el('button',
             `btn btn--tiny ${token.hidden ? 'btn--ghost' : ''}`,
             token.hidden ? 'Скрыта' : 'Видна');
@@ -2286,6 +2319,60 @@
         }
         this.list.appendChild(all);
       }
+    }
+
+    /**
+     * Прочность фишки: полоса, поле для точного числа и кнопки урона.
+     *
+     * Кнопок четыре, потому что за бой нужны разные суммы: 1 и 5 закрывают
+     * бытовой урон и кляксу, а поле нужно для ровного значения из правил.
+     * Фишка без прочности (maxHp === null) — метка, ей урон не наносится.
+     * @param {object} token
+     * @returns {HTMLElement}
+     */
+    buildHpControl(token) {
+      const max = Number(token.maxHp) || 1;
+      const hp = Number.isFinite(Number(token.hp)) ? Math.max(0, Math.min(max, Number(token.hp))) : max;
+      const box = el('div', 'token-hp');
+      const track = el('div', 'token-hp__track');
+      const fill = el('div', 'token-hp__fill');
+      fill.style.width = `${Math.round((hp / max) * 100)}%`;
+      if (hp === 0) box.classList.add('is-down');
+      else if (hp * 2 <= max) box.classList.add('is-low');
+      track.appendChild(fill);
+      box.appendChild(track);
+
+      const readout = el('input', 'token-hp__value');
+      readout.type = 'number';
+      readout.min = '0';
+      readout.max = String(max);
+      readout.value = String(hp);
+      readout.title = `Прочность фишки «${token.name}»`;
+      readout.addEventListener('change', () => {
+        const raw = readout.value.trim();
+        const value = Number(raw);
+        // Пустое поле — не ноль здоровья, а «значение не задано»: стирать
+        // монстра в ноль, случайно нажав Enter, нельзя.
+        if (raw !== '' && Number.isFinite(value) && this.handlers.onSetTokenHp) {
+          this.handlers.onSetTokenHp(token.id, Math.round(value));
+        } else {
+          readout.value = String(hp);
+        }
+      });
+      box.appendChild(readout);
+
+      for (const amount of [-5, -1, 1, 5]) {
+        const button = el('button', 'btn btn--tiny btn--ghost token-hp__btn',
+          amount > 0 ? `+${amount}` : String(amount));
+        button.type = 'button';
+        button.title = amount > 0 ? `Вылечить на ${amount}` : `Нанести урон ${-amount}`;
+        button.disabled = hp === 0 && amount < 0;
+        button.addEventListener('click', () => {
+          if (this.handlers.onSetTokenHp) this.handlers.onSetTokenHp(token.id, hp + amount);
+        });
+        box.appendChild(button);
+      }
+      return box;
     }
 
     /**

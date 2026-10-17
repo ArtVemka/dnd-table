@@ -31,7 +31,9 @@ const TABLE_FIXTURE = `
       { id: 't1', name: 'Гоблин', mapType: 'world', x: 0.28, y: 0.68, imageUrl: null, assignedPlayerId: null, color: '#c96f4a', hidden: true },
       { id: 't2', name: 'Тордин', mapType: 'world', x: 0.38, y: 0.42, imageUrl: null, assignedPlayerId: 'p-1', color: '#4a8fc9', hidden: false },
       { id: 't3', name: 'Мира', mapType: 'world', x: 0.58, y: 0.52, imageUrl: null, assignedPlayerId: 'p-2', color: '#6fb45f', hidden: false },
-      { id: 't4', name: 'Кобольд', mapType: 'world', x: 0.7, y: 0.3, imageUrl: null, assignedPlayerId: null, color: '#b08fc9', hidden: false }
+      { id: 't4', name: 'Кобольд', mapType: 'world', x: 0.7, y: 0.3, imageUrl: null, assignedPlayerId: null, color: '#b08fc9', hidden: false },
+      { id: 't5', name: 'Гоблин-вепрь', mapType: 'world', x: 0.17, y: 0.3, imageUrl: null, assignedPlayerId: null, color: '#8fb04a', hidden: false, maxHp: 12, hp: 4 },
+      { id: 't6', name: 'Зомби', mapType: 'world', x: 0.84, y: 0.74, imageUrl: null, assignedPlayerId: null, color: '#6fb45f', hidden: false, maxHp: 9, hp: 0 }
     ];
     const history = [
       { from: 'Артём', playerId: 'p-1', role: 'player', text: 'бросил d20: 17', isRoll: true, time: new Date().toISOString() },

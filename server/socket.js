@@ -535,12 +535,38 @@ async function createTableServer(options) {
         // проверяет, и только потом открывает её игрокам. Без этого инициатива
         // начиналась бы с того, что все монстры уже на виду.
         hidden: true,
-        color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length]
+        color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length],
+        // Прочность задаётся сразу при создании: монстра заводят на стол с его
+        // хитами, и дописывать их потом отдельной правкой неудобно.
+        maxHp: Number.isFinite(Number(payload && payload.maxHp)) && Number(payload.maxHp) > 0
+          ? clampInt(payload.maxHp, 1, LIMITS.maxTokenHp, 1)
+          : null
       };
+      token.hp = token.maxHp;
       room.tokens.push(token);
       markDirty();
       emitToken('tokenCreated', token);
       onLog(`Фишка «${token.name}» создана скрытой от игроков`);
+    });
+
+    /**
+     * Прочность фишки меняет только мастер.
+     *
+     * Игрок правит своё здоровье в листе персонажа. Две правки одного числа
+     * разошлись бы: в листе было бы 12, а на фишке 9, и за столом никто не
+     * понял бы, где правда. Фишка без прочности (maxHp === null) — метка,
+     * здоровья у неё нет, и сервер молча игнорирует правку.
+     */
+    socket.on('setTokenHp', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      if (token.maxHp === null || token.maxHp === undefined) {
+        return emitError(socket, `У фишки «${token.name}» нет прочности`);
+      }
+      room.setTokenHp(token, payload && payload.hp);
+      markDirty();
+      emitToken('tokenUpdated', token);
     });
 
     /**

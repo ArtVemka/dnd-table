@@ -948,14 +948,19 @@ let initiativePanel = null;
 
   if (!tokenPanel) {
       tokenPanel = new TokenPanel($('#tab-tokens'), {
-        onCreate: (name) => emit('createToken', {
+        // Прочность необязательна: пустое поле — фишка-метка без здоровья.
+        onCreate: (name, maxHp) => emit('createToken', {
         name,
+        maxHp,
         mapType: app.room.activeMap || 'battle',
         // Привязываем к открытой карте: вкладка умеет держать несколько карт,
         // и фишка должна жить на той, где её создали.
         mapId: activeMapId()
       }),
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
+        // Прочность ведёт мастер: игрок правит своё здоровье в листе, и две
+        // правки одного числа за столом разошлись бы.
+        onSetTokenHp: (tokenId, hp) => emit('setTokenHp', { tokenId, hp }),
         // Скрытость решает только мастер, но сервер всё равно проверяет.
         // Обработчики нужны и здесь, и в карте: правый клик по фишке и кнопки
         // в списке должны делать одно и то же.

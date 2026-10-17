@@ -756,6 +756,31 @@
       assert(height > 10, `высота подписи ${height}px — текст обрезан`);
     });
 
+    check('прочность видна прямо на фишке на карте', () => {
+      // Фишка t1 получает прочность здесь же: за боком мастер смотрит на
+      // карту, а не в правую колонку.
+      const withHp = MAP_STATE.tokens.map((token) => (token.id === 't1'
+        ? { ...token, maxHp: 9, hp: 3 }
+        : token));
+      mapView.render({ ...MAP_STATE, tokens: withHp }, { role: 'dm', playerId: 'dm' });
+      const token = mapHost.querySelector('[data-token-id="t1"]');
+      assert(token, 'фишка с прочностью не отрисовалась на карте');
+      const bar = token.querySelector('.token__hp');
+      assert(bar, 'у фишки с прочностью нет полосы на карте');
+      assert(bar.querySelector('.token__hp-value').textContent === '3/9',
+        `прочность на карте: ${bar.querySelector('.token__hp-value').textContent}`);
+      assert(token.classList.contains('token--hurt'), 'треть прочности не отмечено как ранение');
+      // Фишка без прочности остаётся чистой меткой.
+      assert(!mapHost.querySelector('[data-token-id="t2"] .token__hp'), 'у фишки без прочности полоса появилась');
+
+      const downed = withHp.map((item) => (item.id === 't1' ? { ...item, hp: 0 } : item));
+      mapView.render({ ...MAP_STATE, tokens: downed }, { role: 'dm', playerId: 'dm' });
+      const dead = mapHost.querySelector('[data-token-id="t1"]');
+      assert(dead.classList.contains('token--down'), 'павший не отмечен на карте');
+      assert(dead.querySelector('.token__hp-value').textContent === '0/9', 'у павшего неверная прочность');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
     const menuHost = document.createElement('div');
     sandbox.appendChild(menuHost);
     const menuActions = [];
@@ -1428,10 +1453,13 @@
     const tokensHost = document.createElement('div');
     sandbox.appendChild(tokensHost);
     let createdTokenName = null;
+    let createdTokenHp = 'не вызвано';
     let spawnedFrom = null;
+    const hpChanges = [];
     const tokenPanel = new window.TableUI.TokenPanel(tokensHost, {
-      onCreate: (name) => { createdTokenName = name; },
+      onCreate: (name, maxHp) => { createdTokenName = name; createdTokenHp = maxHp; },
       onDeleteToken: () => {},
+      onSetTokenHp: (tokenId, hp) => hpChanges.push({ tokenId, hp }),
       onSpawnFromSheet: (playerId) => { spawnedFrom = playerId; }
     });
     tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
@@ -1440,6 +1468,89 @@
       assert(tokensHost.textContent.includes('Гоблин') && tokensHost.textContent.includes('Мира'), 'нет списка фишек');
       assert(tokensHost.querySelectorAll('.token-row button').length >= 1, 'нет кнопки удаления');
     });
+
+    /* ------------------------------------------------------- прочность */
+
+    const hpTokens = TOKENS.concat([
+      { id: 't4', name: 'Гоблин-вепрь', mapType: 'world', x: 0.4, y: 0.4, imageUrl: null, assignedPlayerId: null, color: '#6fb45f', maxHp: 12, hp: 5 },
+      { id: 't5', name: 'Монета', mapType: 'world', x: 0.6, y: 0.6, imageUrl: null, assignedPlayerId: null, color: '#c96f4a', maxHp: null, hp: null }
+    ]);
+    tokenPanel.render(hpTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
+    check('у фишки с прочностью есть полоса, число и кнопки урона', () => {
+      const box = tokensHost.querySelector('.token-hp');
+      assert(box, 'нет блока прочности');
+      assert.strictEqual(box.querySelector('.token-hp__value').value, '5', `в поле: ${box.querySelector('.token-hp__value').value}`);
+      // Половина или меньше — ранен, полоса должна это показывать.
+      assert(box.classList.contains('is-low'), 'половина прочности не отмечена как ранение');
+      const fillWidth = box.querySelector('.token-hp__fill').style.width;
+      assert(fillWidth === '42%' || fillWidth === '41%', `полоса заполнена на ${fillWidth} вместо 42%`);
+      assert.strictEqual(box.querySelectorAll('.token-hp__btn').length, 4, 'кнопок урона не четыре');
+    });
+
+    check('фишка без прочности остаётся меткой без полосы', () => {
+      const rows = [...tokensHost.querySelectorAll('.token-row')];
+      const coin = rows.find((row) => row.textContent.includes('Монета'));
+      assert(!coin.querySelector('.token-hp'), 'у фишки без прочности появилась полоса');
+    });
+
+    check('кнопки урона и лечения отправляют новое значение', () => {
+      const box = tokensHost.querySelector('.token-hp');
+      const buttons = [...box.querySelectorAll('.token-hp__btn')];
+      buttons[0].click();
+      buttons[3].click();
+      assert.strictEqual(hpChanges.length, 2, `отправлено ${hpChanges.length} вместо двух`);
+      // Кнопки идут по порядку -5, -1, +1, +5 от текущих пяти.
+      assert.strictEqual(hpChanges[0].tokenId, 't4');
+      assert.strictEqual(hpChanges[0].hp, 0);
+      assert.strictEqual(hpChanges[1].tokenId, 't4');
+      assert.strictEqual(hpChanges[1].hp, 10);
+    });
+
+    check('точное значение прочности вводится руками', () => {
+      const readout = tokensHost.querySelector('.token-hp__value');
+      readout.value = '9';
+      readout.dispatchEvent(new Event('change'));
+      const last = hpChanges[hpChanges.length - 1];
+      assert.strictEqual(last.tokenId, 't4');
+      assert.strictEqual(last.hp, 9);
+    });
+
+    check('пустое поле прочности не уходит на сервер как ноль', () => {
+      const readout = tokensHost.querySelector('.token-hp__value');
+      const before = hpChanges.length;
+      readout.value = '';
+      readout.dispatchEvent(new Event('change'));
+      assert.strictEqual(hpChanges.length, before, 'пустое значение ушло на сервер');
+      assert.strictEqual(readout.value, '5', 'поле не вернуло прежнее число');
+      readout.value = 'не число';
+      readout.dispatchEvent(new Event('change'));
+      assert.strictEqual(hpChanges.length, before, 'мусор в поле ушёл на сервер');
+    });
+
+    check('форма создания берёт прочность из поля', () => {
+      const form = tokensHost.querySelector('.token-form');
+      const nameInput = form.querySelector('input[type="text"]');
+      const hpField = form.querySelector('.token-form__hp');
+      assert(hpField, 'нет поля прочности в форме');
+      nameInput.value = 'Гоблин';
+      hpField.value = '15';
+      form.requestSubmit();
+      assert.strictEqual(createdTokenName, 'Гоблин', `имя: ${createdTokenName}`);
+      assert.strictEqual(createdTokenHp, 15, 'прочность не взята из формы');
+      // Пустое поле — фишка без здоровья, а не ноль.
+      hpField.value = '';
+      nameInput.value = 'Монета';
+      form.requestSubmit();
+      assert.strictEqual(createdTokenHp, null, `прочность без ввода: ${createdTokenHp}`);
+    });
+
+    check('игроку не показывают управление прочностью чужих фишек', () => {
+      tokenPanel.render(hpTokens, PLAYERS, { role: 'player', playerId: 'p-1' });
+      assert.strictEqual(tokensHost.querySelectorAll('.token-hp').length, 0, 'игрок видит полосы прочности монстров');
+    });
+
+    // Возвращаем панель в обычное состояние: дальше идут проверки фишек.
+    tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
     check('в панели фишек есть спавн из листа для игроков без фишки', () => {
       // В PLAYERS у обоих игроков уже есть фишка, поэтому для проверки списка
       // спавна нужен отдельный состав: без фишки только у Бориса.

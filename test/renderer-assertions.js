@@ -1225,15 +1225,13 @@
       assert.strictEqual(last.options.hidden, true, 'бросок ушёл не тайным');
       diceHost.querySelector('.dice__hidden input').checked = false;
     });
-    check('тайный бросок показывается без числа', () => {
+    check('тайный бросок показывается без числа тому, кто его не видел', () => {
+      // Глазами игрока: флаг стоит, числа нет.
       dicePanel.append({
         playerName: 'Мастер',
         formula: 'd20',
         count: 1,
         sides: 20,
-        values: [17],
-        keptValues: [17],
-        droppedValues: [],
         modifier: 0,
         result: null,
         hidden: true,
@@ -1243,6 +1241,27 @@
       assert(row.textContent.includes('Мастер') && row.textContent.includes('d20'), `строка: ${row.textContent}`);
       assert(!/\d/.test(row.querySelector('.dice__row-result').textContent), 'число тайного броска показано');
       assert.strictEqual(diceHost.querySelector('.dice__last-value').textContent, '?', 'крупный результат не скрыт');
+    });
+    check('мастер видит число собственного тайного броска', () => {
+      // Те же глаза мастера: флаг тот же, но число сервер прислал. Раньше
+      // вопросительный знак ставился по флагу, и мастер не видел свой бросок.
+      dicePanel.append({
+        playerName: 'Мастер',
+        formula: '2d6+3',
+        count: 2,
+        sides: 6,
+        values: [4, 2],
+        keptValues: [4, 2],
+        droppedValues: [],
+        modifier: 3,
+        result: 9,
+        hidden: true,
+        time: new Date().toISOString()
+      });
+      const row = diceHost.querySelector('.dice__row:last-child');
+      assert(row.querySelector('.dice__row-result').textContent === '9', `строка: ${row.textContent}`);
+      assert.strictEqual(diceHost.querySelector('.dice__last-value').textContent, '9', 'крупный результат скрыт от мастера');
+      assert(!row.querySelector('.dice__row-result').classList.contains('is-secret'), 'число показано серым');
     });
     dicePanel.append({
       playerName: 'Артём', formula: '2d6+3', count: 2, sides: 6,

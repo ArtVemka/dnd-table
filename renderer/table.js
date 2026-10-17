@@ -1837,6 +1837,20 @@
       return roll.formula || `d${roll.sides}`;
     }
 
+    /**
+     * Показывать ли число броска.
+     *
+     * Решает не флаг hidden, а само наличие числа: тайный бросок приходит
+     * мастеру с флагом и с числом, и прятать его от мастера незачем. Игроку
+     * приходит тот же бросок с result: null, и это единственный признак, по
+     * которому нужно показать вопросительный знак.
+     * @param {object} roll
+     * @returns {boolean}
+     */
+    showsResult(roll) {
+      return roll.result !== null && roll.result !== undefined;
+    }
+
     /** @param {object} roll */
     append(roll) {
       this.appendRow(roll);
@@ -1844,8 +1858,9 @@
       this.last.hidden = false;
       this.last.innerHTML = '';
       this.last.appendChild(el('span', 'dice__last-text', `${roll.playerName} бросил ${this.rollLabel(roll)}:`));
-      const value = el('span', 'dice__last-value', roll.hidden ? '?' : String(roll.result));
-      if (roll.hidden) value.classList.add('is-secret');
+      const known = this.showsResult(roll);
+      const value = el('span', 'dice__last-value', known ? String(roll.result) : '?');
+      if (!known) value.classList.add('is-secret');
       value.classList.add('is-pop');
       this.last.appendChild(value);
       setTimeout(() => value.classList.remove('is-pop'), 600);
@@ -1860,10 +1875,13 @@
     appendRow(roll) {
       const row = el('div', 'dice__row');
       row.appendChild(el('span', 'dice__row-name', roll.playerName));
+      const known = this.showsResult(roll);
       const label = el('span', 'dice__row-die', this.rollLabel(roll));
-      if (roll.hidden) label.classList.add('is-secret');
+      // Отсутствие числа, а не флаг hidden: иначе мастер не видел бы числа
+      // собственного тайного броска.
+      if (!known) label.classList.add('is-secret');
       row.appendChild(label);
-      row.appendChild(el('span', 'dice__row-result', roll.hidden ? '?' : String(roll.result)));
+      row.appendChild(el('span', 'dice__row-result', known ? String(roll.result) : '?'));
       row.appendChild(el('span', 'dice__row-time', formatTime(roll.time)));
       this.history.appendChild(row);
       if (this.history.childElementCount > 200) this.history.removeChild(this.history.firstChild);

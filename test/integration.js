@@ -879,11 +879,14 @@ async function main() {
   p2.log.tokenUpdated.length = 0;
   emit(dm, 'setTokenHp', { tokenId: hpToken.id, hp: 4 });
   await waitFor(() => dm.log.tokenUpdated.find((item) => item.id === hpToken.id), 'урон нанесён');
-  check('урон уменьшает прочность и расходится всем', () => {
+  check('урон уменьшает прочность, и событие о фишке доходит до всех', () => {
     const updated = dm.log.tokenUpdated.find((item) => item.id === hpToken.id);
     assert.strictEqual(updated.hp, 4);
+    // Прочность самого монстра игроку не отдаётся, но событие о фишке он
+    // получает: иначе карта у него застыла бы на месте.
     const seenByPlayer = p2.log.tokenUpdated.find((item) => item.id === hpToken.id);
-    assert(seenByPlayer && seenByPlayer.hp === 4, 'игрок не увидел прочность после урона');
+    assert(seenByPlayer, 'игрок не получил событие о фишке вовсе');
+    assert.strictEqual(seenByPlayer.maxHp, null, `игрок увидел максимум: ${seenByPlayer.maxHp}`);
   });
 
   emit(dm, 'setTokenHp', { tokenId: hpToken.id, hp: -5 });
@@ -931,6 +934,62 @@ async function main() {
     assert.strictEqual(room.tokens.find((item) => item.id === hpToken.id).hp, 0, 'игрок всё-таки снял урон');
   });
 
+  /* ---------------------------------------- прочность монстра не для игроков */
+
+  // Гоблин выше не назначен ни одному игроку, то есть это монстр. Прочность
+  // такого ведёт мастер у себя: игроку хватает знать, что монстр на поле есть.
+  dm.log.tokenUpdated.length = 0;
+  p2.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenHp', { tokenId: hpToken.id, hp: 5 });
+  await waitFor(() => dm.log.tokenUpdated.find((item) => item.id === hpToken.id), 'мастер снял урон монстру');
+  check('игрок не получает прочность монстра ни при уроне, ни в живых событиях', () => {
+    const seenByDm = dm.log.tokenUpdated.find((item) => item.id === hpToken.id);
+    assert.strictEqual(seenByDm.hp, 5, 'мастер не видит прочность своего монстра');
+    const seenByPlayer = p2.log.tokenUpdated.find((item) => item.id === hpToken.id);
+    assert(seenByPlayer, 'игрок не получил событие о фишке вовсе');
+    assert.strictEqual(seenByPlayer.maxHp, null, `игрок увидел максимум прочности: ${seenByPlayer.maxHp}`);
+    assert.strictEqual(seenByPlayer.hp, null, `игрок увидел прочность: ${seenByPlayer.hp}`);
+    // Название и положение фишки игроку по-прежнему нужны.
+    assert.strictEqual(seenByPlayer.name, 'Гоблин');
+  });
+
+  const monsterView = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER });
+  const monsterForDm = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_DM });
+  check('в снимке состояния игроку прочности монстра нет', () => {
+    const seen = monsterView.tokens.find((item) => item.id === hpToken.id);
+    assert(seen, 'монстра нет в снимке игрока вовсе');
+    assert.strictEqual(seen.maxHp, null);
+    assert.strictEqual(seen.hp, null);
+    const dmSees = monsterForDm.tokens.find((item) => item.id === hpToken.id);
+    assert.strictEqual(dmSees.hp, 5, 'у мастера в снимке тоже нет прочности');
+  });
+
+  // Фишка игрока — исключение: её прочность видят все. Назначение делается
+  // отдельным действием: при создании фишка всегда ничья.
+  dm.log.tokenUpdated.length = 0;
+  p2.log.tokenUpdated.length = 0;
+  emit(dm, 'createToken', { name: 'Кобра', mapType: 'world', maxHp: 11 });
+  const heroToken = await waitFor(
+    () => dm.log.tokenCreated.find((item) => item.name === 'Кобра'),
+    'фишка игрока с прочностью'
+  );
+  emit(dm, 'assignTokenToPlayer', { tokenId: heroToken.id, playerId: 'p-test-0001' });
+  // Новая фишка скрыта от игроков, пока её не покажут: без этого шага игрок о
+  // ней и не узнает, а проверить тут нужно именно её прочность.
+  p2.log.tokenCreated.length = 0;
+  emit(dm, 'setTokenHidden', { tokenId: heroToken.id, hidden: false });
+  await waitFor(() => p2.log.tokenCreated.find((item) => item.id === heroToken.id), 'игрок увидел свою фишку');
+  dm.log.tokenUpdated.length = 0;
+  p2.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenHp', { tokenId: heroToken.id, hp: 4 });
+  await waitFor(() => p2.log.tokenUpdated.find((item) => item.id === heroToken.id), 'игрок увидел урон своей фишке');
+  check('прочность фишки игрока видна всем, в том числе его сопернику за столом', () => {
+    assert.strictEqual(p2.log.tokenUpdated.find((item) => item.id === heroToken.id).hp, 4);
+  });
+
+  emit(dm, 'deleteToken', { tokenId: heroToken.id });
+  await waitFor(() => !room.tokens.some((item) => item.id === heroToken.id), 'уборка фишки игрока');
+
   // Прочность переживает перезапуск кампании. RoomState ждёт состояние в
   // поле state — так устроена загрузка кампании из файла.
   const hpBefore = room.tokens.find((item) => item.id === hpToken.id).hp;
@@ -958,28 +1017,28 @@ async function main() {
     assert.strictEqual(listHas('dm').avatar, 'avatar-dm.png');
   });
   check('у игрока портрета нет, пока он его не поставил', () => {
-    assert.strictEqual(listHas(P1).avatar, null);
+    assert.strictEqual(listHas('p-test-0001').avatar, null);
   });
 
   emit(p1, 'setAvatar', { image: PNG_1PX });
-  await waitFor(() => listHas(P1).avatar, 'аватар игрока');
+  await waitFor(() => listHas('p-test-0001').avatar, 'аватар игрока');
   check('аватар игрока сохраняется как файл кампании', () => {
-    assert.match(listHas(P1).avatar, /^\/files\/.+\.png$/);
+    assert.match(listHas('p-test-0001').avatar, /^\/files\/.+\.png$/);
   });
   check('аватар виден в рассылке участников, а не только владельцу листа', () => {
     const list = dm.log.playersUpdate[dm.log.playersUpdate.length - 1];
-    const player = list.find((entry) => entry.playerId === P1);
+    const player = list.find((entry) => entry.playerId === 'p-test-0001');
     assert.ok(player && player.avatar, 'в рассылке участников аватара нет');
   });
 
   // Чужой playerId в теле сообщения игнорируется: сервер всегда берёт
   // playerId из сокета. Вместо попытки подменить чужой портрет игрок получает
   // свой собственный — и это тоже надо проверить.
-  emit(p2, 'setAvatar', { image: PNG_1PX, playerId: P1 });
-  const stolenFrom = listHas(P1).avatar;
+  emit(p2, 'setAvatar', { image: PNG_1PX, playerId: 'p-test-0001' });
+  const stolenFrom = listHas('p-test-0001').avatar;
   await waitFor(() => listHas(P2).avatar, 'аватар отправителя');
   check('подмена чужого playerId в аватаре не проходит', () => {
-    assert.strictEqual(listHas(P1).avatar, stolenFrom, 'аватар другого игрока изменился');
+    assert.strictEqual(listHas('p-test-0001').avatar, stolenFrom, 'аватар другого игрока изменился');
     assert.match(listHas(P2).avatar, /^\/files\/.+\.png$/);
   });
   // Возвращаем второго игрока без портрета: дальше его фишка выводится из листа.
@@ -993,7 +1052,7 @@ async function main() {
     'отказ по битому аватару'
   );
   check('битый аватар отвергается, прошлый остаётся', () => {
-    assert.strictEqual(listHas(P1).avatar, stolenFrom);
+    assert.strictEqual(listHas('p-test-0001').avatar, stolenFrom);
   });
 
   emit(dm, 'setAvatar', { image: PNG_1PX });
@@ -1062,7 +1121,7 @@ async function main() {
   });
 
   p1.log.errorMessage.length = 0;
-  emit(p1, 'createTokenFromSheet', { playerId: P1 });
+  emit(p1, 'createTokenFromSheet', { playerId: 'p-test-0001' });
   await waitFor(() => p1.log.errorMessage.find((item) => /только ДМ/i.test(item.message)), 'попытка игрока');
   check('игрок не может вывести фишку даже себе', () => {
     assert.strictEqual(room.tokens.filter((token) => token.assignedPlayerId === P2).length, 1);
@@ -1074,14 +1133,14 @@ async function main() {
   const rollMsg = await waitFor(() => dm.log.chatMessage[chatBefore], 'сообщение о броске');
   check('в сообщении о броске лежит аватар бросившего', () => {
     assert.strictEqual(rollMsg.isRoll, true);
-    assert.strictEqual(rollMsg.avatar, listHas(P1).avatar);
+    assert.strictEqual(rollMsg.avatar, listHas('p-test-0001').avatar);
   });
 
   // Возврат игроков к состоянию без портрета: дальше идут проверки перезапуска
   // и переподключения, которым лишние файлы в папке только мешают.
   emit(p1, 'setAvatar', { image: null });
   emit(p2, 'setAvatar', { image: null });
-  await waitFor(() => listHas(P1).avatar === null && listHas(P2).avatar === null, 'аватары убраны');
+  await waitFor(() => listHas('p-test-0001').avatar === null && listHas(P2).avatar === null, 'аватары убраны');
   // И убираем только те фишки, что завели сами: фишка первого игрока осталась
   // от проверок назначения выше, и её удаление сломало бы счётчики дальше.
   emit(dm, 'deleteToken', { tokenId: spawned.id });
@@ -1229,8 +1288,8 @@ async function main() {
 
   // Снимок состояния игроку не должен содержать чисел тайных бросков: иначе
   // игрок увидит их, переподключившись или обновив стол.
-  const playerSnapshot = room.snapshotFor({ playerId: P1, role: 'player' });
-  const dmSnapshot = room.snapshotFor({ playerId: P1, role: ROLE_DM });
+  const playerSnapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+  const dmSnapshot = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_DM });
   check('в снимке состояния игроку чисел тайных бросков нет', () => {
     const leaked = playerSnapshot.diceHistory.filter((roll) => roll.hidden && roll.result !== null);
     assert.deepStrictEqual(leaked.map((roll) => roll.formula), [], 'число тайного броска утекло');
@@ -1259,7 +1318,7 @@ async function main() {
 
   console.log('\nПорядок боя');
   p2.log.errorMessage.length = 0;
-  emit(dm, 'initiativeAdd', { kind: 'player', refId: P1, name: 'Артём', modifier: 3 });
+  emit(dm, 'initiativeAdd', { kind: 'player', refId: 'p-test-0001', name: 'Артём', modifier: 3 });
   emit(dm, 'initiativeAdd', { kind: 'player', refId: P2, name: 'Борис', modifier: 1 });
   emit(dm, 'initiativeAdd', { kind: 'other', name: 'Гоблин', modifier: 2 });
   await waitFor(() => room.initiative.entries.length === 3, 'участники боя');
@@ -1270,7 +1329,7 @@ async function main() {
     assert.strictEqual(room.initiative.turnId, null, 'до броска ход не объявлен');
   });
 
-  emit(dm, 'initiativeAdd', { kind: 'player', refId: P1, name: 'Артём', modifier: 3 });
+  emit(dm, 'initiativeAdd', { kind: 'player', refId: 'p-test-0001', name: 'Артём', modifier: 3 });
   await wait(150);
   check('один участник не попадает в список дважды', () => {
     assert.strictEqual(room.initiative.entries.length, 3);
@@ -1377,8 +1436,8 @@ async function main() {
   emit(dm, 'initiativeAdd', { kind: 'other', name: 'Страж', modifier: 0 });
   emit(dm, 'initiativeRoll', {});
   await waitFor(() => room.initiative.entries.length === 1, 'бой снова собран');
-  const dmView = room.snapshotFor({ playerId: P1, role: ROLE_DM });
-  const playerView = room.snapshotFor({ playerId: P1, role: ROLE_PLAYER });
+  const dmView = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_DM });
+  const playerView = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER });
   check('порядок боя одинаков у мастера и игрока', () => {
     assert.strictEqual(dmView.initiative.entries.length, 1);
     assert.deepStrictEqual(

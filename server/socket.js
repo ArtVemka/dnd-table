@@ -180,14 +180,26 @@ async function createTableServer(options) {
    * Скрытая фишка — заготовка мастера, и её положение, картинка и назначение
    * игрокам не показываются. Значит, и создание, и перемещение, и правка
    * уходят только мастеру. Проверять это на клиенте поздно: событие уже пришло.
+   *
+   * Видимую фишку видят все, но прочность монстров игрокам не уходит: мастер
+   * ведёт её у себя. Разсылка поэтому раздельная — одним io.emit это не
+   * выразить.
    * @param {string} event
    * @param {object} token
    * @param {object} [payload]
    */
   const emitToken = (event, token, payload) => {
     const data = payload || token;
-    if (token && token.hidden) io.to('dm-sockets').emit(event, data);
-    else io.emit(event, data);
+    if (token && token.hidden) {
+      io.to('dm-sockets').emit(event, data);
+      return;
+    }
+    io.to('dm-sockets').emit(event, data);
+    // Прочность монстров игрокам не уходит. Если передали отдельную полезную
+    // нагрузку (позиция, флаг скрытости, удаление), она очистке не подлежит, и
+    // игроку уходит ровно то, что придумал отправитель.
+    const forPlayers = payload || room.tokenForViewer(token, false);
+    io.to('table').except('dm-sockets').emit(event, forPlayers);
   };
 
   /**

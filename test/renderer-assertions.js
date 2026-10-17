@@ -781,6 +781,27 @@
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
 
+    check('прочность монстра игроку на карте не показывается', () => {
+      // Правило стола: прость ведёт мастер у себя, игроки видят только
+      // прочность фишек игроков. Проверяем именно то, что пришло клиенту:
+      // сервер присылает фишку без maxHp, и полосы на карте не появляется.
+      const state = MAP_STATE.tokens.map((token) => ({ ...token, maxHp: 9, hp: 6 }));
+      mapView.render({ ...MAP_STATE, tokens: state }, { role: 'dm', playerId: 'dm' });
+      assert(mapHost.querySelectorAll('.token__hp').length === 2, 'у мастера должны быть полосы на обеих фишках');
+
+      // То же состояние, но так, как его видит игрок: сервер убрал прочность с
+      // ничьих фишек, а у фишки игрока оставил.
+      const playerTokens = MAP_STATE.tokens.map((token) => (token.assignedPlayerId
+        ? { ...token, maxHp: 9, hp: 6 }
+        : { ...token, maxHp: null, hp: null }));
+      mapView.render({ ...MAP_STATE, tokens: playerTokens }, { role: 'player', playerId: 'p-1' });
+      const withHp = [...mapHost.querySelectorAll('.token')].filter((node) => node.querySelector('.token__hp'));
+      assert.strictEqual(withHp.length, 1, `полос у игрока: ${withHp.length}`);
+      assert.strictEqual(withHp[0].dataset.tokenId, 't2', 'полоса показана не на той фишке');
+
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
     const menuHost = document.createElement('div');
     sandbox.appendChild(menuHost);
     const menuActions = [];

@@ -794,6 +794,25 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
   }
 
   /**
+   * Фишка в том виде, в каком её видит конкретный зритель.
+   *
+   * Прочность монстров игрокам не показывается: её ведёт мастер у себя, и
+   * игрокам достаточно видеть, что монстр на поле есть и где он стоит. Фишки
+   * игроков показываем всем, включая их прочность: урон наносится открыто, и по
+   * полоске видно, кто ещё держится на ногах.
+   *
+   * Прячем на сервере, а не в интерфейсе: иначе число утекло бы в снимок
+   * состояния, который игрок получает целиком, и в историю событий фишки.
+   * @param {object} token
+   * @param {boolean} isDm
+   * @returns {object}
+   */
+  tokenForViewer(token, isDm) {
+    if (isDm || !token || !token.maxHp || token.assignedPlayerId) return token;
+    return { ...token, maxHp: null, hp: null };
+  }
+
+  /**
    * Регистрирует подключение ДМ (одна запись на весь стол).
    * @param {string} name
    * @returns {object}
@@ -915,7 +934,11 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
       // Скрытые фишки — заготовки мастера, и игрокам их видеть нельзя.
       // Фильтруем здесь, а не в интерфейсе: иначе фишка утекает в снимок
       // состояния, который игрок получает целиком.
-      tokens: isDm ? this.tokens : this.tokens.filter((token) => !token.hidden),
+      tokens: isDm
+        ? this.tokens
+        : this.tokens
+          .filter((token) => !token.hidden)
+          .map((token) => this.tokenForViewer(token, isDm)),
       // Порядок боя общий: мастер его объявляет, и игроки видят, кто ходит.
       initiative: this.initiative,
       // Тайный бросок мастера хранится целиком: файл кампании и снимок для

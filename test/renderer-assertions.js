@@ -1143,10 +1143,16 @@
     let rolledSides = null;
     const dicePanel = new window.TableUI.DicePanel(diceHost, { onRoll: (sides) => { rolledSides = sides; } });
     dicePanel.renderAll([]);
-    check('панель кубиков предлагает кости от d1 до d20', () => {
+    check('панель кубиков предлагает только настоящие кости', () => {
       const values = [...diceHost.querySelector('select').options].map((option) => option.value);
-      assert(values.length === 20, `костей: ${values.length}`);
-      assert(values[0] === '1' && values[values.length - 1] === '20', 'диапазон должен быть 1..20');
+      const expected = window.DnD5e.DICE_SIDES.map(String);
+      // Сравниваем строками: в этом стенде assert знает только strictEqual,
+      // а сравнение массивов через JSON не зависит от реализации.
+      assert.strictEqual(values.join(','), expected.join(','), 'список костей в панели');
+      // Костей на три, пять или семь граней в игре нет: если такая появится,
+      // её можно будет выбрать, но сервер бросок всё равно отклонит.
+      assert(!values.includes('3') && !values.includes('7') && !values.includes('1'),
+        `в списке есть несуществующие кости: ${values.join(', ')}`);
     });
     diceHost.querySelector('select').value = '12';
     diceHost.querySelector('.dice__controls .btn--accent').click();

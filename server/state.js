@@ -49,6 +49,17 @@ const LIMITS = {
  */
 const DEFAULT_DM_AVATAR = 'avatar-dm.png';
 
+/**
+ * Настоящие кости D&D: шесть основных плюс сотня для процентных бросков.
+ *
+ * Раньше сервер принимал любое число от 1 до 20, и можно было бросить
+ * d3 или d17 — таких костей в игре нет. Теперь список ровно тот же, что и
+ * в панели кубиков, и он продублирован в renderer/dnd5e.js: renderer не может
+ * потребовать серверный файл, а списки сверяются проверкой в
+ * test/integration.js.
+ */
+const DICE_SIDES = [4, 6, 8, 10, 12, 20, 100];
+
 const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
 
 const ABILITY_LABELS = {
@@ -682,6 +693,7 @@ module.exports = {
   ABILITY_LABELS,
   CAMPAIGN_FORMAT_VERSION,
   DEFAULT_DM_AVATAR,
+  DICE_SIDES,
   DM_PLAYER_ID,
   GRID,
   LIMITS,

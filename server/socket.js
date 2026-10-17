@@ -20,6 +20,7 @@ const { Server } = require('socket.io');
 
 const {
   DEFAULT_DM_AVATAR,
+  DICE_SIDES,
   DM_PLAYER_ID,
   GRID,
   LIMITS,
@@ -727,11 +728,13 @@ async function createTableServer(options) {
     socket.on('rollDice', (payload) => {
       if (!requireJoined(socket)) return;
       const sides = Math.round(Number(payload && payload.sides));
-      if (!Number.isFinite(sides) || sides < 1 || sides > 20) {
-        return emitError(socket, 'Доступны кости от d1 до d20');
+      // Сервер берёт тот же список костей, что и панель в интерфейсе: костей на
+      // три или семь граней в игре нет, и подсунуть их сообщением нельзя.
+      if (!Number.isFinite(sides) || !DICE_SIDES.includes(sides)) {
+        return emitError(socket, `Доступны кости ${DICE_SIDES.map((n) => `d${n}`).join(', ')}`);
       }
       // Кубик бросает сервер, а не клиент.
-      const result = sides === 1 ? 1 : crypto.randomInt(1, sides + 1);
+      const result = crypto.randomInt(1, sides + 1);
       const roll = {
         playerId: socket.data.playerId,
         playerName: socket.data.name,

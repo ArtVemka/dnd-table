@@ -536,12 +536,15 @@
 
       rollDice(payload) {
         const sides = Math.round(Number(payload.sides));
-        if (!Number.isFinite(sides) || sides < 1 || sides > 20) {
-          emitTo('errorMessage', { message: 'Доступны кости от d1 до d20' });
+        // Тот же список настоящих костей, что на настоящем столе.
+        if (!Number.isFinite(sides) || !DnD.DICE_SIDES.includes(sides)) {
+          emitTo('errorMessage', {
+            message: `Доступны кости ${DnD.DICE_SIDES.map((n) => `d${n}`).join(', ')}`
+          });
           return;
         }
         // Кубик, как и на настоящем столе, бросает «сервер», а не клиент.
-        const result = sides === 1 ? 1 : randomInt(1, sides);
+        const result = randomInt(1, sides);
         const time = new Date().toISOString();
         const roll = { playerId, playerName, sides, result, time };
         state.diceHistory.push(roll);

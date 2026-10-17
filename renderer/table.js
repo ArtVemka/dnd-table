@@ -1686,7 +1686,10 @@
 
       const controls = el('div', 'dice__controls');
       const select = el('select', 'select');
-      for (let sides = 1; sides <= 20; sides += 1) {
+      // Только настоящие кости: d4, d6, d8, d10, d12, d20 и сотня для
+      // процентных бросков. Раньше в списке стояли все двадцать, и половина
+      // вариантов в игре не встречается.
+      for (const sides of DnD.DICE_SIDES) {
         const option = el('option', null, `d${sides}`);
         option.value = String(sides);
         if (sides === 20) option.selected = true;

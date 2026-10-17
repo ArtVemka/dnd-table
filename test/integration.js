@@ -63,6 +63,20 @@ const TRACKED = [
   'diceRollResult', 'chatMessage', 'errorMessage'
 ];
 
+/**
+ * Читает список костей из исходника, где он задан литералом массива.
+ * Нужен, чтобы сверить копию списка в renderer с копией в server: они
+ * продублированы, потому что renderer не может потребовать серверный файл.
+ * @param {string} file
+ * @returns {number[]}
+ */
+function readDiceSides(file) {
+  const source = fs.readFileSync(file, 'utf8');
+  const match = source.match(/DICE_SIDES\s*=\s*\[([^\]]+)\]/);
+  if (!match) throw new Error(`в ${file} нет списка костей`);
+  return match[1].split(',').map((part) => Number(part.trim())).filter((n) => Number.isFinite(n));
+}
+
 function makeClient(port) {
   const socket = io(`http://127.0.0.1:${port}`, {
     transports: ['websocket'],
@@ -992,28 +1006,43 @@ async function main() {
     assert.ok(!Number.isNaN(Date.parse(results[0].time)));
   });
   results.length = 0;
-  for (let i = 0; i < 5; i += 1) emit(p1, 'rollDice', { sides: 1 });
-  await waitFor(() => results.length === 5, 'броски d1');
-  check('d1 всегда даёт ровно 1', () => {
-    assert.ok(results.every((roll) => roll.result === 1));
-  });
-  results.length = 0;
   emit(p1, 'rollDice', { sides: 12 });
   await waitFor(() => results.length === 1, 'бросок d12');
-  check('все кости от d1 до d20 поддерживаются', () => {
+  check('настоящие кости бросаются', () => {
     assert.strictEqual(results[0].sides, 12);
     assert.ok(results[0].result >= 1 && results[0].result <= 12);
+  });
+  results.length = 0;
+  emit(p1, 'rollDice', { sides: 100 });
+  await waitFor(() => results.length === 1, 'бросок d100');
+  check('сотня бросается для процентных проверок', () => {
+    assert.strictEqual(results[0].sides, 100);
+    assert.ok(results[0].result >= 1 && results[0].result <= 100);
   });
   p2.off('diceRollResult', collect);
 
   p1.log.errorMessage.length = 0;
-  emit(p1, 'rollDice', { sides: 21 });
-  emit(p1, 'rollDice', { sides: 0 });
+  emit(p1, 'rollDice', { sides: 3 });
+  emit(p1, 'rollDice', { sides: 7 });
+  emit(p1, 'rollDice', { sides: 1 });
   emit(dm, 'rollDice', { sides: 20 });
-  await waitFor(() => p1.log.errorMessage.length >= 2, 'отказ по костям вне d1..d20');
-  check('кости вне диапазона d1..d20 отклоняются', () => {
-    assert.strictEqual(p1.log.errorMessage.length, 2);
+  await waitFor(() => p1.log.errorMessage.length >= 3, 'отказ по несуществующим костям');
+  check('несуществующие кости отклоняются', () => {
+    assert.strictEqual(p1.log.errorMessage.length, 3);
+    assert.ok(p1.log.errorMessage.every((item) => item.message.includes('d4')),
+      `не назван список костей: ${p1.log.errorMessage[0].message}`);
   });
+  check(
+    'список костей у клиента и сервера один и тот же',
+    () => {
+      // Списки продублированы: renderer не может потребовать серверный файл.
+      // Если их разведут, панель предложит кость, которую сервер не примет.
+      const client = readDiceSides(path.join(__dirname, '..', 'renderer', 'dnd5e.js'));
+      const server = readDiceSides(path.join(__dirname, '..', 'server', 'state.js'));
+      assert.deepStrictEqual(client, [4, 6, 8, 10, 12, 20, 100], `в клиенте: ${client}`);
+      assert.deepStrictEqual(client, server, `клиент ${client}, сервер ${server}`);
+    }
+  );
   check('ДМ тоже может бросать кубики', () => {
     assert.ok(p2.log.diceRollResult.some((roll) => roll.playerName === 'Мастер'));
   });

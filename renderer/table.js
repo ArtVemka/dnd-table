@@ -1630,6 +1630,30 @@
 
     build() {
       this.root.appendChild(el('div', 'panel__title', 'Чат стола'));
+
+      // Поиск по ленте. За столом правило всплывает спустя час, а найти его в
+      // истории можно только прокруткой. Ищем по видимому тексту сообщения и
+      // по имени автора: «что говорил Мастер про ловушки» начинается с имени.
+      const search = el('div', 'chat__search');
+      const searchInput = el('input', 'input chat__search-input');
+      searchInput.type = 'search';
+      searchInput.placeholder = 'Поиск по чату';
+      searchInput.maxLength = DnD.LIMITS.maxChatLength;
+      searchInput.autocomplete = 'off';
+      this.searchInput = searchInput;
+      search.appendChild(searchInput);
+      const counter = el('span', 'chat__search-count', '');
+      this.searchCounter = counter;
+      search.appendChild(counter);
+      const clear = el('button', 'btn btn--ghost btn--tiny', '✕');
+      clear.type = 'button';
+      clear.title = 'Сбросить поиск';
+      clear.hidden = true;
+      clear.addEventListener('click', () => this.setQuery(''));
+      this.searchClear = clear;
+      search.appendChild(clear);
+      this.root.appendChild(search);
+
       const log = el('div', 'chat__log');
       this.log = log;
       this.root.appendChild(log);
@@ -1652,12 +1676,66 @@
         input.value = '';
       });
       this.root.appendChild(form);
+
+      // Поиск живёт только пока открыт чат: иначе он просит символы в фоне.
+      let searchTimer = null;
+      searchInput.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        // Каждое нажатие перебирает всю ленту, а она бывает на триста сообщений.
+        // Ждём паузу, чтобы не дёргать перерисовку на каждой букве.
+        searchTimer = setTimeout(() => this.setQuery(searchInput.value), 120);
+      });
+      searchInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && searchInput.value) {
+          event.preventDefault();
+          this.setQuery('');
+          searchInput.value = '';
+        }
+      });
     }
 
-    /** @param {object[]} history */
-    renderAll(history) {
+    /**
+     * Подсвечивает в ленте сообщения, где встречается запрос.
+     *
+     * Не скрываем остальные: правило почти всегда находят в контексте разговора,
+     * и пустая лента из двух строк ничего не объясняет. Счётчик показывает,
+     * сколько найдено, чтобы было видно, что запрос сработал.
+     * @param {string} value
+     */
+    setQuery(value) {
+      const query = String(value || '').trim().toLowerCase();
+      this.query = query;
+      const rows = [...this.log.querySelectorAll('.chat__msg')];
+      let found = 0;
+      for (const row of rows) {
+        // Текст сообщения лежит в последнем узле строки, автор — в шапке.
+        // Смотрим всю строку целиком: поиск по имени автора и по слову внутри
+        // сообщения должен находиться одинаково.
+        const haystack = row.textContent.toLowerCase();
+        const hit = Boolean(query) && haystack.includes(query);
+        row.classList.toggle('is-hit', hit);
+        row.classList.toggle('is-miss', Boolean(query) && !hit);
+        if (hit) found += 1;
+      }
+      if (this.searchCounter) {
+        this.searchCounter.textContent = query ? `${found} найдено` : '';
+      }
+      if (this.searchClear) this.searchClear.hidden = !query;
+      // Контроллер держит запрос: снимок стола может прийти в любой момент, и
+      // подсветка должна восстановиться вместе с лентой.
+      if (this.handlers.onQuery) this.handlers.onQuery(query);
+    }
+
+    /**
+     * @param {object[]} history
+     * @param {string} [query] Запрос поиска: снимок стола приходит вместе с
+     *   историей, и иначе подсветка молча пропала бы после переподключения.
+     */
+    renderAll(history, query) {
       this.log.innerHTML = '';
       for (const message of history) this.append(message, false);
+      if (this.searchInput && query !== undefined) this.searchInput.value = query;
+      this.setQuery(query !== undefined ? query : (this.searchInput ? this.searchInput.value : ''));
       this.scrollToEnd();
     }
 
@@ -1681,6 +1759,9 @@
       row.appendChild(el('div', 'chat__text', message.isRoll ? `🎲 ${message.text}` : message.text));
       this.log.appendChild(row);
       if (this.log.childElementCount > 300) this.log.removeChild(this.log.firstChild);
+      // Новое сообщение должно попасть под текущий запрос: чат идёт во время
+      // поиска, и иначе находка молча переставала бы совпадать с лентой.
+      if (this.query) this.setQuery(this.query);
       if (scroll) this.scrollToEnd();
     }
 

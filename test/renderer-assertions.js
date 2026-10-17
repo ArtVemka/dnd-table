@@ -1195,6 +1195,72 @@
       assert(chatHost.querySelector('.chat__time').textContent.length >= 4, 'время');
       assert(chatHost.querySelector('.chat__text').textContent === 'Привет, стол!', 'текст');
     });
+
+    /* --------------------------------------------------------- поиск по чату */
+
+    const chatHistory = [
+      { from: 'Артём', role: 'player', text: 'Привет, стол!', time: '2026-01-01T10:00:00Z' },
+      { from: 'Мира', playerId: 'p-9', role: 'player', avatar: '/files/mira.png', text: 'бросил d20: 17', isRoll: true, time: '2026-01-01T10:01:00Z' },
+      { from: 'Мастер', role: 'dm', text: 'Ловушка на двери: проверка Ловкости', time: '2026-01-01T10:02:00Z' },
+      { from: 'Борис', role: 'player', text: 'Пробую тихо', time: '2026-01-01T10:03:00Z' }
+    ];
+    let chatQuerySeen = null;
+    const searchPanel = new window.TableUI.ChatPanel(document.createElement('div'), {
+      onQuery: (value) => { chatQuerySeen = value; }
+    });
+    sandbox.appendChild(searchPanel.root);
+    searchPanel.renderAll(chatHistory);
+
+    check('поиск находит сообщения и по тексту, и по имени автора', () => {
+      searchPanel.setQuery('ловушка');
+      let hits = [...searchPanel.root.querySelectorAll('.chat__msg.is-hit')];
+      assert.strictEqual(hits.length, 1, `найдено по слову: ${hits.length}`);
+      assert(hits[0].textContent.includes('Мастер'), 'нашлось не то сообщение');
+      // Имя автора тоже ищется: за столом начинают с «что говорил Мастер».
+      searchPanel.setQuery('мастер');
+      hits = [...searchPanel.root.querySelectorAll('.chat__msg.is-hit')];
+      assert.strictEqual(hits.length, 1, `найдено по имени: ${hits.length}`);
+      assert.strictEqual(chatQuerySeen, 'мастер', 'контроллер не узнал о запросе');
+    });
+
+    check('поиск не прячет ленту, а приглушает несовпавшие строки', () => {
+      searchPanel.setQuery('ловушка');
+      const misses = [...searchPanel.root.querySelectorAll('.chat__msg.is-miss')];
+      assert.strictEqual(misses.length, 3, `приглушено строк: ${misses.length}`);
+      // Спрятать остальные можно было бы, но правило ищут в контексте разговора.
+      assert.strictEqual(searchPanel.root.querySelectorAll('.chat__msg').length, 4, 'лента уменьшилась');
+      const counter = searchPanel.root.querySelector('.chat__search-count');
+      assert(counter.textContent.includes('1'), `счётчик: ${counter.textContent}`);
+    });
+
+    check('поиск не зависит от регистра и лишних пробелов', () => {
+      searchPanel.setQuery('  ЛОВУШКА ');
+      assert.strictEqual(searchPanel.root.querySelectorAll('.chat__msg.is-hit').length, 1, 'регистр помешал');
+      searchPanel.setQuery('');
+      assert.strictEqual(searchPanel.root.querySelectorAll('.chat__msg.is-hit').length, 0, 'подсветка осталась');
+      assert.strictEqual(searchPanel.root.querySelectorAll('.chat__msg.is-miss').length, 0, 'лента осталась приглушённой');
+      assert(searchPanel.root.querySelector('.chat__search-count').textContent === '', 'счётчик не очищен');
+    });
+
+    check('снимок стола восстанавливает поиск, а Escape его сбрасывает', () => {
+      searchPanel.renderAll(chatHistory, 'тихо');
+      const input = searchPanel.root.querySelector('.chat__search-input');
+      assert.strictEqual(input.value, 'тихо', 'поле поиска не восстановило запрос');
+      assert.strictEqual(searchPanel.root.querySelectorAll('.chat__msg.is-hit').length, 1, 'подсветка не восстановилась');
+      input.value = 'ловушка';
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      assert.strictEqual(input.value, '', 'Escape не очистил поле');
+      assert.strictEqual(searchPanel.root.querySelectorAll('.chat__msg.is-hit').length, 0, 'подсветка не снята');
+    });
+
+    check('новое сообщение во время поиска попадает под тот же запрос', () => {
+      searchPanel.renderAll(chatHistory, 'ловушка');
+      searchPanel.append({
+        from: 'Мастер', role: 'dm', text: 'Ещё одна ловушка у колодца', time: '2026-01-01T10:04:00Z'
+      });
+      assert.strictEqual(searchPanel.root.querySelectorAll('.chat__msg.is-hit').length, 2,
+        'новое сообщение не попало под запрос');
+    });
     check('аватар стоит у броска и не стоит у обычной реплики', () => {
       const rows = [...chatHost.querySelectorAll('.chat__msg')];
       assert(rows.length === 2, `сообщений в чате: ${rows.length}`);

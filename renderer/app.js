@@ -40,6 +40,8 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     socket: null,
     role: null,
     playerId: null,
+    /** Запрос поиска по чату: переживает переподключение вместе со снимком. */
+    chatQuery: '',
     /** Справочник импортированного приключения; приходит только мастеру. */
     adventure: null,
     room: {
@@ -934,6 +936,9 @@ let chosenSheetId = null;
     if (!chatPanel) {
       chatPanel = new ChatPanel($('#tab-chat'), {
         onSend: (text) => emit('chatMessage', { text }),
+        // Запрос поиска живёт в контроллере, а не в панели: снимок стола
+        // приходит при переподключении, и подсветка должна восстановиться.
+        onQuery: (value) => { app.chatQuery = value; },
         resolveUrl: assetUrl
       });
     }
@@ -1083,7 +1088,7 @@ let chosenSheetId = null;
     const ctx = viewer();
     playersList.render(app.room.players, ctx);
     mapView.render(app.room, ctx);
-    chatPanel.renderAll(app.room.chatHistory);
+    chatPanel.renderAll(app.room.chatHistory, app.chatQuery);
     dicePanel.renderAll(app.room.diceHistory);
     tokenPanel.render(app.room.tokens, app.room.players, ctx);
     renderInitiativePanel();

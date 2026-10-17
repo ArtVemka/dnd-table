@@ -2314,6 +2314,41 @@ code {
 
 /* --------------------------------------------------------------- Чат */
 
+.chat__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chat__search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  font-size: 12.5px;
+}
+
+/* Счётчик найденного: без него непонятно, сработал поиск или нет. */
+.chat__search-count {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex: none;
+}
+
+/* Найденное подсвечиваем, ненайденное приглушаем: лента остаётся читаемой,
+   но пролистывать её больше не нужно. Приглушение, а не скрытие, потому что
+   правило почти всегда находят в контексте разговора. */
+.chat__msg.is-hit {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.chat__msg.is-miss {
+  opacity: 0.35;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
 .chat__log {
   flex: 1;
   min-height: 0;

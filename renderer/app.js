@@ -864,6 +864,8 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         },
         onAssignToken: (tokenId, playerId) => emit('assignTokenToPlayer', { tokenId, playerId }),
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
+        // Тот же спавн, что и в панели участников: одно действие на оба места.
+        onSpawnFromSheet: spawnTokenFromSheet,
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
           if (result.canceled) return;
@@ -879,11 +881,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         // ДМ открывает лист игрока прямо из списка участников.
         onOpenSheet: (playerId) => openPlayerSheet(playerId),
         // И выводит его фишку на поле одним нажатием, прямо из листа.
-        onSpawnToken: (playerId) => emit('createTokenFromSheet', {
-          playerId,
-          mapType: app.room.activeMap || 'battle',
-          mapId: activeMapId()
-        }),
+        onSpawnToken: spawnTokenFromSheet,
         resolveUrl: assetUrl
       });
     }
@@ -958,6 +956,23 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
   function ownAvatar() {
     const me = app.room.players.find((player) => player.playerId === app.playerId);
     return me ? me.avatar || '' : '';
+  }
+
+  /**
+   * Выводит фишку игрока на текущую карту из его листа: с именем персонажа,
+   * аватаром и сразу назначением.
+   *
+   * Одно действие на два места: кнопка у игрока в панели участников и список
+   * спавна в панели фишек. Разъехались бы они иначе: мастер в одной кнопке
+   * выведет фишку, а в другой получит ошибку.
+   * @param {string} playerId
+   */
+  function spawnTokenFromSheet(playerId) {
+    emit('createTokenFromSheet', {
+      playerId,
+      mapType: app.room.activeMap || 'battle',
+      mapId: activeMapId()
+    });
   }
 
   function renderAll() {

@@ -1009,18 +1009,18 @@
         .filter((button) => button.textContent === 'Открыть лист');
       assert(buttons.length === 2, `кнопок «Открыть лист»: ${buttons.length}`);
     });
-    check('у ДМ есть «Фишка на поле» только у игроков без фишки', () => {
+    check('у ДМ есть кнопка вывода фишки только у игроков без фишки', () => {
       const buttons = [...playersHost.querySelectorAll('.player-row button')]
-        .filter((button) => button.textContent === 'Фишка на поле');
-      assert(buttons.length === 1, `кнопок «Фишка на поле»: ${buttons.length}`);
+        .filter((button) => button.textContent === 'Вывести');
+      assert(buttons.length === 1, `кнопок «Вывести»: ${buttons.length}`);
       // У Артёма фишка уже есть — вторую ему не выводят, кнопки быть не должно.
       const withToken = [...playersHost.querySelectorAll('.player-row')]
         .find((row) => row.textContent.includes('Артём'));
-      assert(!withToken.textContent.includes('Фишка на поле'), 'кнопка есть у игрока с фишкой');
+      assert(!withToken.textContent.includes('Вывести'), 'кнопка есть у игрока с фишкой');
       // И у мастера такой кнопки нет вовсе: фишка из листа ему не полагается.
       const dmRow = [...playersHost.querySelectorAll('.player-row')]
         .find((row) => row.textContent.includes('Мастер'));
-      assert(!dmRow.textContent.includes('Фишка на поле'), 'у мастера есть кнопка вывода фишки');
+      assert(!dmRow.textContent.includes('Вывести'), 'у мастера есть кнопка вывода фишки');
     });
     check('в списке участников портреты, а у кого портрета нет — буква имени', () => {
       const rows = [...playersHost.querySelectorAll('.player-row')];
@@ -1040,9 +1040,9 @@
       assert.strictEqual(arthurAvatar.textContent, 'А', `буква-заглушка: ${arthurAvatar.textContent}`);
     });
     playersList.render(PLAYERS, { role: 'player', playerId: 'p-1' });
-    check('у игрока нет кнопок «Открыть лист» и «Фишка на поле»', () => {
+    check('у игрока нет кнопок «Открыть лист» и «Вывести»', () => {
       assert(!playersHost.textContent.includes('Открыть лист'), 'игрок видит кнопку просмотра листов');
-      assert(!playersHost.textContent.includes('Фишка на поле'), 'игрок видит кнопку вывода фишки');
+      assert(!playersHost.textContent.includes('Вывести'), 'игрок видит кнопку вывода фишки');
     });
 
     /* ------------------------------------------------ чат и кубики */
@@ -1111,15 +1111,52 @@
     const tokensHost = document.createElement('div');
     sandbox.appendChild(tokensHost);
     let createdTokenName = null;
+    let spawnedFrom = null;
     const tokenPanel = new window.TableUI.TokenPanel(tokensHost, {
       onCreate: (name) => { createdTokenName = name; },
-      onDeleteToken: () => {}
+      onDeleteToken: () => {},
+      onSpawnFromSheet: (playerId) => { spawnedFrom = playerId; }
     });
     tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
     check('панель фишек ДМ: форма создания и список всех фишек', () => {
       assert(tokensHost.querySelector('.token-form'), 'нет формы создания');
       assert(tokensHost.textContent.includes('Гоблин') && tokensHost.textContent.includes('Мира'), 'нет списка фишек');
       assert(tokensHost.querySelectorAll('.token-row button').length >= 1, 'нет кнопки удаления');
+    });
+    check('в панели фишек есть спавн из листа для игроков без фишки', () => {
+      const block = tokensHost.querySelector('.token-spawn');
+      assert(block, 'нет блока спавна');
+      assert(!block.hidden, 'блок спавна скрыт у мастера');
+      assert(block.textContent.includes('Вывести из листа'), `нет заголовка: ${block.textContent}`);
+      // Артёму фишка уже назначена, поэтому его в списке спавна нет.
+      assert(!block.textContent.includes('Артём'), 'игрок с фишкой попал в список спавна');
+      const rows = [...block.querySelectorAll('.token-spawn__row')];
+      assert(rows.length === 1, `строк спавна: ${rows.length}`);
+      assert(rows[0].textContent.includes('Борис'), `в строке не Борис: ${rows[0].textContent}`);
+      assert(rows[0].querySelector('.token-spawn__meta').textContent.includes('оффлайн'),
+        `нет отметки о листе: ${rows[0].textContent}`);
+    });
+    check('кнопка «Вывести» в панели фишек отдаёт id игрока', () => {
+      tokensHost.querySelector('.token-spawn__row button').click();
+      assert(spawnedFrom === 'p-2', `передан игрок: ${spawnedFrom}`);
+    });
+    check('когда у всех игроков есть фишки, спавн говорит об этом', () => {
+      // Бориса заменяем, а не добавляем второго: иначе старый без фишки остался бы
+      // в списке, и проверка падала бы на своих же данных.
+      const withAll = PLAYERS.map((player) => (
+        player.playerId === 'p-2' ? { ...player, tokenId: 't9' } : player
+      ));
+      tokenPanel.render(TOKENS, withAll, { role: 'dm', playerId: 'dm' });
+      const block = tokensHost.querySelector('.token-spawn');
+      assert(block.querySelectorAll('.token-spawn__row').length === 0, 'список спавна не пуст');
+      assert(block.textContent.includes('уже есть фишки'), `нет подскаски: ${block.textContent}`);
+    });
+    check('у игрока и в тренировочном столе блока спавна нет', () => {
+      tokenPanel.render(TOKENS, PLAYERS, { role: 'player', playerId: 'p-9' });
+      assert(tokensHost.querySelector('.token-spawn').hidden, 'игрок видит блок спавна');
+      tokenPanel.render(TOKENS, PLAYERS, { role: 'player', playerId: 'p-9', training: true });
+      assert(tokensHost.querySelector('.token-spawn').hidden, 'в тренировочном столе виден блок спавна');
+      tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
     });
     const tokenForm = tokensHost.querySelector('.token-form');
     tokenForm.querySelector('input').value = 'Новая фишка';

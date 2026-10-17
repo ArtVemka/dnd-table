@@ -1533,9 +1533,9 @@
           // Вывести фишку из листа можно один раз: пока у игрока её нет,
           // кнопка стоит, а после появления фишки исчезает.
           if (!player.tokenId) {
-            const spawn = el('button', 'btn btn--tiny', 'Фишка на поле');
+            const spawn = el('button', 'btn btn--tiny', 'Вывести');
             spawn.type = 'button';
-            spawn.title = 'Создать фишку этого игрока из его листа, с аватаром';
+            spawn.title = 'Создать фишку игрока из его листа, с аватаром';
             spawn.addEventListener('click', () => {
               if (this.handlers.onSpawnToken) this.handlers.onSpawnToken(player.playerId);
             });
@@ -1743,6 +1743,12 @@
       this.note = el('div', 'muted', 'Правый клик по фишке на карте — переименовать, назначить игроку, задать изображение или удалить.');
       this.root.appendChild(this.note);
 
+      // Кто ещё без фишки. Живёт здесь, а не только в панели участников:
+      // левую панель мастер часто сворачивает, а вывести игрока на поле
+      // удобнее оттуда, где уже работают с фишками.
+      this.spawnNode = el('div', 'token-spawn');
+      this.root.appendChild(this.spawnNode);
+
       this.list = el('div', 'token-list');
       this.root.appendChild(this.list);
     }
@@ -1762,6 +1768,7 @@
         : 'Проверка без сети: созданная фишка сразу ваша — её можно двигать по карте и задать картинку.';
 
       this.list.innerHTML = '';
+      this.renderSpawnSection(players, ctx);
       const mine = this.buildMineSection(tokens, ctx);
       if (mine) this.list.appendChild(mine);
 
@@ -1788,6 +1795,49 @@
           all.appendChild(row);
         }
         this.list.appendChild(all);
+      }
+    }
+
+    /**
+     * Спавн: игроки, у которых ещё нет фишки. Только мастеру и только за
+     * столом: игроку просить некого, а в тренировочном столе фишка и так
+     * достаётся ему через форму выше.
+     *
+     * Показываем именно тех, кому ещё нечего выводить. Перечислять всех с
+     * погашенными кнопками значило бы дублировать панель участников целиком.
+     * @param {object[]} players
+     * @param {object} ctx
+     */
+    renderSpawnSection(players, ctx) {
+      const node = this.spawnNode;
+      node.innerHTML = '';
+      if (!ctx || ctx.role !== 'dm') {
+        node.hidden = true;
+        return;
+      }
+      node.hidden = false;
+      const waiting = players.filter((player) => player.role !== 'dm' && !player.tokenId);
+      if (!waiting.length) {
+        node.appendChild(el('div', 'muted', 'У всех игроков за столом уже есть фишки'));
+        return;
+      }
+      node.appendChild(el('div', 'panel__title panel__title--sub', 'Вывести из листа'));
+      for (const player of waiting) {
+        const row = el('div', 'token-spawn__row');
+        row.appendChild(el('span', 'token-spawn__name', player.name));
+        const meta = el('span', 'token-spawn__meta muted');
+        meta.textContent = player.online
+          ? 'в сети'
+          : (player.hasSheet ? 'оффлайн, лист есть' : 'оффлайн, листа нет');
+        row.appendChild(meta);
+        const spawn = el('button', 'btn btn--tiny', 'Вывести');
+        spawn.type = 'button';
+        spawn.title = 'Создать фишку игрока из его листа, с аватаром';
+        spawn.addEventListener('click', () => {
+          if (this.handlers.onSpawnFromSheet) this.handlers.onSpawnFromSheet(player.playerId);
+        });
+        row.appendChild(spawn);
+        node.appendChild(row);
       }
     }
 

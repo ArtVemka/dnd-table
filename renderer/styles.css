@@ -1812,6 +1812,42 @@ code {
   flex: 1;
 }
 
+/* ------------------------------------------------- Спавн фишек из листов */
+
+.token-spawn {
+  margin-bottom: 10px;
+}
+
+.token-spawn__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.token-spawn__row:last-child {
+  border-bottom: none;
+}
+
+.token-spawn__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.token-spawn__meta {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.token-spawn .panel__title--sub {
+  margin-top: 0;
+}
+
 /* --------------------------------------------------------------- Чат */
 
 .chat__log {

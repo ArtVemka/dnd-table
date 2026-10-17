@@ -328,10 +328,21 @@ code {
 
 .screen--centered.is-active {
   display: flex;
-  align-items: center;
+  /*
+   * Центрируем через margin: auto у содержимого, а не через align-items:
+   * center. При align-items: center содержимое, которое выше окна, вылезает
+   * вверх, и верхняя часть (логотип с названием) не достаётся прокруткой.
+   * С margin: auto содержимое центрируется, пока есть место, и при нехватке
+   * места просто начинается сверху.
+   */
+  align-items: flex-start;
   justify-content: center;
   padding: 32px;
   overflow: auto;
+}
+
+.screen--centered.is-active > * {
+  margin: auto;
 }
 
 .screen--table.is-active {
@@ -351,6 +362,15 @@ code {
 }
 
 .home__brand {
+  /*
+   * Колонка с центрированием. Раньше здесь стоял text-align: center, но он
+   * центрирует только строки текста внутри блока, а не сам блок: гранёная
+   * пластина логотипа имеет фиксированную ширину и уезжала влево от
+   * выровненного по центру заголовка.
+   */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
 }
 

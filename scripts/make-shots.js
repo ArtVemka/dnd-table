@@ -155,6 +155,19 @@ app.whenReady().then(async () => {
   image = await win.webContents.capturePage();
   fs.writeFileSync(path.join(outDir, 'join.png'), image.toPNG());
 
+  // Узкое окно: окно можно ужать, и главный экран не должен разъезжаться.
+  await win.webContents.executeJavaScript(
+    "document.querySelectorAll('.screen').forEach((node) => node.classList.remove('is-active'));"
+    + "document.querySelector('#screen-home').classList.add('is-active');"
+    + "document.querySelectorAll('.screen').forEach((node) => { node.scrollTop = 0; }); true"
+  );
+  win.setContentSize(520, 700);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'home-narrow.png'), image.toPNG());
+  win.setContentSize(1440, 900);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+
   console.log('снимки готовы');
   app.exit(0);
 });

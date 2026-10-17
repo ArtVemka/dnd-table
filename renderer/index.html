@@ -53,6 +53,12 @@
                 <span class="card__title">Подключиться к столу</span>
                 <span class="card__text">Войти по P2P-билету, который прислал мастер</span>
               </button>
+
+              <button id="btn-go-sheet" class="card" type="button">
+                <span class="card__icon">✎</span>
+                <span class="card__title">Создать лист персонажа</span>
+                <span class="card__text">Заранее, до стола. Потом выберете его при подключении</span>
+              </button>
             </div>
           </div>
         </div>
@@ -128,14 +134,40 @@
         </div>
         <div id="join-status" class="status"></div>
 
+        <div class="sheet-choice">
+          <h3 class="sheet-choice__title">Ваш лист персонажа</h3>
+          <p class="sheet-choice__hint" id="sheet-choice-hint">
+            Выберите, кого взять на стол. Лист отправится мастеру один раз при
+            подключении и станет вашим листом на этом столе.
+          </p>
+          <ul id="join-sheets" class="sheet-choice__list"></ul>
+          <div class="sheet-choice__actions">
+            <button id="btn-join-new-sheet" class="btn" type="button">Создать новый лист</button>
+            <button id="btn-join-edit-sheet" class="btn btn--ghost" type="button" hidden>Править выбранный</button>
+          </div>
+        </div>
+
         <p class="muted">
           Нужен доступ в интернет: iroh использует relay и discovery n0. Также
           разрешите приложению доступ к сети в брандмауэре Windows.
         </p>
         <p class="muted">
-          Ваш локальный идентификатор игрока хранится на этом компьютере. Если вы переподключитесь,
-          лист персонажа восстановится автоматически.
+          Листы хранятся на этом компьютере и никуда не отправляются, пока вы сами
+          не выберете, кого взять на стол.
         </p>
+      </div>
+    </section>
+
+    <!-- ============ Экран 5: подготовка листа персонажа без стола ============ -->
+    <section id="screen-sheet" class="screen screen--sheet">
+      <div class="sheet-editor">
+        <div class="sheet-editor__bar">
+          <button id="btn-sheet-back" class="btn btn--ghost" type="button">← Назад</button>
+          <h2 class="sheet-editor__title">Лист персонажа</h2>
+          <button id="btn-sheet-save" class="btn btn--accent" type="button">Сохранить лист</button>
+        </div>
+        <div id="sheet-editor-status" class="status sheet-editor__status"></div>
+        <div id="sheet-editor-root" class="sheet-editor__body"></div>
       </div>
     </section>
 

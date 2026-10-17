@@ -1688,6 +1688,8 @@
       assert(cards.some((text) => text.includes('Создать новую кампанию')), 'нет создания кампании');
       assert(cards.some((text) => text.includes('Загрузить кампанию')), 'нет загрузки кампании');
       assert(cards.some((text) => text.includes('Подключиться к столу')), 'нет подключения');
+      // Персонажа заводят заранее, не дожидаясь стола: отдельная карточка.
+      assert(cards.some((text) => text.includes('Создать лист персонажа')), 'нет создания листа персонажа');
     });
     check('на главном экране сказано, что общая сеть не нужна', () => {
       // С прошлых времён тут было «приложение не создаёт сеть». Теперь сети
@@ -1970,6 +1972,127 @@
       assert(!document.querySelector('#join-address'), 'осталось поле ввода адреса');
       assert(!document.querySelector('#btn-join'), 'осталась кнопка подключения по адресу');
     });
+
+    /* --------------------------------------------- подготовка листа и выбор */
+
+    // Библиотека листов проверяется на настоящем хранилище: важно, что лист
+    // переживает перезапуск окна, а не держится в памяти контроллера.
+    localStorage.removeItem('dnd-table.sheetLibrary');
+    // Черновик на время проверок меняется, а дальше по файлу от него ждут
+    // тренировочный лист: запоминаем и вернём в конце блока.
+    const trainingPlayerIdEarly = localStorage.getItem('dnd-table.playerId');
+    const draftBefore = window.LocalTable.readDraft(trainingPlayerIdEarly);
+
+    document.querySelector('#btn-go-sheet').click();
+    check('карточка «Создать лист персонажа» открывает редактор', () => {
+      assert(document.querySelector('#screen-sheet').classList.contains('is-active'), 'экран редактора не открылся');
+      assert(document.querySelector('#sheet-editor-root.sheet'), 'в редакторе нет листа');
+      assert(document.querySelector('#btn-sheet-save'), 'нет кнопки сохранения');
+    });
+
+    check('у редактора нет кнопки «Отдельным окном»: лист и есть окно', () => {
+      const detach = [...document.querySelectorAll('#sheet-editor-root .btn')]
+        .find((button) => button.textContent.includes('Отдельным окном'));
+      assert(detach, 'у редактора вообще нет такой кнопки');
+      // Кнопка остаётся в разметке, скрыта атрибутом hidden: элемент с ним не
+      // исчезает из DOM, и искать надо именно скрытость.
+      assert(detach.hidden, 'кнопка отдельного окна показана на экране подготовки');
+      assert(getComputedStyle(detach).display === 'none', 'скрытая кнопка всё равно видна');
+    });
+
+    // Заполняем лист как человек. Поле ищем по подписи, а не по порядку: он
+    // меняется вместе с листом, и проверка посыпалась бы от первого же
+    // переименования поля.
+    const editor = document.querySelector('#sheet-editor-root');
+    const fillField = (label, value) => {
+      const field = [...editor.querySelectorAll('.field')]
+        .find((node) => node.querySelector('.field__label')
+          && node.querySelector('.field__label').textContent === label);
+      assert(field, `в листе нет поля «${label}»`);
+      const input = field.querySelector('input');
+      input.value = value;
+      // Лист слушает именно input: change на текстовом поле не срабатывает.
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return input;
+    };
+    fillField('Имя персонажа', 'Тордин');
+    fillField('Класс', 'Волшебник');
+    fillField('Раса', 'Дварф');
+
+    check('правка листа сохраняет его на этом компьютере', () => {
+      const sheets = window.LocalTable.listLocalSheets();
+      assert(sheets.length === 1, `листов в библиотеке: ${sheets.length}`);
+      assert(sheets[0].characterName === 'Тордин', `в библиотеке: ${sheets[0].characterName}`);
+      const status = document.querySelector('#sheet-editor-status').textContent;
+      assert(status.includes('Сохранено'), `подтверждение не показано: ${status}`);
+    });
+
+    document.querySelector('#btn-sheet-save').click();
+    check('кнопка «Сохранить лист» подтверждает сохранение', () => {
+      assert(document.querySelector('#sheet-editor-status').textContent.includes('сохранён'),
+        document.querySelector('#sheet-editor-status').textContent);
+    });
+
+    document.querySelector('#btn-sheet-back').click();
+    check('из редактора возвращаемся на главный экран', () => {
+      assert(document.querySelector('#screen-home').classList.contains('is-active'), 'вернулись не туда');
+    });
+
+    // Второй лист: библиотека должна держать несколько, иначе выбору не из чего
+    // выбирать.
+    const firstId = window.LocalTable.listLocalSheets()[0].id;
+    const mirror = JSON.parse(JSON.stringify(window.LocalTable.getLocalSheet(firstId).sheet));
+    mirror.characterName = 'Мира';
+    const secondId = window.LocalTable.upsertLocalSheet(mirror);
+    check('библиотека держит несколько листов, а правка идёт на место', () => {
+      assert(secondId !== firstId, 'второй лист получил тот же id');
+      assert.strictEqual(window.LocalTable.listLocalSheets().length, 2);
+      const same = window.LocalTable.upsertLocalSheet({ ...mirror, hp: 11 }, secondId);
+      assert.strictEqual(same, secondId, 'правка создала новую запись вместо обновления');
+      assert.strictEqual(window.LocalTable.listLocalSheets().length, 2, 'правка размножила лист');
+      assert.strictEqual(window.LocalTable.getLocalSheet(secondId).sheet.hp, 11, 'правка не сохранена');
+    });
+
+    document.querySelector('#btn-go-join').click();
+    check('на экране подключения виден выбор листа', () => {
+      const rows = [...document.querySelectorAll('#join-sheets .sheet-choice__item')];
+      assert(rows.length === 2, `строк в списке листов: ${rows.length}`);
+      const text = document.querySelector('#join-sheets').textContent;
+      assert(text.includes('Тордин') && text.includes('Мира'), `в списке: ${text}`);
+      assert(document.querySelector('#btn-join-new-sheet'), 'нет кнопки «Создать новый лист»');
+      // Лист, который только что правили, и есть выбранный: правка обновила
+      // черновик, а черновик уезжает на стол.
+      assert(rows.some((row) => row.classList.contains('is-selected')), 'ни один лист не выбран');
+      assert(!document.querySelector('#btn-join-edit-sheet').hidden, 'правка выбранного листа не предложена');
+    });
+
+    check('взятый лист становится черновиком, который уедет на стол', () => {
+      const miraRow = [...document.querySelectorAll('#join-sheets .sheet-choice__item')]
+        .find((row) => row.textContent.includes('Мира'));
+      miraRow.querySelector('.btn--accent').click();
+      // Список перерисовывается целиком, поэтому старую строку смотреть
+      // бесполезно: отмечена будет новая.
+      const selected = [...document.querySelectorAll('#join-sheets .sheet-choice__item.is-selected')];
+      assert(selected.length === 1, `выбранных листов: ${selected.length}`);
+      assert(selected[0].textContent.includes('Мира'), `выбран не тот лист: ${selected[0].textContent}`);
+      const draft = window.LocalTable.readDraft(localStorage.getItem('dnd-table.playerId'));
+      assert(draft && draft.characterName === 'Мира', `в черновике: ${draft && draft.characterName}`);
+    });
+
+    check('удаление листа убирает его из выбора', () => {
+      const miraRow = [...document.querySelectorAll('#join-sheets .sheet-choice__item')]
+        .find((row) => row.textContent.includes('Мира'));
+      [...miraRow.querySelectorAll('.btn')].find((button) => button.textContent.includes('Удалить')).click();
+      const rows = [...document.querySelectorAll('#join-sheets .sheet-choice__item')];
+      assert(rows.length === 1, `после удаления строк: ${rows.length}`);
+      assert(!rows[0].textContent.includes('Мира'), 'удалённый лист остался в списке');
+    });
+
+    document.querySelector('[data-back]').click();
+
+    // Возвращаем черновик, какой был до этих проверок: дальше по файлу идут
+    // сценарии тренировочного стола, и им нужен именно он.
+    window.LocalTable.saveDraft(trainingPlayerId, draftBefore);
 
     document.querySelector('#btn-go-create').click();
     check('кнопка «Создать новую кампанию» открывает экран создания', () => {

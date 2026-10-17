@@ -172,17 +172,43 @@ app.whenReady().then(async () => {
   image = await win.webContents.capturePage();
   fs.writeFileSync(path.join(outDir, 'sheet.png'), image.toPNG());
 
-  // Экран подключения: первое, что видит игрок.
+  // Экран подключения: первое, что видит игрок. В нём же выбор листа, поэтому
+  // библиотеку перед снимком наполняем: пустой список ничего не показывает.
   await win.webContents.executeJavaScript(`
     (() => {
+      window.LocalTable.deleteLocalSheet('shot-1');
+      window.LocalTable.deleteLocalSheet('shot-2');
+      const base = window.DnD5e.createEmptySheet('Артём');
+      const first = { ...base, characterName: 'Тордин', charClass: 'Волшебник', race: 'Дварф', level: 5 };
+      const second = { ...base, characterName: 'Мира', charClass: 'Воин', race: 'Полурослик', level: 3 };
+      window.LocalTable.upsertLocalSheet(first, 'shot-1');
+      window.LocalTable.upsertLocalSheet(second, 'shot-2');
       document.querySelectorAll('.screen').forEach((node) => node.classList.remove('is-active'));
       document.querySelector('#screen-join').classList.add('is-active');
+      document.querySelector('#btn-go-join').click();
+      document.querySelector('#join-name').value = 'Артём';
       return true;
     })()
   `);
   await new Promise((resolve) => setTimeout(resolve, 500));
   image = await win.webContents.capturePage();
   fs.writeFileSync(path.join(outDir, 'join.png'), image.toPNG());
+
+  // Экран подготовки листа: заполненный лист без стола.
+  await win.webContents.executeJavaScript(`
+    (() => {
+      document.querySelector('#btn-go-sheet').click();
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'sheet-editor.png'), image.toPNG());
+  // Снимок не должен оставлять за собой листы: они попали бы в библиотеку
+  // того, кто запустит скрипт.
+  await win.webContents.executeJavaScript(
+    "window.LocalTable.deleteLocalSheet('shot-1'); window.LocalTable.deleteLocalSheet('shot-2'); true"
+  );
 
   // Узкое окно: окно можно ужать, и главный экран не должен разъезжаться.
   await win.webContents.executeJavaScript(

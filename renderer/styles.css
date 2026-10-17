@@ -377,6 +377,145 @@ code {
   flex-direction: column;
 }
 
+/* Экран подготовки листа: лист плотный и длинный, поэтому он занимает окно
+   целиком и прокручивается сам, а не сидит в узком диалоге. */
+.screen--sheet.is-active {
+  display: flex;
+  flex-direction: column;
+}
+
+.sheet-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  height: 100%;
+  min-height: 0;
+}
+
+.sheet-editor__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.sheet-editor__title {
+  font-family: var(--font-title);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+.sheet-editor__status {
+  flex-shrink: 0;
+}
+
+.sheet-editor__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+/* На экране подготовки лист занимает всё окно, поэтому его собственная шапка
+   с заголовком лишняя: заголовок и кнопка сохранения стоят в панели сверху.
+   Аватар тоже: поставить его можно только на столе, файлы портретов живут
+   в кампании мастера, и кнопка без обработчика просто ничего не делала бы. */
+.sheet-editor__body .sheet__head,
+.sheet-editor__body .avatar-pick {
+  display: none;
+}
+
+/* Выбор листа на экране подключения. */
+.sheet-choice {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  margin-top: 4px;
+}
+
+.sheet-choice__title {
+  font-family: var(--font-title);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0 0 4px;
+}
+
+.sheet-choice__hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+
+.sheet-choice__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sheet-choice__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 8px);
+}
+
+.sheet-choice__item.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.sheet-choice__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sheet-choice__name {
+  font-family: var(--font-title);
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-choice__about {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-choice__empty {
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 6px 2px;
+}
+
+.sheet-choice__row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sheet-choice__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 /* ------------------------------------------------------------- Главный экран */
 
 .home {

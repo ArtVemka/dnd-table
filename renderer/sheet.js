@@ -653,22 +653,24 @@
       if (this.statusNode) this.statusNode.textContent = text || '';
     }
 
-    /**
-     * Режим панели: список игроков («list») или открытый лист («sheet»).
-     * Кнопка возврата нужна только там, где есть откуда возвращаться — то есть
-     * у ДМ, который попал в лист из списка игроков.
-     * @param {'list'|'sheet'} mode
-     * @param {{canGoBack?: boolean}} [options]
-     */
-    setMode(mode, options = {}) {
-      this.mode = mode === 'list' ? 'list' : 'sheet';
-      const isList = this.mode === 'list';
-      this.listNode.hidden = !isList;
-      this.gridNode.hidden = isList;
-      this.backButton.hidden = isList || !options.canGoBack;
-      this.detachButton.hidden = isList;
-      this.titleNode.textContent = isList ? 'Листы игроков' : 'Лист персонажа';
-    }
+/**
+   * Режим панели: список игроков («list») или открытый лист («sheet»).
+   * Кнопка возврата нужна только там, где есть откуда возвращаться — то есть
+   * у ДМ, который попал в лист из списка игроков.
+   * @param {'list'|'sheet'} mode
+   * @param {{canGoBack?: boolean, canDetach?: boolean}} [options]
+   */
+  setMode(mode, options = {}) {
+    this.mode = mode === 'list' ? 'list' : 'sheet';
+    const isList = this.mode === 'list';
+    this.listNode.hidden = !isList;
+    this.gridNode.hidden = isList;
+    this.backButton.hidden = isList || !options.canGoBack;
+    // Отдельное окно нужно там, где лист открыт поверх стола. На экране
+    // подготовки лист и есть всё окно, и кнопка только мешает.
+    this.detachButton.hidden = isList || options.canDetach === false;
+    this.titleNode.textContent = isList ? 'Листы игроков' : 'Лист персонажа';
+  }
 
     /**
      * Список игроков у ДМ: лист открывается нажатием на имя.

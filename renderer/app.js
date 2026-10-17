@@ -84,6 +84,17 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
   let dicePanel = null;
   let tokenPanel = null;
 let initiativePanel = null;
+/**
+ * Редактор листа на экране подготовки. Лист сохраняется в библиотеку сам, при
+ * правке поля, поэтому сохранять его нужно помнить только между открытиями.
+ */
+let sheetEditorView = null;
+/** @type {string|null} Какой лист правится: null — новый лист. */
+let sheetEditorId = null;
+/** Куда возвращаться из редактора: на главный экран или к подключению. */
+let sheetEditorReturn = 'screen-home';
+/** Какой лист выбран на экране подключения: он уедет на стол один раз. */
+let chosenSheetId = null;
 
   /* ------------------------------------------------------------------ *
    * Утилиты
@@ -2066,6 +2077,9 @@ let initiativePanel = null;
     app.sheetShownFor = null;
     app.viewedSheetPlayerId = null;
     app.training = false;
+    // Выбранный лист уехал на стол. Если сюда вернуться со следующей игрой,
+    // выбор должен быть сделан заново, а не молча взят прежний.
+    chosenSheetId = null;
     showScreen('screen-home');
     await initHomeData();
   }
@@ -2111,6 +2125,21 @@ let initiativePanel = null;
     });
     $('#btn-go-load').addEventListener('click', openLoadScreen);
     $('#btn-go-join').addEventListener('click', openJoinScreen);
+    $('#btn-go-sheet').addEventListener('click', () => openSheetEditor());
+    $('#btn-join-new-sheet').addEventListener('click', () => openSheetEditor({ from: 'screen-join' }));
+    $('#btn-join-edit-sheet').addEventListener('click', () => {
+      if (chosenSheetId) openSheetEditor({ id: chosenSheetId, from: 'screen-join' });
+    });
+    $('#btn-sheet-back').addEventListener('click', () => {
+      showScreen(sheetEditorReturn);
+      if (sheetEditorReturn === 'screen-join') renderSheetChoice();
+    });
+    $('#btn-sheet-save').addEventListener('click', () => {
+      // Кнопка для тех, кто хочет увидеть подтверждение: само сохранение уже
+      // произошло при правке поля.
+      if (sheetEditorView) onSheetEditorChange(sheetEditorView.sheet);
+      setStatus('#sheet-editor-status', 'Лист сохранён на этом компьютере');
+    });
     for (const back of document.querySelectorAll('[data-back]')) {
       back.addEventListener('click', () => showScreen('screen-home'));
     }
@@ -2167,8 +2196,128 @@ let initiativePanel = null;
     $('#join-name').value = storedName();
     $('#join-p2p-ticket').value = '';
     setStatus('#join-status', '');
+    renderSheetChoice();
     showScreen('screen-join');
     $('#join-p2p-ticket').focus();
+  }
+
+  /* ------------------------------------------------ листы персонажа */
+
+  /**
+   * Подготовка листа без стола.
+   *
+   * Отдельный экран, а не панель стола: подключаться к мастеру ради того, чтобы
+   * заполнить лист, незачем. Всё, что введено, сразу уходит в библиотеку на
+   * этом компьютере, а оттуда лист выбирается при подключении.
+   *
+   * @param {{id?: string, from?: string}} [options] Какой лист править и куда
+   *   возвращаться: на главный экран или к подключению.
+   */
+  function openSheetEditor(options = {}) {
+    const entry = options.id ? LocalTable.getLocalSheet(options.id) : null;
+    sheetEditorId = entry ? entry.id : null;
+    sheetEditorReturn = options.from || 'screen-home';
+    if (!sheetEditorView) {
+      sheetEditorView = new window.SheetView($('#sheet-editor-root'), {
+        onChange: onSheetEditorChange
+      });
+    }
+    // Кнопка «Отдельным окном» здесь лишняя: отдельное окно имеет смысл, когда
+    // лист открыт на столе, а здесь лист и есть всё окно.
+    sheetEditorView.setMode('sheet', { canDetach: false });
+    sheetEditorView.setSheet(entry ? entry.sheet : DnD.createEmptySheet(storedName()));
+    setStatus('#sheet-editor-status', entry ? `Правка: ${entry.sheet.characterName || 'без имени'}` : 'Новый лист');
+    showScreen('screen-sheet');
+  }
+
+  /**
+   * Автосохранение при правке поля.
+   *
+   * Лист сохраняется сразу, без кнопки: кнопка «Сохранить» тоже есть, но
+   * потерять час вписанного из-за закрытия окна обидно. Черновик обновляется
+   * тем же, что и раньше, иначе выбранный на экране подключения лист и
+   * отредактированный здесь разошлись бы.
+   */
+  function onSheetEditorChange(sheet) {
+    if (!sheet) return;
+    const id = LocalTable.upsertLocalSheet(sheet, sheetEditorId);
+    if (!sheetEditorId) sheetEditorId = id;
+    LocalTable.saveDraft(localPlayerId(), sheet);
+    setStatus('#sheet-editor-status', 'Сохранено на этом компьютере');
+  }
+
+  /**
+   * Список листов на экране подключения.
+   *
+   * Показывается и когда библиотека пуста: игрок должен видеть, что лист можно
+   * завести, иначе он пойдёт на стол с пустым и удивится.
+   */
+  function renderSheetChoice() {
+    const list = $('#join-sheets');
+    const sheets = LocalTable.listLocalSheets();
+    if (!chosenSheetId) chosenSheetId = matchDraftSheetId(sheets);
+    list.innerHTML = '';
+    for (const item of sheets) {
+      const row = el('li', 'sheet-choice__item');
+      if (item.id === chosenSheetId) row.classList.add('is-selected');
+      const info = el('div', 'sheet-choice__info');
+      info.appendChild(el('span', 'sheet-choice__name', item.characterName));
+      const about = [item.playerName, item.race, item.charClass, `${item.level} ур.`]
+        .filter(Boolean).join(' · ');
+      info.appendChild(el('span', 'sheet-choice__about', about || 'Лист без класса и предыстории'));
+      row.appendChild(info);
+      const actions = el('div', 'sheet-choice__row-actions');
+      const take = el('button', 'btn btn--accent btn--tiny', item.id === chosenSheetId ? 'Взят на стол' : 'Взять на стол');
+      take.type = 'button';
+      take.addEventListener('click', () => chooseLocalSheet(item.id));
+      actions.appendChild(take);
+      const remove = el('button', 'btn btn--ghost btn--tiny', 'Удалить');
+      remove.type = 'button';
+      remove.addEventListener('click', () => {
+        LocalTable.deleteLocalSheet(item.id);
+        if (chosenSheetId === item.id) chosenSheetId = null;
+        renderSheetChoice();
+      });
+      actions.appendChild(remove);
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+    if (!sheets.length) {
+      list.appendChild(el('li', 'sheet-choice__empty',
+        'Листов пока нет. Заведите персонажа — потом его можно будет взять на любой стол.'));
+    }
+    $('#sheet-choice-hint').hidden = !sheets.length;
+    $('#btn-join-edit-sheet').hidden = !chosenSheetId;
+  }
+
+  /**
+   * Какой лист уже выбран: сначала то, что игрок взял сам, а если он ещё не
+   * выбирал — тот, чей черновик уже лежит и уедет на стол при подключении.
+   * @param {{characterName: string, charClass: string}[]} sheets
+   * @returns {string|null}
+   */
+  function matchDraftSheetId(sheets) {
+    const draft = LocalTable.readDraft(localPlayerId());
+    if (!draft) return null;
+    const wanted = [draft.characterName, draft.charClass]
+      .map((value) => String(value || '').trim().toLowerCase()).join('::');
+    const found = sheets.find((item) => [item.characterName, item.charClass]
+      .map((value) => String(value || '').trim().toLowerCase()).join('::') === wanted);
+    return found ? found.id : null;
+  }
+
+  /**
+   * Кладёт выбранный лист в черновик: он уедет на стол один раз при
+   * подключении, когда сервер создаст игроку пустой лист и предложит заготовку.
+   * @param {string} id
+   */
+  function chooseLocalSheet(id) {
+    const entry = LocalTable.getLocalSheet(id);
+    if (!entry) return;
+    chosenSheetId = id;
+    LocalTable.saveDraft(localPlayerId(), entry.sheet);
+    renderSheetChoice();
+    toast(`Лист «${entry.sheet.characterName || 'без имени'}» пойдёт на стол`, 'ok');
   }
 
   /**

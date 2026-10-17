@@ -103,6 +103,141 @@
     }
   }
 
+  /* --------------------------------------------------------------- библиотека */
+
+  /**
+   * Библиотека листов: сколько угодно персонажей на этом компьютере.
+   *
+   * Черновик выше — это один слот на игрока, и он нужен для отправки на стол.
+   * Библиотека нужна для другого: игрок готовит персонажа заранее, без стола,
+   * и потом выбирает, кого взять. Без неё на главном экране нечего было бы
+   * выбирать, кроме единственного черновика.
+   *
+   * Листы лежат в localStorage рядом с черновиком: сервера у них нет, кампания
+   * их не знает, и переносить их между компьютерами нечем. Это черновики, а не
+   * архив персонажей.
+   */
+  const LIBRARY_KEY = 'dnd-table.sheetLibrary';
+  const LIBRARY_VERSION = 1;
+  /** Больше не держим: localStorage не резиновый, а двадцать героев — не сценарий. */
+  const LIBRARY_MAX = 20;
+
+  function readLibrary() {
+    const empty = { version: LIBRARY_VERSION, sheets: [] };
+    try {
+      const raw = localStorage.getItem(LIBRARY_KEY);
+      if (!raw) return empty;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.sheets)) return empty;
+      const sheets = parsed.sheets
+        .filter((entry) => entry && typeof entry === 'object' && entry.sheet && typeof entry.sheet === 'object')
+        .map((entry) => ({
+          id: sanitizeText(entry.id, 40) || newLocalSheetId(),
+          updatedAt: Number(entry.updatedAt) || 0,
+          sheet: entry.sheet
+        }));
+      return { version: LIBRARY_VERSION, sheets };
+    } catch {
+      // Испорченная библиотека не должна мешать играть: считаем, что её нет.
+      return empty;
+    }
+  }
+
+  function writeLibrary(library) {
+    try {
+      localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function newLocalSheetId() {
+    return `s-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
+  }
+
+  /**
+   * Ключ, по которому лист опознаётся при автосохранении.
+   *
+   * Имя персонажа и класс: автосохранение приходит из редактора без указания,
+   * какой именно лист правится, и по id там нечего взять. Два героя с именем
+   * «Гость» и классом «Воин» сольются — но имена за этим и нужны, чтобы
+   * различать героев в списке.
+   * @param {object} sheet
+   * @returns {string}
+   */
+  function sheetMatchKey(sheet) {
+    const name = sanitizeText(sheet.characterName, 100).trim().toLowerCase();
+    const klass = sanitizeText(sheet.charClass, 100).trim().toLowerCase();
+    return `${name}::${klass}`;
+  }
+
+  /**
+   * Краткий список листов для выбора на экране подключения.
+   * @returns {{id: string, updatedAt: number, characterName: string,
+   *   playerName: string, charClass: string, race: string, level: number}[]}
+   */
+  function listLocalSheets() {
+    return readLibrary().sheets
+      .map((entry) => ({
+        id: entry.id,
+        updatedAt: entry.updatedAt,
+        characterName: sanitizeText(entry.sheet.characterName, 100).trim() || 'Без имени',
+        playerName: sanitizeText(entry.sheet.playerName, 100).trim(),
+        charClass: sanitizeText(entry.sheet.charClass, 100).trim(),
+        race: sanitizeText(entry.sheet.race, 100).trim(),
+        level: clampInt(entry.sheet.level, 1, 20, 1)
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** @param {string} id */
+  function getLocalSheet(id) {
+    const wanted = String(id || '');
+    return readLibrary().sheets.find((entry) => entry.id === wanted) || null;
+  }
+
+  /**
+   * Кладёт лист в библиотеку и возвращает его id.
+   *
+   * С id запись обновляется на месте, без id ищется по имени с классом.
+   * Лишние записи вытесняются самыми старыми: сортировка по времени есть, но
+   * обрезать всё равно надо, иначе localStorage переполнится и перестанет
+   * хранить вообще всё, включая черновик.
+   * @param {object} sheet
+   * @param {string} [id]
+   * @returns {string} id сохранённого листа.
+   */
+  function upsertLocalSheet(sheet, id) {
+    const library = readLibrary();
+    const now = Date.now();
+    const entryId = id ? String(id) : newLocalSheetId();
+    const key = sheetMatchKey(sheet);
+    const index = id
+      ? library.sheets.findIndex((entry) => entry.id === entryId)
+      : library.sheets.findIndex((entry) => sheetMatchKey(entry.sheet) === key);
+    const record = { id: entryId, updatedAt: now, sheet };
+    if (index >= 0) library.sheets[index] = { ...library.sheets[index], ...record, id: entryId };
+    else library.sheets.push(record);
+    if (library.sheets.length > LIBRARY_MAX) {
+      library.sheets.sort((a, b) => b.updatedAt - a.updatedAt);
+      library.sheets = library.sheets.slice(0, LIBRARY_MAX);
+    }
+    writeLibrary(library);
+    return entryId;
+  }
+
+  /** @param {string} id @returns {boolean} Был ли такой лист. */
+  function deleteLocalSheet(id) {
+    const wanted = String(id || '');
+    const library = readLibrary();
+    const before = library.sheets.length;
+    library.sheets = library.sheets.filter((entry) => entry.id !== wanted);
+    if (library.sheets.length === before) return false;
+    writeLibrary(library);
+    return true;
+  }
+
   /**
    * Есть ли в листе хоть что-то, что человек вписал руками. Лист, который
    * заводит игроку сервер, отличается от пустого только именем игрока.
@@ -779,11 +914,15 @@
 
   global.LocalTable = {
     createLocalTable,
+    deleteLocalSheet,
     draftKey,
+    getLocalSheet,
+    listLocalSheets,
     normalizeSheet,
     readDraft,
     saveDraft,
     sheetHasContent,
-    shouldOfferDraft
+    shouldOfferDraft,
+    upsertLocalSheet
   };
 })(window);

@@ -18,6 +18,9 @@ const LIMITS = {
   maxChatLength: 1000,
   maxSheetTextLength: 4000,
   maxImageBytes: 10 * 1024 * 1024, // 10 МБ
+  // Аватар показывается в кружке 30px и ездит вместе с игроком, поэтому он
+  // заметно меньше карты. 2 МБ хватает даже для фото с телефона.
+  maxAvatarBytes: 2 * 1024 * 1024, // 2 МБ
   maxDiceHistory: 200,
   maxChatHistory: 300,
   maxTokens: 200,
@@ -34,8 +37,17 @@ const LIMITS = {
   maxAdventureTitle: 120,
   maxAdventureText: 20000,
   // Ссылка на картинку: /files/<имя> или путь из архива импорта.
-  maxAdventureImageRef: 2048
+  maxAdventureImageRef: 2048,
+  // Ссылка на аватар игрока: /files/<имя> либо путь к файлу из поставки.
+  maxAvatarRef: 2048
 };
+
+/**
+ * Портрет мастера из поставки. Подставляется, пока у игрока с ролью ДМ нет
+ * своей картинки, чтобы у стола всегда был распознаваемый ведущий.
+ * Это путь внутри renderer/, а не /files/...: файл лежит рядом с интерфейсом.
+ */
+const DEFAULT_DM_AVATAR = 'avatar-dm.png';
 
 const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
 
@@ -342,6 +354,11 @@ class RoomState {
         playerId,
         name: sanitizeText(player.name, LIMITS.maxNameLength) || (isDm ? 'ДМ' : 'Игрок'),
         role: isDm ? ROLE_DM : ROLE_PLAYER,
+        // Аватар хранится у игрока, а не в листе: лист мастер не редактирует,
+        // а портрет нужен и ему, и всем остальным в списке и чате.
+        avatar: typeof player.avatar === 'string' && player.avatar
+          ? sanitizeText(player.avatar, LIMITS.maxAvatarRef)
+          : null,
         online: false,
         sockets: new Set(),
         joinedAt: player.joinedAt || new Date().toISOString()
@@ -448,6 +465,10 @@ class RoomState {
       y: clampNumber(token.y, 0, 1, 0.5),
       imageUrl: typeof token.imageUrl === 'string' ? token.imageUrl : null,
       assignedPlayerId: token.assignedPlayerId ? String(token.assignedPlayerId) : null,
+      // Фишка, выведенная из листа, носит аватар игрока и продолжает следить за
+      // ним. Картинку, поставленную руками, помечаем как «свою»: дальше
+      // аватар в неё не лезет.
+      avatarFromSheet: Boolean(token.avatarFromSheet),
       color: typeof token.color === 'string' ? token.color : TOKEN_PALETTE[0]
     };
   }
@@ -460,6 +481,7 @@ class RoomState {
         playerId: player.playerId,
         name: player.name,
         role: player.role,
+        avatar: player.avatar || null,
         joinedAt: player.joinedAt
       });
     }
@@ -495,6 +517,7 @@ class RoomState {
         playerId,
         name,
         role: ROLE_PLAYER,
+        avatar: null,
         online: false,
         sockets: new Set(),
         joinedAt: new Date().toISOString()
@@ -521,6 +544,7 @@ class RoomState {
         playerId: DM_PLAYER_ID,
         name,
         role: ROLE_DM,
+        avatar: null,
         online: false,
         sockets: new Set(),
         joinedAt: new Date().toISOString()
@@ -573,6 +597,9 @@ class RoomState {
         playerId: player.playerId,
         name: player.name,
         role: player.role,
+        // Аватар видит весь стол, и это нормально: картинка не раскрывает
+        // ничего из листа персонажа. Ссылка /files/... или путь из поставки.
+        avatar: player.avatar || (player.role === ROLE_DM ? DEFAULT_DM_AVATAR : null),
         online: player.online,
         hasSheet: this.sheets.has(player.playerId),
         tokenId: includeTokens
@@ -643,6 +670,7 @@ module.exports = {
   ABILITY_KEYS,
   ABILITY_LABELS,
   CAMPAIGN_FORMAT_VERSION,
+  DEFAULT_DM_AVATAR,
   DM_PLAYER_ID,
   GRID,
   LIMITS,

@@ -47,10 +47,40 @@
     return clean ? clean.slice(0, 1).toUpperCase() : '?';
   }
 
+  /**
+   * Кружок с портретом, а без картинки — с буквой имени.
+   *
+   * Своя копия, а не общая с table.js: sheet.js грузится раньше table.js, а в
+   * отдельном окне листа table.js вообще не подключён. Так же разделены и
+   * initials() — дешёвый код, который нужен обоим файлам.
+   * @param {string} src готовая ссылка на картинку либо пустая строка
+   * @param {string} name имя для буквы-заглушки
+   * @returns {HTMLElement}
+   */
+  function avatarCircle(src, name) {
+    const node = el('div', 'player-row__avatar');
+    if (!src) {
+      node.textContent = initials(name);
+      return node;
+    }
+    const img = document.createElement('img');
+    img.className = 'player-row__avatar-img';
+    img.alt = '';
+    img.src = src;
+    img.addEventListener('error', () => {
+      img.remove();
+      node.textContent = initials(name);
+      node.classList.remove('has-image');
+    });
+    node.appendChild(img);
+    node.classList.add('has-image');
+    return node;
+  }
+
   class SheetView {
     /**
      * @param {HTMLElement} root контейнер панели
-     * @param {{onChange?: (sheet: object) => void, onPlayerChange?: (playerId: string) => void, onBack?: () => void}} handlers
+     * @param {{onChange?: (sheet: object) => void, onPlayerChange?: (playerId: string) => void, onBack?: () => void, onDetach?: () => void, onAvatarPick?: (file: File) => void, onAvatarClear?: () => void}} handlers
      */
     constructor(root, handlers = {}) {
       this.root = root;
@@ -110,6 +140,7 @@
 
       const identity = el('div', 'box');
       identity.appendChild(el('div', 'box__title', 'Персонаж'));
+      identity.appendChild(this.buildAvatarBlock());
       identity.appendChild(this.field('characterName', 'Имя персонажа'));
       identity.appendChild(this.field('playerName', 'Имя игрока'));
       identity.appendChild(this.field('charClass', 'Класс'));
@@ -462,6 +493,93 @@
       this.paintDerived();
     }
 
+    /**
+     * Аватар: круглая картинка, загрузка и сброс.
+     *
+     * Портрет хранится не в листе, а у игрока: им пользуются ещё и список
+     * участников, и сообщения о бросках, а лист у мастера вообще чужой.
+     * @returns {HTMLElement}
+     */
+    buildAvatarBlock() {
+      const wrap = el('div', 'avatar-pick');
+
+      this.avatarNode = el('div', 'avatar-pick__preview');
+      // Пока картинки нет, показываем первую букву имени: пустой кружок
+      // выглядит как ошибка загрузки.
+      this.avatarFallback = el('span', 'avatar-pick__fallback', '?');
+      this.avatarNode.appendChild(this.avatarFallback);
+      wrap.appendChild(this.avatarNode);
+
+      const side = el('div', 'avatar-pick__side');
+      this.avatarInput = document.createElement('input');
+      this.avatarInput.type = 'file';
+      this.avatarInput.accept = 'image/png,image/jpeg,image/webp';
+      this.avatarInput.className = 'avatar-pick__file';
+      this.avatarInput.addEventListener('change', () => {
+        const file = this.avatarInput.files && this.avatarInput.files[0];
+        // Сбрасываем значение: повторный выбор того же файла иначе не даст
+        // события change, и картинку не получится переставить.
+        this.avatarInput.value = '';
+        if (!file) return;
+        if (this.handlers.onAvatarPick) this.handlers.onAvatarPick(file);
+      });
+      side.appendChild(this.avatarInput);
+
+      this.avatarLabel = el('label', 'avatar-pick__label', 'Аватар');
+      side.appendChild(this.avatarLabel);
+
+      this.avatarClear = el('button', 'btn btn--ghost btn--tiny', 'Убрать');
+      this.avatarClear.type = 'button';
+      this.avatarClear.hidden = true;
+      this.avatarClear.addEventListener('click', () => {
+        if (this.handlers.onAvatarClear) this.handlers.onAvatarClear();
+      });
+      side.appendChild(this.avatarClear);
+      wrap.appendChild(side);
+      return wrap;
+    }
+
+    /**
+     * Показывает аватар, а пока его нет — первую букву имени.
+     * @param {string|null} url
+     * @param {string} [name] имя, из которого берётся буква-заглушка
+     */
+    setAvatar(url, name = '') {
+      this.avatarUrl = url || null;
+      const preview = this.avatarNode;
+      if (!preview) return;
+      const paint = (hasImage) => {
+        preview.innerHTML = '';
+        if (hasImage) {
+          const img = document.createElement('img');
+          img.className = 'avatar-pick__img';
+          img.alt = '';
+          img.src = this.avatarUrl;
+          // Битая картинка не должна молча оставлять пустой кружок.
+          img.addEventListener('error', () => paint(false));
+          preview.appendChild(img);
+          return;
+        }
+        const fallback = document.createElement('span');
+        fallback.className = 'avatar-pick__fallback';
+        fallback.textContent = initials(name || (this.sheet && this.sheet.characterName) || '');
+        preview.appendChild(fallback);
+      };
+      paint(Boolean(this.avatarUrl));
+      if (this.avatarClear) this.avatarClear.hidden = !this.avatarUrl;
+    }
+
+    /**
+     * Можно ли менять аватар. У мастера, открывшего чужой лист, — нельзя:
+     * портрет игрока он не редактирует.
+     * @param {boolean} editable
+     */
+    setAvatarEditable(editable) {
+      if (this.avatarInput) this.avatarInput.disabled = !editable;
+      if (this.avatarLabel) this.avatarLabel.classList.toggle('is-disabled', !editable);
+      if (this.avatarClear) this.avatarClear.disabled = !editable;
+    }
+
     /** @param {string} text */
     setStatus(text) {
       if (this.statusNode) this.statusNode.textContent = text || '';
@@ -506,7 +624,10 @@
         row.classList.toggle('is-offline', !player.online);
         row.classList.toggle('is-selected', player.playerId === selectedId);
 
-        row.appendChild(el('div', 'player-row__avatar', initials(player.name)));
+        row.appendChild(avatarCircle(
+          this.handlers.resolveUrl ? this.handlers.resolveUrl(player.avatar) : '',
+          player.name
+        ));
 
         const main = el('div', 'player-row__main');
         const nameRow = el('div', 'player-row__name');

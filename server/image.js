@@ -61,16 +61,17 @@ function sniffImageFormat(buffer) {
 /**
  * Разбирает base64 data URL и проверяет его как изображение.
  * @param {unknown} dataUrl
+ * @param {number} [maxBytes] свой предел размера: у аватара он меньше карты
  * @returns {{buffer: Buffer, ext: string}|{error: string}}
  */
-function decodeImage(dataUrl) {
+function decodeImage(dataUrl, maxBytes = LIMITS.maxImageBytes) {
   if (typeof dataUrl !== 'string' || dataUrl.length === 0) return { error: 'Изображение не передано' };
   const match = /^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$/i.exec(dataUrl.trim());
   if (!match) return { error: 'Поддерживаются только изображения PNG, JPG и WEBP' };
   const buffer = Buffer.from(match[2], 'base64');
   if (buffer.length === 0) return { error: 'Файл пустой' };
-  if (buffer.length > LIMITS.maxImageBytes) {
-    return { error: `Файл больше ${Math.round(LIMITS.maxImageBytes / 1024 / 1024)} МБ` };
+  if (buffer.length > maxBytes) {
+    return { error: `Файл больше ${Math.round(maxBytes / 1024 / 1024)} МБ` };
   }
   const format = sniffImageFormat(buffer);
   if (!format.supported) {

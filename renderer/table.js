@@ -28,6 +28,39 @@
     return clean ? clean.slice(0, 1).toUpperCase() : '?';
   }
 
+  /**
+   * Кружок с портретом, а без картинки — с буквой имени.
+   *
+   * Ссылка может быть двух видов: /files/<имя> с картинками кампании (её
+   * разбирает вызывающий через assetUrl) либо путь из поставки, как у портрета
+   * мастера по умолчанию.
+   * @param {string} [src] уже готовая ссылка
+   * @param {string} name имя для буквы-заглушки
+   * @param {string} [className]
+   * @returns {HTMLElement}
+   */
+  function avatarNode(src, name, className) {
+    const node = el('div', className || 'player-row__avatar');
+    if (src) {
+      const img = document.createElement('img');
+      img.className = 'player-row__avatar-img';
+      img.alt = '';
+      img.src = src;
+      // Портрет мог не загрузиться: нет файла, битая ссылка. Кружок с буквой
+      // куда полезнее пустого или сломанного значка.
+      img.addEventListener('error', () => {
+        img.remove();
+        node.textContent = initials(name);
+        node.classList.remove('has-image');
+      });
+      node.appendChild(img);
+      node.classList.add('has-image');
+      return node;
+    }
+    node.textContent = initials(name);
+    return node;
+  }
+
   /* ====================================================================== *
    * Холст: нарисовать карту самому
    * ====================================================================== */
@@ -1453,7 +1486,7 @@
   class PlayersList {
     /**
      * @param {HTMLElement} root
-     * @param {{onOpenSheet?: Function, onNotice?: Function}} handlers
+     * @param {{onOpenSheet?: Function, onSpawnToken?: Function, resolveUrl?: Function, onNotice?: Function}} handlers
      */
     constructor(root, handlers = {}) {
       this.root = root;
@@ -1470,11 +1503,12 @@
         this.listNode.appendChild(el('div', 'muted', 'Пока никого нет'));
         return;
       }
+      const resolve = this.handlers.resolveUrl || ((url) => url || '');
       for (const player of players) {
         const row = el('div', 'player-row');
         row.classList.toggle('is-offline', !player.online);
 
-        const avatar = el('div', 'player-row__avatar', initials(player.name));
+        const avatar = avatarNode(resolve(player.avatar), player.name);
         if (player.role === 'dm') avatar.classList.add('player-row__avatar--dm');
         row.appendChild(avatar);
 
@@ -1490,11 +1524,23 @@
         const meta = el('div', 'player-row__meta');
         meta.appendChild(el('span', `dot ${player.online ? 'dot--on' : 'dot--off'}`));
         meta.appendChild(el('span', null, player.online ? 'в сети' : 'не в сети'));
-        if (player.tokenId) meta.appendChild(el('span', 'muted', '· фишка назначена'));
+        if (player.tokenId) meta.appendChild(el('span', 'muted', '· фишка на поле'));
+        else if (player.hasSheet) meta.appendChild(el('span', 'muted', '· лист есть'));
         main.appendChild(meta);
         row.appendChild(main);
 
         if (this.role === 'dm' && player.role !== 'dm') {
+          // Вывести фишку из листа можно один раз: пока у игрока её нет,
+          // кнопка стоит, а после появления фишки исчезает.
+          if (!player.tokenId) {
+            const spawn = el('button', 'btn btn--tiny', 'Фишка на поле');
+            spawn.type = 'button';
+            spawn.title = 'Создать фишку этого игрока из его листа, с аватаром';
+            spawn.addEventListener('click', () => {
+              if (this.handlers.onSpawnToken) this.handlers.onSpawnToken(player.playerId);
+            });
+            row.appendChild(spawn);
+          }
           const open = el('button', 'btn btn--tiny', 'Открыть лист');
           open.type = 'button';
           open.addEventListener('click', () => {
@@ -1512,6 +1558,10 @@
    * ====================================================================== */
 
   class ChatPanel {
+    /**
+     * @param {HTMLElement} root
+     * @param {{onSend?: Function, resolveUrl?: Function}} [handlers]
+     */
     constructor(root, handlers = {}) {
       this.root = root;
       this.handlers = handlers;
@@ -1557,6 +1607,12 @@
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
       if (message.isRoll) row.classList.add('chat__msg--roll');
       const head = el('div', 'chat__head');
+      // Портрет только у бросков: он отвечает на «кто именно бросил», а у
+      // обычной реплики автор и так виден по имени.
+      if (message.isRoll && message.avatar) {
+        const resolve = this.handlers.resolveUrl || ((url) => url || '');
+        head.appendChild(avatarNode(resolve(message.avatar), message.from, 'chat__avatar'));
+      }
       head.appendChild(el('span', 'chat__author', message.from));
       if (message.role === 'dm') head.appendChild(el('span', 'badge badge--dm', 'ДМ'));
       if (message.isRoll) head.appendChild(el('span', 'badge badge--roll', 'бросок'));

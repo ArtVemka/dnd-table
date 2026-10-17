@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Портрет мастера: мудрый старец-архимаг. Рисуется кодом, поэтому держим
+       только простые формы и градиенты: результат должен одинаково выглядеть
+       и в кружке 30px в списке игроков, и во весь экран. -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="34%" r="78%">
+      <stop offset="0%" stop-color="#32456b"/>
+      <stop offset="52%" stop-color="#1b2540"/>
+      <stop offset="100%" stop-color="#0a0f1c"/>
+    </radialGradient>
+    <linearGradient id="robe" x1="15%" y1="0%" x2="85%" y2="100%">
+      <stop offset="0%" stop-color="#4266ad"/>
+      <stop offset="48%" stop-color="#2c477f"/>
+      <stop offset="100%" stop-color="#17254c"/>
+    </linearGradient>
+    <linearGradient id="robeShade" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0f1836" stop-opacity="0.55"/>
+      <stop offset="45%" stop-color="#0f1836" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#0f1836" stop-opacity="0.5"/>
+    </linearGradient>
+    <linearGradient id="skin" x1="28%" y1="0%" x2="72%" y2="100%">
+      <stop offset="0%" stop-color="#f4d9bd"/>
+      <stop offset="55%" stop-color="#e3bf99"/>
+      <stop offset="100%" stop-color="#c1936c"/>
+    </linearGradient>
+    <linearGradient id="beard" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#fbfaf6"/>
+      <stop offset="50%" stop-color="#e6e0d2"/>
+      <stop offset="100%" stop-color="#b9ae98"/>
+    </linearGradient>
+    <linearGradient id="hat" x1="25%" y1="0%" x2="75%" y2="100%">
+      <stop offset="0%" stop-color="#38538f"/>
+      <stop offset="100%" stop-color="#16264f"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="42%" cy="38%" r="62%">
+      <stop offset="0%" stop-color="#fffdf0"/>
+      <stop offset="40%" stop-color="#ffd166"/>
+      <stop offset="100%" stop-color="#d9931f"/>
+    </radialGradient>
+    <clipPath id="frame"><circle cx="256" cy="256" r="256"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect width="512" height="512" fill="url(#bg)"/>
+
+    <!-- Звёздное поле -->
+    <g fill="#cfe0ff">
+      <circle cx="70" cy="96" r="2.6" opacity="0.75"/>
+      <circle cx="140" cy="52" r="1.8" opacity="0.6"/>
+      <circle cx="420" cy="66" r="2.4" opacity="0.7"/>
+      <circle cx="466" cy="150" r="1.6" opacity="0.55"/>
+      <circle cx="52" cy="210" r="1.9" opacity="0.5"/>
+      <circle cx="452" cy="252" r="2.2" opacity="0.6"/>
+      <circle cx="96" cy="330" r="1.7" opacity="0.45"/>
+    </g>
+
+    <!-- Свет из-за плеч -->
+    <g opacity="0.13" fill="#9dbcff">
+      <path d="M256 70 L128 512 L182 512 L256 130 Z"/>
+      <path d="M256 70 L384 512 L330 512 L256 130 Z"/>
+    </g>
+
+    <!-- Посох за плечом -->
+    <g transform="rotate(5 402 300)">
+      <rect x="394" y="176" width="18" height="352" rx="9" fill="#5d3f22"/>
+      <rect x="394" y="176" width="7" height="352" rx="4" fill="#8a6238" opacity="0.7"/>
+      <circle cx="403" cy="150" r="52" fill="#ffd166" opacity="0.14"/>
+      <circle cx="403" cy="150" r="27" fill="url(#orb)"/>
+    </g>
+
+    <!-- Плечи и мантия -->
+    <path d="M256 268 C 148 268 82 336 68 512 L444 512 C 430 336 364 268 256 268 Z" fill="url(#robe)"/>
+    <path d="M256 268 C 148 268 82 336 68 512 L444 512 C 430 336 364 268 256 268 Z" fill="url(#robeShade)"/>
+    <!-- Капюшон за головой: отделяет бороду от мантии -->
+    <path d="M256 250 C 178 250 140 300 132 372 C 168 336 208 318 256 318 C 304 318 344 336 380 372 C 372 300 334 250 256 250 Z" fill="#101a38"/>
+    <!-- Золотое шитьё -->
+    <path d="M150 316 C 186 372 214 444 220 512" fill="none" stroke="#d8ae52" stroke-width="7" opacity="0.9"/>
+    <path d="M362 316 C 326 372 298 444 292 512" fill="none" stroke="#d8ae52" stroke-width="7" opacity="0.9"/>
+    <circle cx="256" cy="430" r="18" fill="#d8ae52"/>
+    <circle cx="256" cy="430" r="8" fill="#26406f"/>
+
+    <!-- Шея -->
+    <path d="M216 236 L296 236 L296 286 C 284 302 228 302 216 286 Z" fill="#c79a72"/>
+
+    <!-- Уши -->
+    <ellipse cx="184" cy="196" rx="13" ry="22" fill="#d5aa7f"/>
+    <ellipse cx="328" cy="196" rx="13" ry="22" fill="#d5aa7f"/>
+
+    <!-- Голова -->
+    <ellipse cx="256" cy="190" rx="74" ry="86" fill="url(#skin)"/>
+    <!-- Тень от шляпы на лбу -->
+    <path d="M182 172 C 200 122 312 122 330 172 C 300 152 212 152 182 172 Z" fill="#0e1730" opacity="0.28"/>
+
+    <!-- Борода: широкая, до груди, с волнистым низом -->
+    <path d="M186 206
+             C 174 258 180 312 206 352
+             C 216 368 224 372 226 356
+             C 236 378 246 386 250 366
+             C 258 392 268 392 272 366
+             C 280 388 292 380 292 356
+             C 296 374 306 370 310 352
+             C 332 312 338 258 326 206
+             C 318 244 296 262 256 264
+             C 216 262 194 244 186 206 Z"
+          fill="url(#beard)" stroke="#a89c85" stroke-width="3"/>
+    <!-- Пряди -->
+    <g fill="none" stroke="#c3b9a2" stroke-width="3" opacity="0.7" stroke-linecap="round">
+      <path d="M222 268 C 224 306 234 340 246 366"/>
+      <path d="M256 270 L256 380"/>
+      <path d="M290 268 C 288 306 278 340 266 366"/>
+    </g>
+
+    <!-- Усы поверх бороды -->
+    <path d="M208 232 C 224 216 288 216 304 232
+             C 288 250 224 250 208 232 Z" fill="#fdfcf8" stroke="#c3b9a2" stroke-width="3"/>
+
+    <!-- Глаза -->
+    <path d="M214 192 C 228 182 246 182 256 191 C 246 200 228 200 214 192 Z" fill="#fdfbf4"/>
+    <path d="M298 192 C 284 182 266 182 256 191 C 266 200 284 200 298 192 Z" fill="#fdfbf4"/>
+    <circle cx="236" cy="191" r="8.4" fill="#4a7d55"/>
+    <circle cx="276" cy="191" r="8.4" fill="#4a7d55"/>
+    <circle cx="236" cy="191" r="4" fill="#101720"/>
+    <circle cx="276" cy="191" r="4" fill="#101720"/>
+    <circle cx="239" cy="188" r="2.1" fill="#fff" opacity="0.92"/>
+    <circle cx="279" cy="188" r="2.1" fill="#fff" opacity="0.92"/>
+    <!-- Брови -->
+    <path d="M210 176 C 226 165 248 166 258 175" fill="none" stroke="#ece6d8" stroke-width="9" stroke-linecap="round"/>
+    <path d="M302 176 C 286 165 264 166 254 175" fill="none" stroke="#ece6d8" stroke-width="9" stroke-linecap="round"/>
+    <!-- Морщины -->
+    <g fill="none" stroke="#b98a62" stroke-width="4" opacity="0.65" stroke-linecap="round">
+      <path d="M224 154 C 236 148 248 148 256 152"/>
+      <path d="M260 146 C 274 143 286 146 292 152"/>
+      <path d="M214 214 C 224 218 232 220 240 220"/>
+      <path d="M298 214 C 288 218 280 220 272 220"/>
+    </g>
+    <!-- Нос -->
+    <path d="M256 194 C 249 214 243 228 256 233 C 268 228 263 212 256 194 Z" fill="#dba87c"/>
+
+    <!-- Шляпа: конус с загнутым остриём + широкое поле -->
+    <path d="M188 152
+             C 170 100 182 40 232 24
+             C 300 2 366 34 378 82
+             C 386 112 362 136 330 152 Z"
+          fill="url(#hat)" stroke="#0f1c3c" stroke-width="4"/>
+    <!-- Складка на конусе -->
+    <path d="M232 26 C 254 62 262 104 258 150" fill="none" stroke="#0f1c3c" stroke-width="4" opacity="0.75"/>
+    <!-- Лента -->
+    <path d="M193 140 C 226 122 288 122 328 140 L330 154 C 290 136 226 136 190 154 Z" fill="#d8ae52"/>
+    <!-- Поле шляпы -->
+    <ellipse cx="256" cy="156" rx="152" ry="34" fill="url(#hat)" stroke="#d8ae52" stroke-width="5"/>
+    <ellipse cx="256" cy="152" rx="152" ry="34" fill="#20386e"/>
+    <ellipse cx="256" cy="150" rx="118" ry="22" fill="#0f1c3c" opacity="0.55"/>
+    <!-- Звёзды на шляпе -->
+    <g fill="#ffd166">
+      <circle cx="268" cy="62" r="5.5"/>
+      <circle cx="312" cy="52" r="4"/>
+      <circle cx="238" cy="86" r="3.6"/>
+      <circle cx="340" cy="98" r="3"/>
+    </g>
+    <path d="M268 62 L268 48 M268 62 L280 56 M268 62 L256 56"
+          stroke="#ffd166" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+  </g>
+
+  <circle cx="256" cy="256" r="252" fill="none" stroke="#d8ae52" stroke-width="8" opacity="0.9"/>
+</svg>

@@ -227,8 +227,9 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
    * renderer -> base64 -> Socket.IO -> main-процесс сохраняет файл в папку кампании.
    * Все проверки дублируются на сервере, здесь — быстрый отказ с понятным текстом.
    * @param {File} file
+   * @param {number} [maxBytes] свой предел размера: у аватара он меньше карты
    */
-  function readImageFile(file) {
+  function readImageFile(file, maxBytes = DnD.LIMITS.maxImageBytes) {
     return new Promise((resolve) => {
       if (!file) return resolve({ canceled: true });
 
@@ -236,10 +237,10 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       if (!file.size) {
         return resolve({ error: `Файл «${file.name}» пустой.` });
       }
-      if (file.size > DnD.LIMITS.maxImageBytes) {
+      if (file.size > maxBytes) {
         return resolve({
           error: `Файл «${file.name}» весит ${megabytes} МБ, а можно не больше `
-            + `${Math.round(DnD.LIMITS.maxImageBytes / 1024 / 1024)} МБ. Уменьшите изображение.`
+            + `${Math.round(maxBytes / 1024 / 1024)} МБ. Уменьшите изображение.`
         });
       }
       const allowedType = /^image\/(png|jpeg|jpg|webp)$/i.test(file.type);
@@ -876,12 +877,20 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     if (!playersList) {
       playersList = new PlayersList($('#players-root'), {
         // ДМ открывает лист игрока прямо из списка участников.
-        onOpenSheet: (playerId) => openPlayerSheet(playerId)
+        onOpenSheet: (playerId) => openPlayerSheet(playerId),
+        // И выводит его фишку на поле одним нажатием, прямо из листа.
+        onSpawnToken: (playerId) => emit('createTokenFromSheet', {
+          playerId,
+          mapType: app.room.activeMap || 'battle',
+          mapId: activeMapId()
+        }),
+        resolveUrl: assetUrl
       });
     }
     if (!chatPanel) {
       chatPanel = new ChatPanel($('#tab-chat'), {
-        onSend: (text) => emit('chatMessage', { text })
+        onSend: (text) => emit('chatMessage', { text }),
+        resolveUrl: assetUrl
       });
     }
     if (!dicePanel) {
@@ -925,9 +934,30 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         onChange: onSheetChange,
         onPlayerChange: (playerId) => openPlayerSheet(playerId),
         onBack: () => closePlayerSheet(),
-        onDetach: () => detachSheet()
+        onDetach: () => detachSheet(),
+        onAvatarPick: uploadAvatar,
+        onAvatarClear: () => emit('setAvatar', { image: null }),
+        resolveUrl: assetUrl
       });
     }
+  }
+
+  /**
+   * Загрузка аватара. Файл проверяется тем же кодом, что и картинки фишек, а
+   * сервер кладёт его в файлы кампании и сам решает, что за это считать.
+   * @param {File} file
+   */
+  async function uploadAvatar(file) {
+    const read = await readImageFile(file, DnD.LIMITS.maxAvatarBytes);
+    if (read.canceled) return;
+    if (read.error) return toast(read.error, 'error');
+    emit('setAvatar', { image: read.dataUrl });
+  }
+
+  /** Аватар текущего игрока: из списка участников, он у всех один и тот же. */
+  function ownAvatar() {
+    const me = app.room.players.find((player) => player.playerId === app.playerId);
+    return me ? me.avatar || '' : '';
   }
 
   function renderAll() {
@@ -1786,6 +1816,9 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         app.sheetShownFor = null;
       }
       sheetView.setReadOnly(true);
+      // Портрет в листе мастера показываем, но править не даём: аватар
+      // меняет сам игрок, а не мастер.
+      sheetView.setAvatarEditable(false);
       sheetView.setPlayerList(targets, app.viewedSheetPlayerId);
 
       // ДМ сам решает, чей лист открыть: сначала он видит список игроков.
@@ -1801,6 +1834,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       if (!sheet) {
         // Лист ещё не дошёл: показываем пустую форму и запрашиваем данные один раз.
         sheetView.setSheet(DnD.createEmptySheet());
+        sheetView.setAvatar(assetUrl(ownAvatarOf(app.viewedSheetPlayerId)), sheetNameOf(app.viewedSheetPlayerId));
         sheetView.setStatus(`Лист игрока ${owner ? owner.name : ''} загружается…`);
         app.sheetShownFor = null;
         requestSheetOnce(app.viewedSheetPlayerId);
@@ -1809,6 +1843,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       if (!force && app.sheetShownFor === app.viewedSheetPlayerId) return;
       app.sheetShownFor = app.viewedSheetPlayerId;
       sheetView.setSheet(sheet);
+      sheetView.setAvatar(assetUrl(ownAvatarOf(app.viewedSheetPlayerId)), sheetNameOf(app.viewedSheetPlayerId));
       sheetView.setStatus(`Просмотр · ${owner ? owner.name : ''}`);
       return;
     }
@@ -1816,7 +1851,13 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
     // Игрок видит и редактирует только свой лист.
     sheetView.setMode('sheet');
     sheetView.setReadOnly(false);
+    // Свой аватар игрок всегда может поменять: и в настоящем столе, и в
+    // тренировочном, где портрет живёт в этом же окне.
+    sheetView.setAvatarEditable(true);
     const sheet = app.room.sheets[app.playerId];
+    // Аватар обновляем всегда, даже когда лист не перерисовывается: игрок
+    // только что сменил портрет, а refreshSheetView зовут без force.
+    sheetView.setAvatar(assetUrl(ownAvatar()), (sheet && sheet.characterName) || storedName());
     if (!sheet) {
       sheetView.setSheet(DnD.createEmptySheet());
       return;
@@ -1829,6 +1870,19 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       ? 'Лист тренировочного стола: сохраняется на этом компьютере'
       : `Имя игрока: ${storedName() || '—'}`);
     sheetView.setSheet(sheet);
+  }
+
+  /** Аватар произвольного игрока: он у всех в списке один и тот же. */
+  function ownAvatarOf(playerId) {
+    const player = app.room.players.find((entry) => entry.playerId === playerId);
+    return player ? player.avatar || '' : '';
+  }
+
+  /** Имя персонажа игрока — для буквы-заглушки, пока портрета нет. */
+  function sheetNameOf(playerId) {
+    const player = app.room.players.find((entry) => entry.playerId === playerId);
+    return (app.room.sheets[playerId] && app.room.sheets[playerId].characterName)
+      || (player ? player.name : '');
   }
 
   /** ДМ запрашивает лист игрока только один раз, чтобы не спамить сервер. */

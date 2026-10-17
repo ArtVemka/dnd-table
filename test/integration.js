@@ -742,6 +742,146 @@ async function main() {
   emit(dm, 'moveToken', { tokenId: 'no-such-token', x: 0.5, y: 0.5 });
   await waitFor(() => dm.log.errorMessage.find((item) => item.message.includes('Фишка не найдена')), 'несуществующая фишка');
 
+  /* ------------------------------------------------------------- аватары */
+
+  console.log('\nАватары');
+  const P1 = 'p-test-0001';
+  const P2 = 'p-test-0002';
+  const listHas = (playerId) => room.playerList().find((player) => player.playerId === playerId);
+
+  check('у мастера сразу есть портрет из поставки', () => {
+    assert.strictEqual(listHas('dm').avatar, 'avatar-dm.png');
+  });
+  check('у игрока портрета нет, пока он его не поставил', () => {
+    assert.strictEqual(listHas(P1).avatar, null);
+  });
+
+  emit(p1, 'setAvatar', { image: PNG_1PX });
+  await waitFor(() => listHas(P1).avatar, 'аватар игрока');
+  check('аватар игрока сохраняется как файл кампании', () => {
+    assert.match(listHas(P1).avatar, /^\/files\/.+\.png$/);
+  });
+  check('аватар виден в рассылке участников, а не только владельцу листа', () => {
+    const list = dm.log.playersUpdate[dm.log.playersUpdate.length - 1];
+    const player = list.find((entry) => entry.playerId === P1);
+    assert.ok(player && player.avatar, 'в рассылке участников аватара нет');
+  });
+
+  // Чужой playerId в теле сообщения игнорируется: сервер всегда берёт
+  // playerId из сокета. Вместо попытки подменить чужой портрет игрок получает
+  // свой собственный — и это тоже надо проверить.
+  emit(p2, 'setAvatar', { image: PNG_1PX, playerId: P1 });
+  const stolenFrom = listHas(P1).avatar;
+  await waitFor(() => listHas(P2).avatar, 'аватар отправителя');
+  check('подмена чужого playerId в аватаре не проходит', () => {
+    assert.strictEqual(listHas(P1).avatar, stolenFrom, 'аватар другого игрока изменился');
+    assert.match(listHas(P2).avatar, /^\/files\/.+\.png$/);
+  });
+  // Возвращаем второго игрока без портрета: дальше его фишка выводится из листа.
+  emit(p2, 'setAvatar', { image: null });
+  await waitFor(() => listHas(P2).avatar === null, 'аватар второго игрока убран');
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setAvatar', { image: 'data:image/png;base64,не-картинка' });
+  await waitFor(
+    () => p1.log.errorMessage.find((item) => /изображен|Поддерживаются|Формат/.test(item.message)),
+    'отказ по битому аватару'
+  );
+  check('битый аватар отвергается, прошлый остаётся', () => {
+    assert.strictEqual(listHas(P1).avatar, stolenFrom);
+  });
+
+  emit(dm, 'setAvatar', { image: PNG_1PX });
+  await waitFor(
+    () => listHas('dm').avatar && listHas('dm').avatar !== 'avatar-dm.png',
+    'аватар мастера'
+  );
+  check('мастер может заменить свой портрет', () => {
+    assert.match(listHas('dm').avatar, /^\/files\/.+\.png$/);
+  });
+
+  /* --- фишка из листа --- */
+  // Фишку выводим игроку, у которого её ещё нет: у первого игрока она осталась
+  // от проверок назначения выше, и «уже есть фишка» сработало бы не на том.
+  const tokensBefore = new Set(room.tokens.map((token) => token.id));
+  emit(p2, 'setAvatar', { image: PNG_1PX });
+  await waitFor(() => listHas(P2).avatar, 'аватар второго игрока');
+  emit(dm, 'createTokenFromSheet', { playerId: P2, mapType: 'world' });
+  const spawned = await waitFor(
+    () => room.tokens.find((token) => token.assignedPlayerId === P2 && !tokensBefore.has(token.id)),
+    'фишка из листа игрока'
+  );
+  const characterName = (room.sheets.get(P2) || {}).characterName || 'Игрок';
+  check('фишка выходит из листа с именем персонажа и аватаром игрока', () => {
+    assert.strictEqual(spawned.name, characterName);
+    assert.strictEqual(spawned.imageUrl, listHas(P2).avatar);
+    assert.strictEqual(spawned.avatarFromSheet, true);
+  });
+
+  const avatarBeforeSync = spawned.imageUrl;
+  emit(p2, 'setAvatar', { image: PNG_1PX });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === spawned.id).imageUrl !== avatarBeforeSync,
+    'аватар доехал до фишки'
+  );
+  check('смена аватара игрока сама обновляет его фишку', () => {
+    const token = room.tokens.find((item) => item.id === spawned.id);
+    assert.strictEqual(token.imageUrl, listHas(P2).avatar);
+    assert.notStrictEqual(token.imageUrl, avatarBeforeSync);
+  });
+
+  emit(dm, 'setTokenImage', { tokenId: spawned.id, image: PNG_1PX });
+  await waitFor(
+    () => room.tokens.find((item) => item.id === spawned.id).avatarFromSheet === false,
+    'фишка перестала быть аватаром игрока'
+  );
+  const manualUrl = room.tokens.find((item) => item.id === spawned.id).imageUrl;
+  emit(p2, 'setAvatar', { image: PNG_1PX });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  check('картинка, поставленная руками, аватаром больше не затирается', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === spawned.id).imageUrl, manualUrl);
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'createTokenFromSheet', { playerId: P2, mapType: 'world' });
+  await waitFor(() => dm.log.errorMessage.find((item) => /уже есть фишка/i.test(item.message)), 'вторая фишка игроку');
+  check('вторую фишку одному игроку вывести не дают', () => {
+    assert.strictEqual(room.tokens.filter((token) => token.assignedPlayerId === P2).length, 1);
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'createTokenFromSheet', { playerId: 'dm', mapType: 'world' });
+  await waitFor(() => dm.log.errorMessage.find((item) => /нет фишки/i.test(item.message)), 'попытка вывести фишку мастеру');
+  check('фишку из листа мастеру не выводют', () => {
+    assert.ok(!room.tokens.some((token) => token.assignedPlayerId === 'dm'));
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'createTokenFromSheet', { playerId: P1 });
+  await waitFor(() => p1.log.errorMessage.find((item) => /только ДМ/i.test(item.message)), 'попытка игрока');
+  check('игрок не может вывести фишку даже себе', () => {
+    assert.strictEqual(room.tokens.filter((token) => token.assignedPlayerId === P2).length, 1);
+  });
+
+  /* --- аватар в сообщении о броске --- */
+  const chatBefore = dm.log.chatMessage.length;
+  emit(p1, 'rollDice', { sides: 20 });
+  const rollMsg = await waitFor(() => dm.log.chatMessage[chatBefore], 'сообщение о броске');
+  check('в сообщении о броске лежит аватар бросившего', () => {
+    assert.strictEqual(rollMsg.isRoll, true);
+    assert.strictEqual(rollMsg.avatar, listHas(P1).avatar);
+  });
+
+  // Возврат игроков к состоянию без портрета: дальше идут проверки перезапуска
+  // и переподключения, которым лишние файлы в папке только мешают.
+  emit(p1, 'setAvatar', { image: null });
+  emit(p2, 'setAvatar', { image: null });
+  await waitFor(() => listHas(P1).avatar === null && listHas(P2).avatar === null, 'аватары убраны');
+  // И убираем только те фишки, что завели сами: фишка первого игрока осталась
+  // от проверок назначения выше, и её удаление сломало бы счётчики дальше.
+  emit(dm, 'deleteToken', { tokenId: spawned.id });
+  await waitFor(() => !room.tokens.some((token) => token.id === spawned.id), 'уборка фишки из листа');
+
   /* ------------------------------------------------------------- кубики */
 
   console.log('\nКубики');

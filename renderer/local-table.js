@@ -228,7 +228,9 @@
       grid: { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
       tokens: [],
       diceHistory: [],
-      chatHistory: []
+      chatHistory: [],
+      /** Аватар игрока как data URL: сервера нет, файлы никто не сохраняет. */
+      avatar: null
     };
     // Недоигранный черновик становится листом персонажа тренировочного стола.
     const draft = readDraft(playerId);
@@ -238,6 +240,9 @@
       playerId,
       name: playerName,
       role: 'player',
+      // Портрета здесь нет и быть не может: сохранять файлы некуда, поэтому
+      // тренировочный аватар живёт как data URL прямо в состоянии.
+      avatar: state.avatar || null,
       online: true,
       hasSheet: Boolean(state.sheets[playerId]),
       tokenId: (state.tokens.find((token) => token.assignedPlayerId === playerId) || {}).id || null
@@ -436,6 +441,7 @@
           // В тренировочном столе ДМ нет: фишка сразу достаётся тому, кто её
           // создал, иначе проверить её было бы некому.
           assignedPlayerId: playerId,
+          avatarFromSheet: false,
           color: TOKEN_COLORS[state.tokens.length % TOKEN_COLORS.length]
         };
         state.tokens.push(token);
@@ -532,9 +538,30 @@
           from: playerName,
           playerId,
           role: 'player',
+          avatar: state.avatar || null,
           text: `бросил d${sides}: ${result}`,
           isRoll: true,
           time
+        });
+      },
+
+      setAvatar(payload) {
+        // Файлы сохранять некуда, поэтому портрет остаётся прямо в состоянии
+        // как data URL. Настоящий стол кладёт его в папку кампании.
+        const image = payload && payload.image;
+        state.avatar = image || null;
+        // Фишка из листа носит портрет игрока, как и на настоящем столе.
+        for (const token of state.tokens) {
+          if (!token.avatarFromSheet) continue;
+          token.imageUrl = state.avatar;
+          emitTo('tokenUpdated', { ...token });
+        }
+        emitTo('playersUpdate', playerList());
+      },
+
+      createTokenFromSheet() {
+        emitTo('errorMessage', {
+          message: 'В тренировочном столе ДМ нет — фишка из листа выводит только мастер'
         });
       },
 

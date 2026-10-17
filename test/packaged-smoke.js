@@ -47,6 +47,9 @@ const REQUIRED_FILES = [
   'renderer/index.html',
   'renderer/styles.css',
   'renderer/theme.js',
+  // Портрет мастера по умолчанию. Без него у стола не будет ведущего, а
+  // заметить пропажу в пакете негде: страница грузится, просто пустая.
+  'renderer/avatar-dm.png',
   'renderer/app.js',
   'renderer/dnd5e.js',
   'renderer/sheet.js',

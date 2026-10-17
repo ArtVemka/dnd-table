@@ -19,6 +19,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 
 const {
+  DEFAULT_DM_AVATAR,
   DM_PLAYER_ID,
   GRID,
   LIMITS,
@@ -170,6 +171,27 @@ async function createTableServer(options) {
   const findToken = (tokenId) => room.tokens.find((token) => token.id === String(tokenId || ''));
 
   /**
+   * Ставит игроку аватар и переносит его на выведенную из листа фишку.
+   *
+   * Фишка с флагом avatarFromSheet живёт аватаром игрока: поменял портрет —
+   * фишка обновилась сама. Фишки с картинкой, поставленной руками, не трогаем.
+   * @param {string} playerId
+   * @param {string|null} url ссылка вида /files/<имя> либо null
+   */
+  const applyAvatar = (playerId, url) => {
+    const player = room.players.get(playerId);
+    if (!player) return;
+    player.avatar = url || null;
+    for (const token of room.tokens) {
+      if (!token.avatarFromSheet || token.assignedPlayerId !== playerId) continue;
+      token.imageUrl = player.avatar;
+      io.emit('tokenUpdated', token);
+    }
+    markDirty();
+    broadcastPlayers();
+  };
+
+  /**
    * Ключ группы: название без регистра и лишних пробелов.
    *
    * При импорте из Foundry названия приходят с разными отступами и иногда с
@@ -267,6 +289,82 @@ async function createTableServer(options) {
       const sheet = room.sheets.get(targetId);
       if (!sheet) return emitError(socket, 'Лист персонажа не найден');
       socket.emit('characterSheetData', { playerId: targetId, sheet });
+    });
+
+    /* ------------------------------------------------------------------ *
+     * Аватар игрока
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Аватар меняет только сам игрок. Мастеру тоже можно: портрет ведущего
+     * он тоже ставит себе, а чужой аватар трогать нельзя — это личный кадр
+     * человека, а не элемент партии.
+     */
+    socket.on('setAvatar', async (payload) => {
+      if (!requireJoined(socket)) return;
+      const playerId = socket.data.playerId;
+      const player = room.players.get(playerId);
+      if (!player) return;
+
+      const raw = payload && payload.image;
+      // null — намеренно убрать картинку и вернуться к инициалам.
+      if (raw === null || raw === undefined || raw === '') {
+        applyAvatar(playerId, null);
+        onLog('Аватар убран');
+        return;
+      }
+      const decoded = decodeImage(raw, LIMITS.maxAvatarBytes);
+      if (decoded.error) return emitError(socket, decoded.error);
+      try {
+        const fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
+        applyAvatar(playerId, `/files/${fileName}`);
+        onLog(`Аватар игрока ${player.name} обновлён`);
+      } catch (error) {
+        emitError(socket, 'Не получилось сохранить аватар');
+        onLog(`Ошибка сохранения аватара: ${error.message}`);
+      }
+    });
+
+    /**
+     * Фишка игрока прямо из его листа: имя берётся у персонажа, картинка — у
+     * аватара. Заодно проверяем, что фишка уже не стоит: две фишки на одного
+     * человека — это всегда ошибка, а не «ну ладно».
+     */
+    socket.on('createTokenFromSheet', (payload) => {
+      if (!requireDm(socket)) return;
+      const playerId = String((payload && payload.playerId) || '');
+      const player = room.players.get(playerId);
+      if (!player) return emitError(socket, 'Игрок не найден');
+      if (player.role === ROLE_DM) return emitError(socket, 'У мастера нет фишки на поле');
+      const existing = room.tokens.find((token) => token.assignedPlayerId === playerId);
+      if (existing) {
+        return emitError(socket, `У игрока уже есть фишка «${existing.name}»`);
+      }
+      if (room.tokens.length >= LIMITS.maxTokens) return emitError(socket, 'Слишком много фишек на столе');
+
+      const sheet = room.sheets.get(playerId);
+      const requestedMap = payload && payload.mapType;
+      const mapType = MAP_TYPES.includes(requestedMap) ? requestedMap : (room.activeMap || 'battle');
+      const token = {
+        id: newTokenId(),
+        name: sanitizeName(sheet && sheet.characterName) || sanitizeName(player.name) || 'Фишка',
+        mapType,
+        mapId: sanitizeText(payload && payload.mapId, 80),
+        x: 0.5,
+        y: 0.5,
+        // Аватар мастера — это его портрет в списке, а не картинка фишки:
+        // выводить фишку из листа мастера мы не даём, а пустой аватар у фишки
+        // останется цветным кружком.
+        imageUrl: player.avatar || null,
+        assignedPlayerId: playerId,
+        avatarFromSheet: true,
+        color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length]
+      };
+      room.tokens.push(token);
+      markDirty();
+      io.emit('tokenCreated', token);
+      broadcastPlayers();
+      onLog(`Фишка «${token.name}» выведена из листа игрока ${player.name}`);
     });
 
     /* ------------------------------------------------------------------ *
@@ -436,6 +534,10 @@ async function createTableServer(options) {
       try {
         const fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
         token.imageUrl = `/files/${fileName}`;
+        // Картинку поставили руками — она перестаёт быть аватаром игрока.
+        // Иначе следующая смена портрета тихо затёрла бы то, что нарисовали
+        // для этой фишки специально.
+        token.avatarFromSheet = false;
         markDirty();
         io.emit('tokenUpdated', token);
       } catch (error) {
@@ -569,6 +671,11 @@ async function createTableServer(options) {
         from: socket.data.name,
         playerId: socket.data.playerId,
         role: socket.data.role,
+        // Аватар пишем в само сообщение, а не подтягиваем на отрисовке:
+        // портрет мог смениться уже после броска, и в истории он должен
+        // остаться тем, каким был в момент броска.
+        avatar: room.players.get(socket.data.playerId)?.avatar
+          || (socket.data.role === ROLE_DM ? DEFAULT_DM_AVATAR : null),
         text: `бросил d${sides}: ${result}`,
         isRoll: true,
         time: roll.time

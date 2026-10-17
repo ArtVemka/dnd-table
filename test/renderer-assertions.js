@@ -408,6 +408,62 @@
       assert(rows[0].classList.contains('is-selected'), 'выбранный игрок не подсвечен');
       assert(rows[1].classList.contains('is-offline'), 'отключённый игрок не помечен');
     });
+    check('в списке игроков листа портреты, а у кого нет — буква имени', () => {
+      const host = document.createElement('div');
+      const view = new window.SheetView(host, {
+        resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
+      });
+      view.setMode('list');
+      view.setPlayerList([
+        { playerId: 'p-1', name: 'Артём', role: 'player', online: true, avatar: '/files/arthur.png' },
+        { playerId: 'p-2', name: 'Борис', role: 'player', online: false }
+      ], null);
+      const [arthur, boris] = [...host.querySelectorAll('.sheet__players .player-row')];
+      assert.strictEqual(arthur.querySelector('img').getAttribute('src'), 'http://стол/files/arthur.png');
+      assert.strictEqual(boris.querySelector('.player-row__avatar').textContent, 'Б');
+      assert(!boris.querySelector('img'), 'у Бориса картинка без аватара');
+    });
+    check('в листе есть блок аватарки: круг, загрузка и сброс', () => {
+      const host = document.createElement('div');
+      let picked = null;
+      let cleared = 0;
+      const view = new window.SheetView(host, {
+        onAvatarPick: (file) => { picked = file; },
+        onAvatarClear: () => { cleared += 1; }
+      });
+      const preview = host.querySelector('.avatar-pick__preview');
+      const input = host.querySelector('.avatar-pick__file');
+      assert(preview, 'нет круга с портретом');
+      assert(input && input.type === 'file', 'нет выбора файла');
+      assert(input.accept.includes('image/png'), 'фильтр файлов не задан');
+      // Без аватара показываем букву имени персонажа, а не пустой кружок.
+      view.setSheet({ ...window.DnD5e.createEmptySheet('Артём'), characterName: 'Тордин' });
+      view.setAvatar(null, 'Тордин');
+      assert.strictEqual(preview.textContent, 'Т', `буква-заглушка: ${preview.textContent}`);
+      const clear = host.querySelector('.avatar-pick__side .btn');
+      assert(clear.hidden, 'кнопка «Убрать» видна без аватара');
+
+      view.setAvatar('http://стол/files/arthur.png', 'Тордин');
+      assert.strictEqual(preview.querySelector('img').getAttribute('src'), 'http://стол/files/arthur.png',
+        'картинка не показана');
+      assert(!clear.hidden, 'кнопка «Убрать» спрятана при наличии аватара');
+      clear.click();
+      assert(cleared === 1, `сброс аватара: ${cleared}`);
+
+      const file = new File([PNG_1PX], 'portrait.png', { type: 'image/png' });
+      Object.defineProperty(input, 'files', { value: [file] });
+      input.dispatchEvent(new Event('change'));
+      assert(picked && picked.name === 'portrait.png', `выбранный файл: ${picked && picked.name}`);
+    });
+    check('аватар в листе мастер не правит, но видит', () => {
+      const host = document.createElement('div');
+      const view = new window.SheetView(host, {});
+      view.setAvatarEditable(false);
+      assert(view.avatarInput.disabled, 'мастер может выбрать файл');
+      assert(view.avatarClear.disabled, 'мастер может сбросить чужой аватар');
+      view.setAvatarEditable(true);
+      assert(!view.avatarInput.disabled, 'игрок не может выбрать файл');
+    });
     check('лист открывается нажатием на имя игрока в списке', () => {
       let requested = null;
       const host = document.createElement('div');
@@ -467,8 +523,8 @@
       { id: 't3', name: 'Дракон', mapType: 'battle', x: 0.1, y: 0.1, imageUrl: null, assignedPlayerId: null, color: '#6fb45f' }
     ];
     const PLAYERS = [
-      { playerId: 'dm', name: 'Мастер', role: 'dm', online: true, hasSheet: false, tokenId: null },
-      { playerId: 'p-1', name: 'Артём', role: 'player', online: true, hasSheet: true, tokenId: 't2' }
+      { playerId: 'dm', name: 'Мастер', role: 'dm', online: true, hasSheet: false, tokenId: null, avatar: 'avatar-dm.png' },
+      { playerId: 'p-1', name: 'Артём', role: 'player', online: true, hasSheet: true, tokenId: 't2', avatar: null }
     ];
     const MAP_STATE = {
       maps: {
@@ -872,9 +928,11 @@
 
     const playersHost = document.createElement('div');
     sandbox.appendChild(playersHost);
-    const playersList = new window.TableUI.PlayersList(playersHost, {});
+    const playersList = new window.TableUI.PlayersList(playersHost, {
+      resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
+    });
     playersList.render(PLAYERS.concat([
-      { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null }
+      { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null, avatar: '/files/boris.png' }
     ]), { role: 'dm', playerId: 'dm' });
 
     check('список участников: имя, роль и статус онлайн/офлайн', () => {
@@ -889,9 +947,40 @@
         .filter((button) => button.textContent === 'Открыть лист');
       assert(buttons.length === 2, `кнопок «Открыть лист»: ${buttons.length}`);
     });
+    check('у ДМ есть «Фишка на поле» только у игроков без фишки', () => {
+      const buttons = [...playersHost.querySelectorAll('.player-row button')]
+        .filter((button) => button.textContent === 'Фишка на поле');
+      assert(buttons.length === 1, `кнопок «Фишка на поле»: ${buttons.length}`);
+      // У Артёма фишка уже есть — вторую ему не выводят, кнопки быть не должно.
+      const withToken = [...playersHost.querySelectorAll('.player-row')]
+        .find((row) => row.textContent.includes('Артём'));
+      assert(!withToken.textContent.includes('Фишка на поле'), 'кнопка есть у игрока с фишкой');
+      // И у мастера такой кнопки нет вовсе: фишка из листа ему не полагается.
+      const dmRow = [...playersHost.querySelectorAll('.player-row')]
+        .find((row) => row.textContent.includes('Мастер'));
+      assert(!dmRow.textContent.includes('Фишка на поле'), 'у мастера есть кнопка вывода фишки');
+    });
+    check('в списке участников портреты, а у кого портрета нет — буква имени', () => {
+      const rows = [...playersHost.querySelectorAll('.player-row')];
+      const dmAvatar = rows.find((row) => row.textContent.includes('Мастер')).querySelector('.player-row__avatar');
+      const dmImg = dmAvatar.querySelector('img');
+      assert(dmImg, 'у мастера нет картинки');
+      // Путь из поставки resolveUrl не трогает — иначе вышло бы http://столavatar-dm.png.
+      assert.strictEqual(dmImg.getAttribute('src'), 'avatar-dm.png');
+
+      const borisAvatar = rows.find((row) => row.textContent.includes('Борис')).querySelector('.player-row__avatar');
+      const borisImg = borisAvatar.querySelector('img');
+      assert(borisImg, 'у Бориса нет картинки');
+      assert.strictEqual(borisImg.getAttribute('src'), 'http://стол/files/boris.png');
+
+      const arthurAvatar = rows.find((row) => row.textContent.includes('Артём')).querySelector('.player-row__avatar');
+      assert(!arthurAvatar.querySelector('img'), 'у Артёма картинка без аватара');
+      assert.strictEqual(arthurAvatar.textContent, 'А', `буква-заглушка: ${arthurAvatar.textContent}`);
+    });
     playersList.render(PLAYERS, { role: 'player', playerId: 'p-1' });
-    check('у игрока нет кнопки «Открыть лист»', () => {
+    check('у игрока нет кнопок «Открыть лист» и «Фишка на поле»', () => {
       assert(!playersHost.textContent.includes('Открыть лист'), 'игрок видит кнопку просмотра листов');
+      assert(!playersHost.textContent.includes('Фишка на поле'), 'игрок видит кнопку вывода фишки');
     });
 
     /* ------------------------------------------------ чат и кубики */
@@ -899,14 +988,31 @@
     const chatHost = document.createElement('div');
     sandbox.appendChild(chatHost);
     let sentText = null;
-    const chatPanel = new window.TableUI.ChatPanel(chatHost, { onSend: (text) => { sentText = text; } });
+    const chatPanel = new window.TableUI.ChatPanel(chatHost, {
+      onSend: (text) => { sentText = text; },
+      resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
+    });
     chatPanel.renderAll([
-      { from: 'Артём', role: 'player', text: 'Привет, стол!', time: new Date().toISOString() }
+      { from: 'Артём', role: 'player', text: 'Привет, стол!', time: new Date().toISOString() },
+      { from: 'Мира', playerId: 'p-9', role: 'player', avatar: '/files/mira.png', text: 'бросил d20: 17', isRoll: true, time: new Date().toISOString() }
     ]);
     check('чат: имя автора, время и текст сообщения', () => {
       assert(chatHost.querySelector('.chat__author').textContent === 'Артём', 'автор');
       assert(chatHost.querySelector('.chat__time').textContent.length >= 4, 'время');
       assert(chatHost.querySelector('.chat__text').textContent === 'Привет, стол!', 'текст');
+    });
+    check('аватар стоит у броска и не стоит у обычной реплики', () => {
+      const rows = [...chatHost.querySelectorAll('.chat__msg')];
+      assert(rows.length === 2, `сообщений в чате: ${rows.length}`);
+      const plain = rows.find((row) => row.textContent.includes('Привет'));
+      const roll = rows.find((row) => row.textContent.includes('бросил d20'));
+      assert(!plain.querySelector('.chat__avatar'), 'у обычной реплики появился аватар');
+      const avatar = roll.querySelector('.chat__avatar');
+      assert(avatar, 'у броска нет аватара');
+      assert.strictEqual(avatar.querySelector('img').getAttribute('src'), 'http://стол/files/mira.png');
+      // Портрет должен стоять перед именем, а не после времени.
+      const head = roll.querySelector('.chat__head');
+      assert(head.firstElementChild.classList.contains('chat__avatar'), 'аватар не в начале шапки');
     });
     chatHost.querySelector('.chat__form input').value = 'Проверка связи';
     chatHost.querySelector('.chat__form').requestSubmit();

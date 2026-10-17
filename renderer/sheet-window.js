@@ -122,6 +122,8 @@
         clearTimeout(saveTimer);
         saveTimer = setTimeout(() => table.emit('saveCharacterSheet', { sheet }), 400);
       },
+      // Проверка уходит на стол тем же броском, что и из панели кубиков.
+      onRollCheck: (formula) => table.emit('rollDice', { formula }),
       onAvatarPick: async (file) => {
         if (context.readOnly) return;
         const read = await readImageFile(file, DnD.LIMITS.maxAvatarBytes);

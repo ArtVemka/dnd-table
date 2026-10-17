@@ -166,6 +166,33 @@
 
       const abilities = el('div', 'box');
       abilities.appendChild(el('div', 'box__title', 'Характеристики'));
+
+      // Режим проверки: обычный бросок, преимущество или помеха. Переключатель
+      // один на весь лист, потому что за бой преимущество нужно почти всегда, а
+      // кнопки «преимущество» у каждой характеристики превратили бы лист в
+      // список мелких кнопок.
+      this.rollMode = 'normal';
+      const modes = el('div', 'sheet__roll-modes');
+      const modeRow = el('div', 'inline-row sheet__roll-row');
+      modeRow.appendChild(el('span', 'sheet__roll-label', 'Проверка'));
+      this.rollModeNodes = {};
+      for (const mode of [
+        { id: 'normal', label: 'обычно' },
+        { id: 'advantage', label: 'преимущ.' },
+        { id: 'disadvantage', label: 'помеха' }
+      ]) {
+        const button = el('button', `sheet__roll-mode${mode.id === 'normal' ? ' is-active' : ''}`, mode.label);
+        button.type = 'button';
+        button.dataset.mode = mode.id;
+        button.addEventListener('click', () => this.setRollMode(mode.id));
+        this.rollModeNodes[mode.id] = button;
+        modes.appendChild(button);
+      }
+      this.rollModes = modes;
+      modeRow.appendChild(modes);
+      this.rollRow = modeRow;
+      abilities.appendChild(modeRow);
+
       const abilityGrid = el('div', 'abil-grid');
       this.abilityNodes = {};
       for (const ability of DnD.ABILITIES) {
@@ -177,7 +204,13 @@
         card.appendChild(input);
         const mod = el('div', 'abil__mod', '+0');
         card.appendChild(mod);
-        this.abilityNodes[ability.key] = { input, mod };
+        // Проверка характеристики нажатием на кубик: за столом это самый
+        // частый бросок, и искать модификатор в уме незачем.
+        const rollButton = this.rollButton(ability.label, () => {
+          this.rollCheck('Проверка ' + ability.label, DnD.formatModifier(this.derived.modifiers[ability.key]));
+        });
+        card.appendChild(rollButton);
+        this.abilityNodes[ability.key] = { input, mod, rollButton };
         abilityGrid.appendChild(card);
       }
       abilities.appendChild(abilityGrid);
@@ -198,7 +231,11 @@
         const value = el('span', 'prof-row__value', '+0');
         row.appendChild(value);
         row.appendChild(el('span', 'prof-row__label', ability.label));
-        this.saveNodes[ability.key] = { check, value };
+        const rollButton = this.rollButton('Спасбросок ' + ability.label, () => {
+          this.rollCheck('Спасбросок ' + ability.label, DnD.formatModifier(this.derived.saves[ability.key].total));
+        });
+        row.appendChild(rollButton);
+        this.saveNodes[ability.key] = { check, value, rollButton };
         saves.appendChild(row);
       }
       col1.appendChild(saves);
@@ -276,7 +313,11 @@
         row.appendChild(value);
         row.appendChild(el('span', 'prof-row__label', skill.label));
         row.appendChild(el('span', 'prof-row__ability', DnD.ABILITY_LABELS[skill.ability]));
-        this.skillNodes[skill.key] = { check, expert, value };
+        const rollButton = this.rollButton('Навык: ' + skill.label, () => {
+          this.rollCheck('Навык: ' + skill.label, DnD.formatModifier(this.derived.skills[skill.key].total));
+        });
+        row.appendChild(rollButton);
+        this.skillNodes[skill.key] = { check, expert, value, rollButton };
         skills.appendChild(row);
       }
       col2.appendChild(skills);
@@ -292,6 +333,10 @@
 
       this.inputs = Array.from(this.root.querySelectorAll('[data-field]'));
       this.checkboxes = Array.from(this.root.querySelectorAll('input[type="checkbox"][data-save], input[type="checkbox"][data-skill], input[type="checkbox"][data-expertise]'));
+      // Кубики и переключатель появляются только там, где бросать можно.
+      // Считаем здесь, а не по клику: лист без обработчика броска — это
+      // список игроков, экран подготовки и чужой лист у мастера.
+      this.updateRollAvailability();
     }
 
     field(name, label, options = {}) {
@@ -503,9 +548,12 @@
       this.root.classList.toggle('is-readonly', this.readOnly);
       for (const input of this.inputs) input.disabled = this.readOnly;
       for (const box of this.checkboxes) box.disabled = this.readOnly;
-      if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
-      if (this.manualProfCheck && !this.manualProfCheck.checked) this.manualProfInput.hidden = true;
-      this.paintDerived();
+if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
+    if (this.manualProfCheck && !this.manualProfCheck.checked) this.manualProfInput.hidden = true;
+    // Замороженный лист бросать нельзя: мастер смотрит чужой лист и не должен
+    // в неё вносить боевые броски от лица игрока.
+    this.updateRollAvailability();
+    this.paintDerived();
     }
 
     /**
@@ -672,6 +720,87 @@
    * Режим панели: список игроков («list») или открытый лист («sheet»).
    * Кнопка возврата нужна только там, где есть откуда возвращаться — то есть
    * у ДМ, который попал в лист из списка игроков.
+    /**
+     * Кнопка проверки в карточке или строке.
+     *
+     * Модификатор не вписывается в подпись заранее: он меняется вместе с
+     * характеристикой, и надпись успела бы соврать. В заголовке кнопки его
+     * честно показать можно — браузер покажет при наведении.
+     * @param {string} title
+     * @param {() => void} handler
+     * @returns {HTMLElement}
+     */
+    rollButton(title, handler) {
+      const button = el('button', 'roll-check', '🎲');
+      button.type = 'button';
+      button.title = title;
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!this.handlers.onRollCheck || this.readOnly) return;
+        handler();
+      });
+      return button;
+    }
+
+    /**
+     * Отправляет проверку на стол.
+     *
+     * Формулу собирает тот же разбор, что и панель кубиков: преимущество это
+     * две кости и лучшая из них, помеха две и худшая. Модификатор подставляется
+     * как есть, со знаком, поэтому «-1» превращается в «-1», а не в «--1».
+     * @param {string} label
+     * @param {string} modifier
+     */
+    rollCheck(label, modifier) {
+      if (!this.handlers.onRollCheck || this.readOnly) return;
+      const dice = this.rollMode === 'advantage' ? '2d20kh1'
+        : (this.rollMode === 'disadvantage' ? '2d20kl1' : 'd20');
+      // Модуль приходит уже со знаком: formatModifier даёт «+2» и «-1».
+      // Дописывать знак ещё раз нельзя, вышло бы «d20++2», такой формулы нет.
+      this.handlers.onRollCheck(dice + String(modifier || '+0'), label);
+    }
+
+    /**
+     * Переключает режим проверки и обновляет подписи на кнопках.
+     * @param {'normal'|'advantage'|'disadvantage'} mode
+     */
+    setRollMode(mode) {
+      const next = mode === 'advantage' || mode === 'disadvantage' ? mode : 'normal';
+      this.rollMode = next;
+      if (!this.rollModeNodes) return;
+      for (const [id, node] of Object.entries(this.rollModeNodes)) {
+        node.classList.toggle('is-active', id === next);
+      }
+      this.paintRollTitles();
+    }
+
+    /** Скрывает броски там, где бросать нельзя: список игроков, замороженный лист. */
+    updateRollAvailability() {
+      const canRoll = Boolean(this.handlers.onRollCheck) && !this.readOnly;
+      const visible = canRoll && this.mode !== 'list';
+      // Прячем всю строку с переключателем, а не сам переключатель: одна
+      // подпись «Проверка» без кнопок выглядит как ошибка вёрстки.
+      if (this.rollRow) this.rollRow.hidden = !visible;
+      for (const node of this.root.querySelectorAll('.roll-check')) node.hidden = !visible;
+    }
+
+    /**
+     * Держит заголовки кнопок в порядке: при смене режима или правки
+     * характеристики модификатор в подписи обязан поменяться.
+     */
+    paintRollTitles() {
+      const suffix = this.rollMode === 'advantage' ? ' (преимущество)'
+        : (this.rollMode === 'disadvantage' ? ' (помеха)' : '');
+      for (const node of this.root.querySelectorAll('.roll-check')) {
+        node.title = node.title.replace(/ \(преимущество\)| \(помеха\)$/, '') + suffix;
+      }
+    }
+
+   /**
+   * Режим панели: список игроков («list») или открытый лист («sheet»).
+   * Кнопка возврата нужна только там, где есть откуда возвращаться — то есть
+   * у ДМ, который попал в лист из списка игроков.
    * @param {'list'|'sheet'} mode
    * @param {{canGoBack?: boolean, canDetach?: boolean}} [options]
    */
@@ -686,6 +815,7 @@
     this.detachButton.hidden = isList || options.canDetach === false;
     // Печатать лист из списка игроков нечего: печатают открытый лист.
     if (this.printButton) this.printButton.hidden = isList;
+    this.updateRollAvailability();
     this.titleNode.textContent = isList ? 'Листы игроков' : 'Лист персонажа';
   }
 

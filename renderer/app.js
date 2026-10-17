@@ -994,6 +994,12 @@ let chosenSheetId = null;
     if (!sheetView) {
       sheetView = new window.SheetView($('#tab-sheet'), {
         onChange: onSheetChange,
+        // Проверка из листа уходит тем же броском, что и из панели кубиков:
+        // результат видит весь стол, он попадает в историю и в чат.
+        onRollCheck: (formula, label) => {
+          emit('rollDice', { formula });
+          toast(`${label}: ${formula}`);
+        },
         onPlayerChange: (playerId) => openPlayerSheet(playerId),
         onBack: () => closePlayerSheet(),
         onDetach: () => detachSheet(),

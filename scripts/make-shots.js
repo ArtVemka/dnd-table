@@ -149,7 +149,12 @@ app.whenReady().then(async () => {
       document.querySelector('.tabs__btn[data-tab="sheet"]').click();
       const host = document.querySelector('#tab-sheet');
       host.innerHTML = '';
-      const view = new window.SheetView(host, { resolveUrl: (url) => url || '' });
+      const view = new window.SheetView(host, {
+        resolveUrl: (url) => url || "",
+        // Обработчик нужен, чтобы в снимке были кубики проверки: без него лист
+        // честно прячет броски, потому что бросать тут некому.
+        onRollCheck: (formula) => { window.__lastCheck = formula; }
+      });
       const sheet = window.DnD5e.createEmptySheet();
       sheet.characterName = 'Тордин';
       sheet.playerName = 'Артём';

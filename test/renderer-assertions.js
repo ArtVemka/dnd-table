@@ -366,6 +366,98 @@
       assert(!print.hidden, 'кнопка печати не вернулась в открытом листе');
     });
 
+    /* ------------------------------------------------ проверка из листа */
+
+    const rolledChecks = [];
+    const rollHost = document.createElement('div');
+    sandbox.appendChild(rollHost);
+    const rollView = new window.SheetView(rollHost, {
+      onRollCheck: (formula, label) => rolledChecks.push({ formula, label })
+    });
+    // Ловкость 14 -> +2, Восприятие 12 -> +1, без владения.
+    rollView.setSheet({ ...SAMPLE_SHEET, abilities: { ...SAMPLE_SHEET.abilities, dex: 14, wis: 12 } });
+
+    check('у характеристик, спасбросков и навыков есть кубик проверки', () => {
+      assert.strictEqual(rollHost.querySelectorAll('.abil .roll-check').length, 6, 'не у всех характеристик есть кубик');
+      assert.strictEqual(rollHost.querySelectorAll('[data-save]').length, 6);
+      assert.strictEqual(rollHost.querySelectorAll('.prof-row--skill .roll-check').length,
+        window.DnD5e.SKILLS.length, 'не у всех навыков есть кубик');
+      assert(!rollView.rollRow.hidden, 'переключатель режима проверки скрыт');
+      assert.strictEqual(rollView.rollModeNodes.advantage.textContent, 'преимущ.',
+        'подписи режимов не помещаются в узкую колонку');
+    });
+
+    check('кубик характеристики бросает d20 с её модификатором', () => {
+      const dexCard = [...rollHost.querySelectorAll('.abil')]
+        .find((card) => card.querySelector('.abil__name').textContent.includes('Ловкость'));
+      dexCard.querySelector('.roll-check').click();
+      const last = rolledChecks[rolledChecks.length - 1];
+      // Модификатор берётся из листа в момент броска, а не из надписи, которая
+      // успела бы устареть после правки характеристики.
+      assert.strictEqual(last.formula, 'd20+2', `формула: ${last.formula}`);
+      assert(last.label.includes('Ловкость'), `подпись: ${last.label}`);
+    });
+
+    check('кубик навыка бросает с его полным модификатором', () => {
+      const stealth = [...rollHost.querySelectorAll('.prof-row--skill')]
+        .find((row) => row.querySelector('.prof-row__label').textContent === 'Скрытность');
+      stealth.querySelector('.roll-check').click();
+      const last = rolledChecks[rolledChecks.length - 1];
+      // Ловкость +2, без владения и компетентности.
+      assert.strictEqual(last.formula, 'd20+2', `формула: ${last.formula}`);
+      assert(last.label.includes('Скрытность'), `подпись: ${last.label}`);
+    });
+
+    check('преимущество и помеха меняют саму формулу броска', () => {
+      const dexCard = [...rollHost.querySelectorAll('.abil')]
+        .find((card) => card.querySelector('.abil__name').textContent.includes('Ловкость'));
+      const button = dexCard.querySelector('.roll-check');
+      rollView.setRollMode('advantage');
+      button.click();
+      assert.strictEqual(rolledChecks[rolledChecks.length - 1].formula, '2d20kh1+2',
+        `преимущество: ${rolledChecks[rolledChecks.length - 1].formula}`);
+      rollView.setRollMode('disadvantage');
+      button.click();
+      assert.strictEqual(rolledChecks[rolledChecks.length - 1].formula, '2d20kl1+2',
+        `помеха: ${rolledChecks[rolledChecks.length - 1].formula}`);
+      assert(button.title.includes('помеха'), `в заголовке не сказано о режиме: ${button.title}`);
+      rollView.setRollMode('normal');
+      button.click();
+      assert.strictEqual(rolledChecks[rolledChecks.length - 1].formula, 'd20+2', 'обычный бросок не вернулся');
+    });
+
+    check('правка характеристики меняет бросок, а не только надпись', () => {
+      const dexCard = [...rollHost.querySelectorAll('.abil')]
+        .find((card) => card.querySelector('.abil__name').textContent.includes('Ловкость'));
+      const input = dexCard.querySelector('[data-ability="dex"]');
+      input.value = '20';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      dexCard.querySelector('.roll-check').click();
+      // Ловкость 20 -> +5.
+      assert.strictEqual(rolledChecks[rolledChecks.length - 1].formula, 'd20+5',
+        `после правки: ${rolledChecks[rolledChecks.length - 1].formula}`);
+    });
+
+    check('из замороженного листа бросать нельзя', () => {
+      const before = rolledChecks.length;
+      rollView.setReadOnly(true);
+      const button = rollHost.querySelector('.roll-check');
+      assert(button.hidden, 'у чужого листа мастера кубик остался видимым');
+      button.click();
+      assert.strictEqual(rolledChecks.length, before, 'из чужого листа бросили проверку');
+      assert(rollView.rollRow.hidden, 'строка переключателя видна на чужом листе');
+      rollView.setReadOnly(false);
+      assert(!rollHost.querySelector('.roll-check').hidden, 'своё право броска не вернулось');
+      assert(!rollView.rollRow.hidden, 'переключатель режима не вернулся');
+    });
+
+    check('в списке игроков бросков нет: там ещё нечего проверять', () => {
+      rollView.setMode('list');
+      assert.strictEqual([...rollHost.querySelectorAll('.roll-check')].filter((node) => !node.hidden).length, 0,
+        'в списке игроков видны кубики проверки');
+      rollView.setMode('sheet');
+    });
+
     check('лист персонажа заполняется всеми полями 5e', () => {
       const value = (field) => {
         const node = sheetHost.querySelector(`[data-field="${field}"]`);

@@ -662,6 +662,21 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
     });
 
+    /**
+     * Фишка скрыта или показана.
+     *
+     * Скрытие приходит игрокам: у них такая фишка была на карте, её надо убрать.
+     * А показ приходит только мастеру, потому что игрокам эта фишка не знакома:
+     * для них сервер следом присылает её как tokenCreated.
+     */
+    socket.on('tokenHidden', ({ tokenId, hidden } = {}) => {
+      const token = app.room.tokens.find((item) => item.id === tokenId);
+      if (!token) return;
+      token.hidden = Boolean(hidden);
+      mapView.render(app.room, viewer());
+      tokenPanel.render(app.room.tokens, app.room.players, viewer());
+    });
+
     socket.on('diceRollResult', (roll) => {
       app.room.diceHistory.push(roll);
       // Сервер свои пределы держит, а клиент копил историю, пока не кончится
@@ -866,6 +881,9 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
         // Тот же спавн, что и в панели участников: одно действие на оба места.
         onSpawnFromSheet: spawnTokenFromSheet,
+        // Скрытость решает только мастер, но сервер всё равно проверяет.
+        onToggleTokenHidden: (tokenId, hidden) => emit('setTokenHidden', { tokenId, hidden }),
+        onSetAllTokensHidden: (hidden) => emit('setAllTokensHidden', { hidden }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
           if (result.canceled) return;

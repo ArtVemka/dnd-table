@@ -469,6 +469,10 @@ class RoomState {
       // ним. Картинку, поставленную руками, помечаем как «свою»: дальше
       // аватар в неё не лезет.
       avatarFromSheet: Boolean(token.avatarFromSheet),
+      // Скрытая фишка — заготовка мастера: он её расставляет и проверяет, а
+      // игроки её не видят вовсе. Сервер такие фишки игрокам не отдаёт, поле
+      // нужно самому мастеру, чтобы отличить заготовку от готовой.
+      hidden: Boolean(token.hidden),
       color: typeof token.color === 'string' ? token.color : TOKEN_PALETTE[0]
     };
   }
@@ -587,6 +591,10 @@ class RoomState {
     const tokenIdByPlayer = new Map();
     if (includeTokens) {
       for (const token of this.tokens) {
+        // Скрытые фишки в списке участников не считаем: игрок увидел бы
+        // отметку «фишка на поле» и догадался бы о заготовке мастера.
+        // Мастеру всё равно: у него есть панель фишек целиком.
+        if (token.hidden) continue;
         if (token.assignedPlayerId && !tokenIdByPlayer.has(token.assignedPlayerId)) {
           tokenIdByPlayer.set(token.assignedPlayerId, token.id);
         }
@@ -647,7 +655,10 @@ class RoomState {
       maps: this.maps,
       activeMap: this.activeMap,
       grid: this.grid,
-      tokens: this.tokens,
+      // Скрытые фишки — заготовки мастера, и игрокам их видеть нельзя.
+      // Фильтруем здесь, а не в интерфейсе: иначе фишка утекает в снимок
+      // состояния, который игрок получает целиком.
+      tokens: isDm ? this.tokens : this.tokens.filter((token) => !token.hidden),
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory),
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory)
     };

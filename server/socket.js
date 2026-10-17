@@ -171,6 +171,44 @@ async function createTableServer(options) {
   const findToken = (tokenId) => room.tokens.find((token) => token.id === String(tokenId || ''));
 
   /**
+   * Куда слать событие фишки.
+   *
+   * Скрытая фишка — заготовка мастера, и её положение, картинка и назначение
+   * игрокам не показываются. Значит, и создание, и перемещение, и правка
+   * уходят только мастеру. Проверять это на клиенте поздно: событие уже пришло.
+   * @param {string} event
+   * @param {object} token
+   * @param {object} [payload]
+   */
+  const emitToken = (event, token, payload) => {
+    const data = payload || token;
+    if (token && token.hidden) io.to('dm-sockets').emit(event, data);
+    else io.emit(event, data);
+  };
+
+  /**
+   * Показ или скрытие фишки.
+   *
+   * Скрытие рассылается всем: игрок должен убрать фишку, которую видел.
+   * Показ, наоборот, идёт только мастеру, а игрокам уходит как новая фишка:
+   * скрытой они её не видели, значит, у них её просто нет.
+   * @param {object} token
+   * @param {boolean} hidden
+   */
+  const emitTokenVisibility = (token, hidden) => {
+    const wasHidden = Boolean(token.hidden);
+    token.hidden = Boolean(hidden);
+    markDirty();
+    if (token.hidden) {
+      io.emit('tokenHidden', { tokenId: token.id, hidden: true });
+    } else {
+      io.to('dm-sockets').emit('tokenHidden', { tokenId: token.id, hidden: false });
+      if (wasHidden) io.emit('tokenCreated', token);
+    }
+    broadcastPlayers();
+  };
+
+  /**
    * Ставит игроку аватар и переносит его на выведенную из листа фишку.
    *
    * Фишка с флагом avatarFromSheet живёт аватаром игрока: поменял портрет —
@@ -185,7 +223,7 @@ async function createTableServer(options) {
     for (const token of room.tokens) {
       if (!token.avatarFromSheet || token.assignedPlayerId !== playerId) continue;
       token.imageUrl = player.avatar;
-      io.emit('tokenUpdated', token);
+      emitToken('tokenUpdated', token);
     }
     markDirty();
     broadcastPlayers();
@@ -358,11 +396,14 @@ async function createTableServer(options) {
         imageUrl: player.avatar || null,
         assignedPlayerId: playerId,
         avatarFromSheet: true,
+        // Как и любая новая фишка, сначала скрыта: мастер выводит партию и
+        // проверяет расстановку, потом открывает.
+        hidden: true,
         color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length]
       };
       room.tokens.push(token);
       markDirty();
-      io.emit('tokenCreated', token);
+      emitToken('tokenCreated', token);
       broadcastPlayers();
       onLog(`Фишка «${token.name}» выведена из листа игрока ${player.name}`);
     });
@@ -486,11 +527,43 @@ async function createTableServer(options) {
         y: 0.5,
         imageUrl: null,
         assignedPlayerId: null,
+        // Новая фишка появляется скрытой: мастер сначала расставляет и
+        // проверяет, и только потом открывает её игрокам. Без этого инициатива
+        // начиналась бы с того, что все монстры уже на виду.
+        hidden: true,
         color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length]
       };
       room.tokens.push(token);
       markDirty();
-      io.emit('tokenCreated', token);
+      emitToken('tokenCreated', token);
+      onLog(`Фишка «${token.name}» создана скрытой от игроков`);
+    });
+
+    /**
+     * Скрытие одной фишки. Правка только мастерская: скрытость решает, что
+     * видно игроку, а значит, решать её должен тот, кто за столом видит всё.
+     */
+    socket.on('setTokenHidden', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      emitTokenVisibility(token, !(payload && payload.hidden === false));
+      onLog(`Фишка «${token.name}» ${token.hidden ? 'скрыта от игроков' : 'показана игрокам'}`);
+    });
+
+    /** Показать или скрыть разом все фишки: конец подготовки или откат. */
+    socket.on('setAllTokensHidden', (payload) => {
+      if (!requireDm(socket)) return;
+      const hidden = !(payload && payload.hidden === false);
+      // Считаем реальное изменение, иначе playersUpdate и лог врут.
+      let changed = 0;
+      for (const token of room.tokens) {
+        if (Boolean(token.hidden) === hidden) continue;
+        changed += 1;
+        emitTokenVisibility(token, hidden);
+      }
+      if (!changed) return;
+      onLog(`Фишки на столе ${hidden ? 'скрыты от игроков' : 'показаны игрокам'} (${changed})`);
     });
 
     socket.on('renameToken', (payload) => {
@@ -501,7 +574,7 @@ async function createTableServer(options) {
       if (!name) return emitError(socket, 'Имя фишки не может быть пустым');
       token.name = name;
       markDirty();
-      io.emit('tokenUpdated', token);
+      emitToken('tokenUpdated', token);
     });
 
     socket.on('assignTokenToPlayer', (payload) => {
@@ -517,7 +590,7 @@ async function createTableServer(options) {
         token.assignedPlayerId = playerId;
       }
       markDirty();
-      io.emit('tokenUpdated', token);
+      emitToken('tokenUpdated', token);
       broadcastPlayers();
     });
 
@@ -539,7 +612,7 @@ async function createTableServer(options) {
         // для этой фишки специально.
         token.avatarFromSheet = false;
         markDirty();
-        io.emit('tokenUpdated', token);
+        emitToken('tokenUpdated', token);
       } catch (error) {
         emitError(socket, 'Не удалось сохранить изображение фишки');
         onLog(`Ошибка сохранения фишки: ${error.message}`);
@@ -571,9 +644,14 @@ async function createTableServer(options) {
         markDirty();
         // Одним событием, а не по одному на фишку: клиент на каждое событие
         // перерисовывает и карту, и список фишек, и весь справочник приключения.
-        // На двухстах фишках одна заливка картинки превращалась в двести
+        // На двухстах фишках одна заливка картинки превращалась бы в двести
         // полных перерисовок вместо одной.
-        io.emit('tokensUpdated', { tokens: group });
+        //
+        // Мастеру уходит вся группа, игрокам — только видимая часть: заготовки
+        // мастера они не знают и знать не должны.
+        io.to('dm-sockets').emit('tokensUpdated', { tokens: group });
+        const visible = group.filter((token) => !token.hidden);
+        if (visible.length) io.except('dm-sockets').emit('tokensUpdated', { tokens: visible });
         onLog(`Картинка «${wanted}» назначена фишкам: ${group.length} шт.`);
       } catch (error) {
         emitError(socket, 'Не получилось сохранить картинку');
@@ -628,7 +706,8 @@ async function createTableServer(options) {
       token.y = y;
       markDirty();
       // Позиция меняется часто: рассылаем без истории и обновляем только это поле.
-      io.emit('tokenMoved', { tokenId: token.id, x, y });
+      // Заготовка мастера двигается молча: игрокам её координаты не нужны.
+      emitToken('tokenMoved', token, { tokenId: token.id, x, y });
     });
 
     socket.on('deleteToken', (payload) => {
@@ -637,7 +716,7 @@ async function createTableServer(options) {
       if (!token) return emitError(socket, 'Фишка не найдена');
       room.tokens = room.tokens.filter((item) => item.id !== token.id);
       markDirty();
-      io.emit('tokenDeleted', { tokenId: token.id });
+      emitToken('tokenDeleted', token, { tokenId: token.id });
       broadcastPlayers();
     });
 

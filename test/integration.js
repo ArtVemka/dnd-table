@@ -58,7 +58,7 @@ async function waitFor(fn, label, timeout = 4000) {
 
 const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
-  'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'gridUpdated',
+  'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
   'tokensUpdated',
   'diceRollResult', 'chatMessage', 'errorMessage'
 ];
@@ -616,6 +616,34 @@ async function main() {
     assert.strictEqual(token.assignedPlayerId, null);
     assert.ok(token.color);
   });
+  check('новая фишка появляется скрытой от игроков', () => {
+    assert.strictEqual(token.hidden, true);
+    assert.strictEqual(p1.log.tokenCreated.length, 0, 'игрок получил скрытую фишку');
+    assert.strictEqual(p2.log.tokenCreated.length, 0, 'игрок получил скрытую фишку');
+  });
+  check('снимок состояния игрока не содержит скрытых фишек', () => {
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    assert.strictEqual(snapshot.tokens.length, 0, `игрок увидел ${snapshot.tokens.length} фишек`);
+  });
+  check('скрытая фишка не выдаёт своё существование в списке участников', () => {
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    const me = snapshot.players.find((entry) => entry.playerId === 'p-test-0001');
+    assert.strictEqual(me.tokenId, null, 'игрок увидел отметку о фишке, которую не должен знать');
+  });
+
+  // Дальше идут проверки, где игрок двигает и красит свою фишку. Дальше по
+  // логике сервера игрок получает фишку только после показа, поэтому мастер
+  // открывает её здесь — один раз, явно.
+  dm.log.tokenCreated.length = 0;
+  p1.log.tokenCreated.length = 0;
+  p2.log.tokenCreated.length = 0;
+  emit(dm, 'setTokenHidden', { tokenId: token.id, hidden: false });
+  await waitFor(() => p1.log.tokenCreated.length === 1, 'показ фишки игрокам');
+  check('показанная фишка приходит игрокам как новая', () => {
+    assert.strictEqual(p1.log.tokenCreated[0].id, token.id);
+    assert.strictEqual(p1.log.tokenCreated[0].hidden, false);
+    assert.strictEqual(p2.log.tokenCreated[0].id, token.id);
+  });
 
   p1.log.errorMessage.length = 0;
   emit(p1, 'moveToken', { tokenId: token.id, x: 0.3, y: 0.3 });
@@ -685,6 +713,70 @@ async function main() {
   check('ДМ переименовывает фишку', () => {
     assert.strictEqual(renamed.name, 'Гоблин-вождь');
   });
+
+  /* --- скрытие фишек --- */
+
+  console.log('\nСкрытие фишек');
+  p1.log.tokenUpdated.length = 0;
+  p1.log.tokenMoved.length = 0;
+  emit(dm, 'setTokenHidden', { tokenId: token.id, hidden: true });
+  await waitFor(() => p1.log.tokenHidden.find((item) => item.tokenId === token.id && item.hidden), 'скрытие фишки');
+  check('скрытие рассылается игрокам, чтобы убрать фишку с карты', () => {
+    assert.ok(room.tokens.find((item) => item.id === token.id).hidden, 'на сервере не скрыта');
+  });
+  check('скрытая фишка не шлёт игрокам ни правок, ни перемещений', async () => {
+    emit(dm, 'renameToken', { tokenId: token.id, name: 'Заготовка' });
+    emit(dm, 'moveToken', { tokenId: token.id, x: 0.9, y: 0.9 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.strictEqual(p1.log.tokenUpdated.length, 0, 'игрок увидел правку скрытой фишки');
+    assert.strictEqual(p1.log.tokenMoved.length, 0, 'игрок увидел перемещение скрытой фишки');
+  });
+
+  dm.log.errorMessage.length = 0;
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenHidden', { tokenId: token.id, hidden: false });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  check('игрок не может открыть скрытую фишку', () => {
+    assert.ok(room.tokens.find((item) => item.id === token.id).hidden, 'фишку открыли без мастера');
+  });
+
+  p1.log.tokenCreated.length = 0;
+  emit(dm, 'setTokenHidden', { tokenId: token.id, hidden: false });
+  await waitFor(() => room.tokens.find((item) => item.id === token.id).hidden === false, 'повторный показ');
+  check('мастер возвращает фишку игрокам', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === token.id).hidden, false);
+    // Показ приходит игрокам как новая фишка: скрытой они её не видели.
+    assert.ok(p1.log.tokenCreated.some((item) => item.id === token.id),
+      'игрокам не пришла показанная фишка');
+  });
+
+  emit(dm, 'setAllTokensHidden', { hidden: true });
+  await waitFor(() => room.tokens.every((item) => item.hidden), 'скрытие всех фишек');
+  check('мастер скрывает все фишки разом', () => {
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    assert.strictEqual(snapshot.tokens.length, 0, `у игрока осталось фишек: ${snapshot.tokens.length}`);
+  });
+
+  p1.log.tokenCreated.length = 0;
+  emit(dm, 'setAllTokensHidden', { hidden: false });
+  await waitFor(() => room.tokens.every((item) => !item.hidden), 'показ всех фишек');
+  check('мастер показывает все фишки разом', () => {
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    assert.strictEqual(snapshot.tokens.length, room.tokens.length);
+    assert.ok(p1.log.tokenCreated.length > 0, 'показ не дошёл до игрока');
+  });
+
+  // Возвращаем вид, имя и позицию: дальше идут проверки, считающие фишки и
+  // перезапускающие стол, а им нужен тот же стол, что и до проверок скрытия.
+  emit(dm, 'renameToken', { tokenId: token.id, name: 'Гоблин-вождь' });
+  emit(dm, 'moveToken', { tokenId: token.id, x: 0.4, y: 0.4 });
+  await waitFor(
+    () => {
+      const restored = room.tokens.find((item) => item.id === token.id);
+      return restored.name === 'Гоблин-вождь' && restored.x === 0.4 && restored.y === 0.4;
+    },
+    'возврат фишки в прежнее состояние'
+  );
 
 
   // Группировка по названию и массовая картинка. Проверяем на каналах: важно,

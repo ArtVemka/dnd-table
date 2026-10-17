@@ -1262,9 +1262,14 @@
       // Показываем фишки той карты, что открыта. Фишка без mapId — из кампании,
       // заведённой до появления этого поля, и видна на любой карте вкладки,
       // как было раньше.
-      const tokens = this.tokens.filter((token) => (
-        token.mapType === type && (!token.mapId || !activeMapId || token.mapId === activeMapId)
-      ));
+      //
+      // Скрытые заготовки мастера игроку не рисуются. Сервер их и не шлёт,
+      // но фильтр здесь тоже нужен: иначе одна ошибка на сервере — и монстр,
+      // которого мастер готовил тайно, окажется у игроков на карте.
+      const tokens = this.tokens.filter((token) => {
+        if (token.hidden && this.role !== 'dm') return false;
+        return token.mapType === type && (!token.mapId || !activeMapId || token.mapId === activeMapId);
+      });
       this.tokenLayer.innerHTML = '';
 
       for (const token of tokens) {
@@ -1282,6 +1287,10 @@
       const movable = this.canMove(token);
       node.classList.toggle('token--movable', movable);
       node.classList.toggle('token--mine', Boolean(token.assignedPlayerId) && token.assignedPlayerId === this.myPlayerId);
+      // Скрытая фишка видна мастеру полупрозрачной с пунктиром: иначе он
+      // забудет, что она заготовка, и начнёт бой с монстрами, которых никто
+      // из игроков не видит.
+      node.classList.toggle('token--hidden', Boolean(token.hidden));
       node.dataset.tokenId = token.id;
       node.style.left = `${token.x * 100}%`;
       node.style.top = `${token.y * 100}%`;
@@ -1367,6 +1376,18 @@
       });
       assign.appendChild(select);
       menu.appendChild(assign);
+
+      // Скрытие решает мастер и только он: игрок фишку ни спрячет, ни откроет.
+      if (this.role === 'dm') {
+        const visibility = el('button', 'token-menu__item',
+          token.hidden ? 'Показать игрокам' : 'Скрыть от игроков');
+        visibility.type = 'button';
+        visibility.addEventListener('click', () => {
+          this.closeMenu();
+          if (this.handlers.onToggleTokenHidden) this.handlers.onToggleTokenHidden(token.id, !token.hidden);
+        });
+        menu.appendChild(visibility);
+      }
 
       const remove = el('button', 'token-menu__item token-menu__item--danger', 'Удалить фишку');
       remove.type = 'button';
@@ -1764,7 +1785,7 @@
       this.form.hidden = !isDm && !training;
       this.note.hidden = !isDm && !training;
       this.note.textContent = isDm
-        ? 'Правый клик по фишке на карте — переименовать, назначить игроку, задать изображение или удалить.'
+        ? 'Новая фишка появляется скрытой от игроков: расставьте её и нажмите «Видна». Правый клик по фишке — переименовать, назначить, изображение, скрыть или удалить.'
         : 'Проверка без сети: созданная фишка сразу ваша — её можно двигать по карте и задать картинку.';
 
       this.list.innerHTML = '';
@@ -1775,17 +1796,54 @@
       if (isDm) {
         const all = el('div', 'token-list__section');
         all.appendChild(el('div', 'panel__title panel__title--sub', 'Все фишки'));
+
+        // Массовые переключатели: подготовка кончилась — открыть всё разом,
+        // откатился — спрятать всё разом. Без них пришлось бы кликать по
+        // каждой фишке, а их под полсотни может быть.
+        const hiddenCount = tokens.filter((token) => token.hidden).length;
+        if (tokens.length) {
+          const bulk = el('div', 'token-bulk');
+          const showAll = el('button', 'btn btn--ghost btn--tiny',
+            hiddenCount === tokens.length ? 'Показать все' : `Показать все (${tokens.length - hiddenCount} скрыто)`);
+          showAll.type = 'button';
+          showAll.disabled = hiddenCount === 0;
+          showAll.addEventListener('click', () => {
+            if (this.handlers.onSetAllTokensHidden) this.handlers.onSetAllTokensHidden(false);
+          });
+          const hideAll = el('button', 'btn btn--ghost btn--tiny', 'Скрыть все');
+          hideAll.type = 'button';
+          hideAll.disabled = hiddenCount === tokens.length;
+          hideAll.addEventListener('click', () => {
+            if (this.handlers.onSetAllTokensHidden) this.handlers.onSetAllTokensHidden(true);
+          });
+          bulk.appendChild(showAll);
+          bulk.appendChild(hideAll);
+          all.appendChild(bulk);
+        }
+
         if (!tokens.length) {
           all.appendChild(el('div', 'muted', 'Фишек пока нет'));
         }
         for (const token of tokens) {
           const row = el('div', 'token-row');
+          if (token.hidden) row.classList.add('token-row--hidden');
           row.appendChild(el('span', 'token-row__dot'));
           row.lastChild.style.background = token.color;
           row.appendChild(el('span', 'token-row__name', token.name));
           row.appendChild(el('span', 'token-row__meta', DnD.MAP_LABELS[token.mapType]));
           const owner = players.find((player) => player.playerId === token.assignedPlayerId);
           row.appendChild(el('span', 'token-row__meta', owner ? `→ ${owner.name}` : 'не назначена'));
+          const eye = el('button',
+            `btn btn--tiny ${token.hidden ? 'btn--ghost' : ''}`,
+            token.hidden ? 'Скрыта' : 'Видна');
+          eye.type = 'button';
+          eye.title = token.hidden
+            ? 'Показать фишку игрокам'
+            : 'Скрыть фишку от игроков';
+          eye.addEventListener('click', () => {
+            if (this.handlers.onToggleTokenHidden) this.handlers.onToggleTokenHidden(token.id, !token.hidden);
+          });
+          row.appendChild(eye);
           const del = el('button', 'btn btn--tiny btn--danger', 'Удалить');
           del.type = 'button';
           del.addEventListener('click', () => {

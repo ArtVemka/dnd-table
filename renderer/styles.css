@@ -1660,8 +1660,7 @@ code {
   font-weight: 700;
   font-size: calc(var(--cell, 46px) * 0.4);
   line-height: 1;
-  color: #1a1209;
-}
+  color: #1a1209;}
 
 /*
  * Карта сбрасывает line-height в ноль (чтобы под картинкой не оставалось
@@ -1709,6 +1708,24 @@ code {
 
 .token--dragging .token__circle {
   transform: scale(1.12);
+}
+
+/* Фишка-заготовка: игроки её не видят, но мастер должен отличать её от
+   готовой, иначе начнёт битву с тем, чего никто из игроков не видит.
+   Пунктир и приглушённость видны издалека и не мешают двигать. */
+.token--hidden {
+  opacity: 0.55;
+}
+
+.token--hidden .token__circle {
+  border-style: dashed;
+  border-color: var(--text-dim);
+  box-shadow: none;
+  filter: grayscale(0.7);
+}
+
+.token--hidden .token__label {
+  opacity: 0.7;
 }
 
 .token-menu {
@@ -1810,6 +1827,22 @@ code {
 
 .token-form .input {
   flex: 1;
+}
+
+/* Массовые переключатели скрытости: конец подготовки или откат одним нажатием. */
+.token-bulk {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+
+.token-row--hidden .token-row__name {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.token-row--hidden .token-row__dot {
+  opacity: 0.45;
 }
 
 /* ------------------------------------------------- Спавн фишек из листов */

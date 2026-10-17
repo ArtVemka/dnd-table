@@ -442,6 +442,9 @@
           // создал, иначе проверить её было бы некому.
           assignedPlayerId: playerId,
           avatarFromSheet: false,
+          // Скрывать некому: в тренировочном столе игрок один и он же мастер
+          // за неимением лучшего. Поле держим, чтобы модель совпадала.
+          hidden: false,
           color: TOKEN_COLORS[state.tokens.length % TOKEN_COLORS.length]
         };
         state.tokens.push(token);
@@ -486,13 +489,25 @@
         emitTo('tokenUpdated', { ...token });
       },
 
+      /**
+       * Скрытие в тренировочном столе не имеет смысла: скрывать не от кого,
+       * мастера за столом нет, а интерфейс и не показывает эти кнопки игроку.
+       * Событие нужно, чтобы набор интерфейса совпадал с настоящим столом.
+       */
+      setTokenHidden() {
+        emitTo('errorMessage', { message: 'В тренировочном столе скрывать нечего — вы и есть мастер' });
+      },
+
+      setAllTokensHidden() {
+        emitTo('errorMessage', { message: 'В тренировочном столе скрывать нечего — вы и есть мастер' });
+      },
+
       moveToken(payload) {
         const token = findToken(payload.tokenId);
         if (!token) {
           emitTo('errorMessage', { message: 'Фишка не найдена' });
           return;
-        }
-        if (token.assignedPlayerId !== playerId) {
+        }        if (token.assignedPlayerId !== playerId) {
           emitTo('errorMessage', { message: 'Можно двигать только свою фишку' });
           return;
         }

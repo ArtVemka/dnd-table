@@ -603,6 +603,24 @@
     mapView.render(MAP_STATE, { role: 'player', playerId: 'p-1' });
     await wait(400);
 
+    check('скрытая от игроков фишка мастеру видна, игроку нет', () => {
+      const withHidden = {
+        ...MAP_STATE,
+        tokens: MAP_STATE.tokens.map((token) => ({ ...token, hidden: token.id !== 't2' }))
+      };
+      mapView.render(withHidden, { role: 'dm', playerId: 'dm' });
+      const dmTokens = [...mapHost.querySelectorAll('.token')];
+      assert(dmTokens.length === 2, `у мастера фишек на карте: ${dmTokens.length}`);
+      const hiddenNode = dmTokens.find((node) => node.dataset.tokenId === 't1');
+      assert(hiddenNode.classList.contains('token--hidden'), 'скрытая фишка не помечена у мастера');
+
+      mapView.render(withHidden, { role: 'player', playerId: 'p-1' });
+      const playerTokens = [...mapHost.querySelectorAll('.token')];
+      assert(playerTokens.length === 1, `игрок видит фишек: ${playerTokens.length}`);
+      assert(playerTokens[0].dataset.tokenId === 't2', 'игрок видит не ту фишку');
+      mapView.render(MAP_STATE, { role: 'player', playerId: 'p-1' });
+    });
+
     check('карта отображается, фишки рисуются поверх неё', () => {
       assert(!mapHost.querySelector('.map-empty').getAttribute('hidden'), 'заглушка должна быть скрыта');
       assert(!mapHost.querySelector('.map-surface').hidden, 'поверхность карты скрыта');
@@ -1157,6 +1175,47 @@
       tokenPanel.render(TOKENS, PLAYERS, { role: 'player', playerId: 'p-9', training: true });
       assert(tokensHost.querySelector('.token-spawn').hidden, 'в тренировочном столе виден блок спавна');
       tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
+    });
+    check('в списке фишек видно, какие скрыты, и есть переключатель', () => {
+      const hiddenTokens = TOKENS.map((token) => ({ ...token, hidden: token.id !== 't2' }));
+      tokenPanel.render(hiddenTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
+      const rows = [...tokensHost.querySelectorAll('.token-row')];
+      const hiddenRow = rows.find((row) => row.classList.contains('token-row--hidden'));
+      assert(hiddenRow, 'скрытая фишка не помечена в списке');
+      assert(hiddenRow.textContent.includes('Скрыта'), `нет подписи «Скрыта»: ${hiddenRow.textContent}`);
+      const visibleRow = rows.find((row) => !row.classList.contains('token-row--hidden'));
+      assert(visibleRow.textContent.includes('Видна'), `нет подписи «Видна»: ${visibleRow.textContent}`);
+    });
+    check('массовые кнопки «Показать все» и «Скрыть все» есть только у мастера', () => {
+      const bulk = [...tokensHost.querySelectorAll('.token-bulk button')];
+      assert(bulk.length === 2, `массовых кнопок: ${bulk.length}`);
+      assert(bulk.some((node) => node.textContent.includes('Скрыть все')), 'нет кнопки «Скрыть все»');
+      assert(bulk.some((node) => node.textContent.includes('Показать все')), 'нет кнопки «Показать все»');
+      tokenPanel.render(TOKENS, PLAYERS, { role: 'player', playerId: 'p-9' });
+      assert(!tokensHost.querySelector('.token-bulk'), 'игрок видит массовые кнопки');
+      assert(!tokensHost.textContent.includes('Все фишки'), 'игрок видит список «Все фишки»');
+      tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
+    });
+    check('переключатель скрытия у фишки отдаёт новое состояние', () => {
+      const toggled = [];
+      const host = document.createElement('div');
+      sandbox.appendChild(host);
+      const panel = new window.TableUI.TokenPanel(host, {
+        onCreate: () => {},
+        onDeleteToken: () => {},
+        onToggleTokenHidden: (tokenId, hidden) => toggled.push([tokenId, hidden])
+      });
+      panel.render(
+        [{ id: 't9', name: 'Гоблин', mapType: 'world', x: 0.5, y: 0.5, imageUrl: null, assignedPlayerId: null, color: '#c96f4a', hidden: true }],
+        [],
+        { role: 'dm', playerId: 'dm' }
+      );
+      const eye = [...host.querySelectorAll('.token-row button')]
+        .find((node) => node.textContent === 'Скрыта');
+      assert(eye, 'нет переключателя скрытости');
+      eye.click();
+      assert(toggled.length === 1 && toggled[0][0] === 't9' && toggled[0][1] === false,
+        `обработчик получил: ${JSON.stringify(toggled)}`);
     });
     const tokenForm = tokensHost.querySelector('.token-form');
     tokenForm.querySelector('input').value = 'Новая фишка';

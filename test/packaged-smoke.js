@@ -16,6 +16,7 @@ const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { versionLabel } = require('../scripts/version-label');
 
 const DEBUG_PORT = 9333;
 
@@ -31,11 +32,10 @@ const BUILD_CONFIG = JSON.parse(
 const PACKAGE_VERSION = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
 ).version;
-/** Подпись, которую покажет окно настроек: «0.12.0-b» → «0.12b». */
-const EXPECTED_VERSION_LABEL = (() => {
-  const [core] = String(PACKAGE_VERSION || '0.0.0').split('-');
-  return `${core.replace(/\.0$/, '')}b`;
-})();
+/** Подпись, которую покажет окно настроек: «0.12.0-b» → «0.12b», «1.1.1» → «1.1.1».
+ *  Правило берётся из scripts/version-label.js, чтобы проверка и приложение
+ *  считали ярлык одинаково. */
+const EXPECTED_VERSION_LABEL = versionLabel(PACKAGE_VERSION);
 const OUTPUT_DIR = (BUILD_CONFIG.directories && BUILD_CONFIG.directories.output) || 'dist';
 const DIST_UNPACKED = path.join(__dirname, '..', OUTPUT_DIR, 'win-unpacked');
 

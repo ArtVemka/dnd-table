@@ -14,6 +14,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { versionLabel } = require('../scripts/version-label');
 const { app, BrowserWindow } = require('electron');
 
 // Изолированная папка данных, чтобы не трогать кампании пользователя.
@@ -95,6 +96,14 @@ async function main() {
 
   const source = fs.readFileSync(path.join(__dirname, 'renderer-assertions.js'), 'utf8');
 
+  // Версию ожидаемую подставляем из package.json тем же правилом, что и
+  // приложение: зашитая в проверку строка ломалась бы при каждой смене версии,
+  // а проверка без неё молча ничего не проверяла бы.
+  const expectedVersion = versionLabel(JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+  ).version);
+  const prepared = `window.__EXPECTED_VERSION__ = ${JSON.stringify(expectedVersion)};\n${source}`;
+
   // Отдельные окна листов живут недолго: в конце сценария стол останавливается,
   // и они закрываются. Поэтому следим за ними параллельно с проверками.
   // Окон может быть два: лист тренировочного стола (без сети) и лист игрока,
@@ -165,7 +174,7 @@ async function main() {
     }
   }, 300);
 
-  const response = await win.webContents.executeJavaScript(source, true);
+  const response = await win.webContents.executeJavaScript(prepared, true);
   clearInterval(sheetPoll);
 
   if (!response || !Array.isArray(response.checks)) {

@@ -12,6 +12,7 @@ const { decodeImage } = require('./server/image');
 const irohManager = require('./server/iroh-manager');
 const importer = require('./server/importer');
 const { copyVendor } = require('./scripts/copy-vendor');
+const { versionLabel } = require('./scripts/version-label');
 const packageJson = require('./package.json');
 
 /** Ленивая загрузка iroh — загружается только по запросу из IPC handler,
@@ -57,16 +58,11 @@ const AUTOSAVE_INTERVAL_MS = 60 * 1000;
  */
 const APP_VERSION = String(packageJson.version || '0.0.0');
 /**
- * Ярлык для интерфейса: «0.9.0-b» показываем как «0.9b».
- *
- * Правило не заточено под одну запись с нулём: отбрасываем ноль только в
- * конце номера и убираем хвост сборки. Иначе с переходом на «0.12.1-b» в
- * настройках начало бы показываться «0.12.1-b» вместо «0.12.1b».
+ * Ярлык для интерфейса: «0.9.0-b» показываем как «0.9b», а обычную версию
+ * как есть. Правило лежит в scripts, потому что его читает и проверка собранной
+ * программы, и своя копия здесь разъехалась бы с ней при первом же выпуске.
  */
-const APP_VERSION_LABEL = (() => {
-  const [core] = APP_VERSION.split('-');
-  return `${core.replace(/\.0$/, '')}b`;
-})();
+const APP_VERSION_LABEL = versionLabel(APP_VERSION);
 
 /** @type {BrowserWindow|null} */
 let mainWindow = null;

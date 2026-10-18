@@ -170,6 +170,24 @@ check('у каждого состояния из правил нарисован
   if (missing.length) throw new Error('состояния без рисунка: ' + missing.join(', '));
 });
 
+check('ярлык версии не приписывает хвост сборки обычному выпуску', () => {
+  // Правило досталось в наследство от версий вида «0.12.0-b» и дописывало «b»
+  // всегда: из 1.0.0 получалось «1.0b», а из 1.1.1 — «1.1.1b».
+  const { versionLabel } = require('../scripts/version-label');
+  const cases = [
+    ['1.1.1', '1.1.1'],
+    ['1.0.0', '1.0.0'],
+    ['1.0.0-b', '1.0b'],
+    ['0.12.1-b', '0.12.1b'],
+    ['0.9.0-beta.2', '0.9b'],
+    ['1.1.0', '1.1.0']
+  ];
+  const wrong = cases
+    .filter(([version, expected]) => versionLabel(version) !== expected)
+    .map(([version]) => version + ' → ' + versionLabel(version));
+  if (wrong.length) throw new Error('ярлык версии неверен: ' + wrong.join(', '));
+});
+
 let failed = 0;
 for (const c of checks) {
   if (c.ok) console.log('  ok   ' + c.name);

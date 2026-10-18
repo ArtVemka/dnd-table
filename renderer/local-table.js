@@ -350,7 +350,7 @@
    */
   function createLocalTable(options = {}) {
     const playerId = String(options.playerId || 'p-local');
-    const playerName = sanitizeText(options.name, DnD.LIMITS.maxNameLength).trim() || 'Игрок';
+    let playerName = sanitizeText(options.name, DnD.LIMITS.maxNameLength).trim() || 'Игрок';
 
     /** @type {Map<string, Set<Function>>} */
     const listeners = new Map();
@@ -576,6 +576,19 @@
           activeId: slot.activeId,
           activeMap: state.activeMap
         });
+      },
+
+      /**
+       * Смена своего имени: здесь игрок один, но список участников должен
+       * вести себя так же, как за настоящим столом.
+       */
+      setPlayerName(payload) {
+        const wanted = sanitizeText(payload && payload.name, DnD.LIMITS.maxNameLength).replace(/\s+/g, ' ').trim();
+        if (!wanted) return;
+        playerName = wanted;
+        const sheet = state.sheets[playerId];
+        if (sheet && sheet.playerName !== wanted) sheet.playerName = wanted;
+        emitTo('playersUpdate', playerList());
       },
 
       setMapFog(payload) {

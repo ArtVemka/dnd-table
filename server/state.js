@@ -937,6 +937,28 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
     return { ...token, maxHp: null, hp: null };
   }
 
+   /**
+   * Меняет имя участника стола.
+   *
+   * Переименовать можно только себя: игроку не нужно править имя соседа, а
+   * мастеру тем более. Лист персонажа правится тоже, но лишь тогда, когда в
+   * нём было именно прежнее имя: вписанное руками имя персонажа важнее, и
+   * затирать его сменой имени участника нельзя.
+   * @param {string} playerId
+   * @param {string} name
+   * @returns {object|null} Обновлённая запись или null, если участника нет.
+   */
+  renamePlayer(playerId, name) {
+    const player = this.players.get(String(playerId || ''));
+    if (!player) return null;
+    const previous = player.name;
+    player.name = name;
+    const sheet = this.sheets.get(player.playerId);
+    if (sheet && sheet.playerName === previous) sheet.playerName = name;
+    this.markDirty();
+    return player;
+  }
+
   /**
    * Регистрирует подключение ДМ (одна запись на весь стол).
    * @param {string} name

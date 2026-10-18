@@ -486,6 +486,30 @@ async function createTableServer(options) {
      * он тоже ставит себе, а чужой аватар трогать нельзя — это личный кадр
      * человека, а не элемент партии.
      */
+    /**
+     * Смена своего имени.
+     *
+     * Имя приходит от каждого окна при подключении, поэтому переименование
+     * должно пережить переподключение: клиент сохраняет новое имя у себя и
+     * пришлёт его снова. Лист правится только если в нём было прежнее имя —
+     * вписанное руками имя персонажа стирать нельзя.
+     *
+     * Чужое имя не правится никогда: у сокета есть только своё.
+     */
+    socket.on('setPlayerName', (payload) => {
+      if (!requireJoined(socket)) return;
+      const name = sanitizeName(payload && payload.name);
+      if (!name) return emitError(socket, 'Имя не может быть пустым');
+      const previous = socket.data.name;
+      if (previous === name) return;
+      const player = room.renamePlayer(socket.data.playerId, name);
+      if (!player) return emitError(socket, 'Участник не найден');
+      socket.data.name = name;
+      markDirty();
+      broadcastPlayers();
+      onLog(`${socket.data.role === ROLE_DM ? 'ДМ' : 'Игрок'} ${previous} теперь ${name}`);
+    });
+
     socket.on('setAvatar', async (payload) => {
       if (!requireJoined(socket)) return;
       const playerId = socket.data.playerId;

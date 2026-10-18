@@ -1816,6 +1816,18 @@
         main.appendChild(meta);
         row.appendChild(main);
 
+        // Своё имя меняется кнопкой в своей же строке: «Мастер» в списке
+        // видно сразу, а лезть в настройки ради одного слова не нужно.
+        if (player.playerId === ctx.playerId && this.handlers.onRenameSelf) {
+          const selfActions = el('div', 'player-row__actions');
+          const rename = el('button', 'btn btn--tiny btn--ghost', 'Имя');
+          rename.type = 'button';
+          rename.title = 'Изменить своё имя у стола';
+          rename.addEventListener('click', () => this.handlers.onRenameSelf(player));
+          selfActions.appendChild(rename);
+          row.appendChild(selfActions);
+        }
+
         if (this.role === 'dm' && player.role !== 'dm') {
           // Кнопки собраны в группу: переноситься на другую строку они должны
           // вместе, иначе одна остаётся внизу, а вторая жмётся в угол.

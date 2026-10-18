@@ -213,6 +213,45 @@ let chosenSheetId = null;
     return (localStorage.getItem(PLAYER_NAME_KEY) || '').trim();
   }
 
+  /**
+   * Меняет своё имя у стола.
+   *
+   * Имя живёт в двух местах: оно хранится на этом компьютере (чтобы стол
+   * снова поднять с тем же именем) и уходит на сервер, где видят все. Пустое
+   * имя не принимаем: «Мастер» и «Игрок» спасают только молчание, а человек,
+   * который стёр поле, явно хочет что-то сказать.
+   * @param {string} value
+   * @returns {boolean} Принято ли имя.
+   */
+  function applyMyName(value) {
+    const name = String(value || '').replace(/\s+/g, ' ').trim().slice(0, DnD.LIMITS.maxNameLength);
+    if (!name) {
+      toast('Имя не может быть пустым', 'error');
+      return false;
+    }
+    localStorage.setItem(PLAYER_NAME_KEY, name);
+    if (app.socket && app.connected) emit('setPlayerName', { name });
+    return true;
+  }
+
+  /**
+   * Окно смены имени: тот же вопрос, что задают игроку на экране подключения,
+   * только за столом.
+   */
+  async function askMyName() {
+    const value = await modal({
+      title: 'Как вас зовут у стола',
+      message: 'Имя видят все за столом: оно стоит в списке участников и в чате.',
+      input: {
+        value: storedName(),
+        maxLength: DnD.LIMITS.maxNameLength,
+        placeholder: app.role === 'dm' ? 'Например, «Артём»' : 'Например, «Мира»'
+      },
+      confirmLabel: 'Сохранить'
+    });
+    if (value) applyMyName(value);
+  }
+
   async function copyText(text) {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -945,6 +984,9 @@ let chosenSheetId = null;
         // Заметку мастера сервер отдаёт только мастеру, поэтому отправка
         // без проверки роли безопасна: игрок её просто не увидит.
         onSetDmNote: (playerId, note) => emit('setDmNote', { playerId, note }),
+        // Своё имя меняется из своей же строки в списке: там, где видно,
+        // что оно «Мастер», и хочется поменять.
+        onRenameSelf: askMyName,
         resolveUrl: assetUrl
       });
     }
@@ -1646,6 +1688,36 @@ let chosenSheetId = null;
     dirButton.type = 'button';
     dirButton.addEventListener('click', () => desktop.openDataDir());
     appBox.appendChild(dirButton);
+
+    // Имя за столом. У мастера оно по умолчанию «Мастер», и под таким именем
+    // он остаётся во всех заметках и разговорах, если не задал своё.
+    const nameRow = el('div', 'settings__row');
+    const nameLabel = el('label', 'settings__check');
+    const nameInput = el('input', 'input settings__input');
+    nameInput.type = 'text';
+    nameInput.maxLength = String(DnD.LIMITS.maxNameLength);
+    nameInput.placeholder = app.role === 'dm' ? 'Мастер' : 'Игрок';
+    nameInput.value = storedName();
+    nameInput.title = 'Имя видят все за столом';
+    nameLabel.appendChild(nameInput);
+    nameLabel.appendChild(el('span', null, 'Ваше имя за столом'));
+    nameRow.appendChild(nameLabel);
+    const nameSave = el('button', 'btn btn--tiny', 'Сохранить');
+    nameSave.type = 'button';
+    nameSave.addEventListener('click', () => {
+      if (!applyMyName(nameInput.value)) return;
+      nameInput.value = storedName();
+      toast(app.socket && app.connected ? 'Имя изменено' : 'Имя сохранено', 'ok');
+    });
+    nameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') nameSave.click();
+    });
+    nameRow.appendChild(nameSave);
+    appBox.appendChild(nameRow);
+    appBox.appendChild(el('div', 'box__note',
+      app.connected
+        ? 'Меняется сразу у всех участников стола.'
+        : 'Сохранится и пригодится, когда вы запустите стол или подключитесь.'));
     box.appendChild(appBox);
 
     const themeBox = el('div', 'box');

@@ -1466,7 +1466,67 @@ async function main() {
   emit(p1, 'saveCharacterSheet', { sheet: { ...room.sheets.get(P1), hp: 7 } });
   await wait(80);
 
-  /* ----------------------------------------------------- туман войны */
+  /* ------------------------------------------------- имя за столом */
+
+  console.log('\nИмя за столом');
+  const dmNameBefore = listHas('dm').name;
+  const playerNameBefore = listHas(P1).name;
+
+  emit(dm, 'setPlayerName', { name: '  Артём   Хозяин  ' });
+  await waitFor(() => listHas('dm').name === 'Артём Хозяин', 'новое имя мастера');
+  check('мастер задаёт себе имя, и оно сразу у всех', () => {
+    assert.notStrictEqual(listHas('dm').name, dmNameBefore, 'имя мастера не изменилось');
+    assert.strictEqual(listHas('dm').name, 'Артём Хозяин');
+    // Двойные пробелы и края убраны: иначе в списке участников имя выехало бы
+    // на полстроки и разъехалось бы с подписью под аватаром.
+    assert.ok(!/\s{2}/.test(listHas('dm').name), 'в имени остались двойные пробелы');
+    const seen = p1.log.playersUpdate[p1.log.playersUpdate.length - 1];
+    assert.strictEqual(seen.find((entry) => entry.playerId === 'dm').name, 'Артём Хозяин',
+      'игрок видит прежнее имя мастера');
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'setPlayerName', { name: '   ' });
+  await waitFor(() => dm.log.errorMessage.length > 0, 'пустое имя');
+  check('пустое имя не принимается, прежнее остаётся', () => {
+    assert.ok(dm.log.errorMessage.some((item) => /не может быть пустым/.test(item.message)));
+    assert.strictEqual(listHas('dm').name, 'Артём Хозяин', 'имя мастера стёрли пустым запросом');
+  });
+
+  const dmNameBeforeSpoof = listHas('dm').name;
+  emit(p1, 'setPlayerName', { name: 'Я теперь мастер', playerId: 'dm' });
+  await waitFor(() => listHas(P1).name === 'Я теперь мастер', 'игрок сменил своё имя');
+  check('игрок переименовывает только себя, даже если подставит чужой playerId', () => {
+    assert.strictEqual(listHas('dm').name, dmNameBeforeSpoof, 'игрок переименовал мастера');
+    assert.notStrictEqual(listHas(P1).name, playerNameBefore, 'игрок не сменил своё имя');
+  });
+
+  // Лист создаётся с именем участника и служит запасным источником подписи в
+  // чате. Если в нём было именно прежнее имя, оно обязано меняться вместе с
+  // участником, иначе старые броски остались бы под чужим именем.
+  check('имя, попавшее в лист по умолчанию, меняется вместе с участником', () => {
+    assert.strictEqual(room.sheets.get(P1).playerName, 'Я теперь мастер',
+      'имя участника не доехало до листа');
+  });
+
+  // Своё имя персонажа в листе важнее: его вписали руками, и смена имени
+  // участника не должна его затирать.
+  emit(p1, 'saveCharacterSheet', { sheet: { ...room.sheets.get(P1), playerName: 'Мира из листа' } });
+  await wait(80);
+  emit(p1, 'setPlayerName', { name: 'Артём' });
+  await waitFor(() => listHas(P1).name === 'Артём', 'игрок сменил имя на Артёма');
+  check('вписанное руками имя персонажа не затирается сменой имени игрока', () => {
+    assert.strictEqual(room.sheets.get(P1).playerName, 'Мира из листа');
+  });
+
+  const nameSaved = new RoomState({ state: room.serialize() });
+  check('новое имя мастера переживает сохранение кампании', () => {
+    const saved = nameSaved.players.get('dm');
+    assert(saved, 'мастер не сохранился');
+    assert.strictEqual(saved.name, 'Артём Хозяин');
+  });
+
+  /* ----------------------------------------------------- туман войны */  /* ----------------------------------------------------- туман войны */
 
   console.log('\nТуман войны');
   const fogType = 'world';

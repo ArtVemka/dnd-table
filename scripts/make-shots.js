@@ -207,6 +207,32 @@ app.whenReady().then(async () => {
   image = await win.webContents.capturePage();
   fs.writeFileSync(path.join(outDir, 'table-fog.png'), image.toPNG());
 
+  // Смена имени мастера: окно с вопросом «как вас зовут у стола».
+  await win.webContents.executeJavaScript(`
+    (() => {
+      document.querySelector('.tabs__btn[data-tab="chat"]').click();
+      const host = document.querySelector('#players-root');
+      host.innerHTML = '';
+      const view = new window.TableUI.PlayersList(host, {
+        onRenameSelf: () => document.dispatchEvent(new CustomEvent('shot-rename'))
+      });
+      view.render([
+        { playerId: 'dm', name: 'Артём', role: 'dm', online: true, hasSheet: false, tokenId: null, avatar: 'avatar-dm.png' },
+        { playerId: 'p-1', name: 'Борис', role: 'player', online: true, hasSheet: true, tokenId: 't2', avatar: null },
+        { playerId: 'p-2', name: 'Вера', role: 'player', online: false, hasSheet: true, tokenId: null, avatar: null }
+      ], { role: 'dm', playerId: 'dm' });
+      const ownRow = [...host.querySelectorAll('.player-row')]
+        .find((row) => row.textContent.includes('это вы'));
+      [...ownRow.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Имя')
+        .click();
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'table-rename.png'), image.toPNG());
+
   // Лист персонажа: самая плотная страница приложения.
   await win.webContents.executeJavaScript(`
     (() => {

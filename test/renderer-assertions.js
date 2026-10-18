@@ -1490,13 +1490,29 @@
     const playersHost = document.createElement('div');
     sandbox.appendChild(playersHost);
     const dmNotesSent = [];
+    const renamesSent = [];
     const playersList = new window.TableUI.PlayersList(playersHost, {
       onSetDmNote: (playerId, note) => dmNotesSent.push({ playerId, note }),
+      onRenameSelf: (player) => renamesSent.push(player.playerId),
       resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
     });
     playersList.render(PLAYERS.concat([
       { playerId: 'p-2', name: 'Борис', role: 'player', online: false, hasSheet: true, tokenId: null, avatar: '/files/boris.png', dmNote: 'свой человек гильдии' }
     ]), { role: 'dm', playerId: 'dm' });
+
+    check('своё имя меняется из своей строки, а чужое — нет', () => {
+      const rows = [...playersHost.querySelectorAll('.player-row')];
+      const ownRow = rows.find((row) => row.textContent.includes('это вы'));
+      assert(ownRow, 'в списке нет своей строки');
+      const ownButton = [...ownRow.querySelectorAll('button')].find((button) => button.textContent === 'Имя');
+      assert(ownButton, 'у своей строки нет кнопки смены имени');
+      const borisRow = rows.find((row) => row.textContent.includes('Борис'));
+      assert(![...borisRow.querySelectorAll('button')].some((button) => button.textContent === 'Имя'),
+        'у чужой строки появилась кнопка смены имени');
+      ownButton.click();
+      assert.strictEqual(renamesSent.length, 1, `переименовали не себя: ${JSON.stringify(renamesSent)}`);
+      assert.strictEqual(renamesSent[0], 'dm');
+    });
 
     check('мастер видит пометку «заметка есть» и подсказку под строкой', () => {
       const rows = [...playersHost.querySelectorAll('.player-row')];

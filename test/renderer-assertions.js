@@ -1382,6 +1382,22 @@
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
 
+    check('объявление стола в чате выглядит не как реплика игрока', () => {
+      const chatHost = document.createElement('div');
+      const chat = new window.TableUI.ChatPanel(chatHost, {});
+      chat.append({
+        from: 'Мастер', role: 'dm', system: true, text: 'Режим боя включён: нажмите на фишку'
+      });
+      const system = chatHost.querySelector('.chat__msg--system');
+      assert(system, 'объявление стола нарисовано репликой с автором');
+      assert(system.querySelector('.chat__author') === null, 'у объявления стола есть автор');
+      assert(system.textContent.includes('Режим боя включён'), `текст объявления: ${system.textContent}`);
+      chat.append({ from: 'Борис', role: 'player', text: 'Готов' });
+      assert(chatHost.querySelectorAll('.chat__msg--system').length === 1,
+        'реплика игрока нарисована объявлением стола');
+      assert(chatHost.textContent.includes('Готов'), 'реплика игрока пропала');
+    });
+
     check('наведение показывает клетку назначения, линию и расстояние', () => {
       withRealMapSize(() => {
         mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });

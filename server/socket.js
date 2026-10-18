@@ -1419,6 +1419,24 @@ socket.on('setGrid', (payload) => {
       markDirty();
       io.emit('combatMode', room.combat);
       onLog(enabled ? 'Режим боя включён: ход по клеткам' : 'Режим боя выключен');
+      // Объявление в чат: режим боя сам по себе меняет только надпись на
+      // переключателе, и без объявления нажатие выглядит так, будто ничего не
+      // произошло. Заодно по нему видно, дошло ли нажатие до сервера.
+      const notice = {
+        from: socket.data.name,
+        playerId: socket.data.playerId,
+        role: socket.data.role,
+        text: enabled
+          ? 'Режим боя включён: нажмите на фишку, потом на клетку — фишка пройдёт по клеткам'
+          : 'Режим боя выключен: фишки снова можно перетаскивать',
+        system: true,
+        time: new Date().toISOString()
+      };
+      room.chatHistory.push(notice);
+      if (room.chatHistory.length > LIMITS.maxChatHistory) {
+        room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
+      }
+      io.emit('chatMessage', notice);
     });
 
     /* ------------------------------------------------------------------ *

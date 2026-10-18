@@ -3831,6 +3831,17 @@
       const row = el('div', 'chat__msg');
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
       if (message.isRoll) row.classList.add('chat__msg--roll');
+      // Служебные объявления стола, например о режиме боя: их пишет сервер, а
+      // не человек, и подпись автора у них лишняя.
+      if (message.system) {
+        const system = el('div', 'chat__msg chat__msg--system');
+        system.appendChild(el('div', 'chat__system', message.text));
+        this.log.appendChild(system);
+        if (scroll) this.scrollToEnd();
+        return;
+      }
+      if (message.role === 'dm') row.classList.add('chat__msg--dm');
+      if (message.isRoll) row.classList.add('chat__msg--roll');
       const head = el('div', 'chat__head');
       // Портрет только у бросков: он отвечает на «кто именно бросил», а у
       // обычной реплики автор и так виден по имени.

@@ -2166,11 +2166,21 @@ async function main() {
     assert.strictEqual(room.snapshotFor({ playerId: P1, role: 'player' }).combat.enabled, true);
   });
   const combatCount = combatEvents.length;
+  const combatChatMark = room.chatHistory.length;
   emit(dm, 'setCombatMode', { enabled: false });
   await waitFor(() => combatEvents.length > combatCount, 'выключение режима боя');
   check('режим боя выключается тем же переключателем', () => {
     assert.strictEqual(room.combat.enabled, false);
     assert.strictEqual(combatEvents[combatEvents.length - 1].enabled, false);
+  });
+  check('переключение режима боя объявляется в чате', () => {
+    // Режим боя меняет на экране только надпись на кнопке. Без объявления
+    // нажатие выглядит так, будто ничего не произошло, и по нему же видно,
+    // дошло ли нажатие до сервера.
+    const notices = room.chatHistory.slice(combatChatMark).filter((item) => item.system);
+    assert.strictEqual(notices.length, 1, `объявлений в чате: ${notices.length}`);
+    assert(/выключен/.test(notices[0].text), `текст объявления: ${notices[0].text}`);
+    assert(!notices[0].isRoll, 'объявление помечено как бросок');
   });
 
   check('мастер добавляет участников боя', () => {

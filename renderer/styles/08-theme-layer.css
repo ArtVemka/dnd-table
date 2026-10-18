@@ -712,6 +712,23 @@ body > * {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
+/* Объявления стола, их пишет сервер: режим боя, начало и конец партии.
+   От реплик отличаются рамкой и отсутствием автора. */
+.chat__msg--system {
+  margin: 4px 0;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-strong);
+  border-left-width: 1px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.chat__system {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
 .chat__author {
   font-weight: 600;
   letter-spacing: 0.2px;

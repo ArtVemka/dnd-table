@@ -1327,19 +1327,36 @@
       }
     };
 
-    check('расстояние по клеткам считается по правилам 5e', () => {
+    check('расстояние по клеткам считается по сторонам клеток, без диагонали', () => {
       mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
       const straight = mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 0 });
       assert.strictEqual(straight.steps, 3, 'прямая в три клетки посчитана неверно');
-      assert.strictEqual(straight.cells, 3);
       assert.strictEqual(straight.feet, 15, 'в три клетки по пять футов');
-      const diagonal = mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 3 });
-      assert.strictEqual(diagonal.steps, 3, 'по диагонали должно быть три шага');
-      // Диагональ стоит корень из двух: 3 × 1.41 = 4.24 клетки.
-      assert(Math.abs(diagonal.cells - 3 * Math.SQRT2) < 0.001, `диагональ: ${diagonal.cells}`);
+      // Диагонали в маршруте нет, поэтому до клетки по диагонали столько же
+      // шагов, сколько по сторонам: четыре на четыре — восемь, а не четыре.
+      const diagonal = mapView.combatMeasure({ col: 0, row: 0 }, { col: 4, row: 4 });
+      assert.strictEqual(diagonal.steps, 8, `по диагонали на 4 клетки: ${diagonal.steps}`);
+      assert.strictEqual(diagonal.feet, 40, 'футы по диагонали считаются неверно');
       const mixed = mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 1 });
-      assert.strictEqual(mixed.steps, 3);
-      assert(Math.abs(mixed.cells - (2 + Math.SQRT2)) < 0.001, `смешанный ход: ${mixed.cells}`);
+      assert.strictEqual(mixed.steps, 4, `смешанный ход: ${mixed.steps}`);
+    });
+
+    check('маршрут идёт по клеткам с одним поворотом, а не по диагонали', () => {
+      mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
+      const path = mapView.combatPath({ col: 1, row: 3 }, { col: 3, row: 1 });
+      assert.deepStrictEqual(path, [
+        { col: 1, row: 2 }, { col: 1, row: 1 },
+        { col: 2, row: 1 }, { col: 3, row: 1 }
+      ], `путь строится неверно: ${JSON.stringify(path)}`);
+      // Поворот всегда в строке цели: иначе рисунок скакал бы от клетки к клетке.
+      for (const point of path) {
+        assert(point.col === 1 || point.row === 1,
+          `точка ${JSON.stringify(point)} не лежит на одной из сторон пути`);
+      }
+      const down = mapView.combatPath({ col: 0, row: 0 }, { col: 0, row: 2 });
+      assert.deepStrictEqual(down, [{ col: 0, row: 1 }, { col: 0, row: 2 }], 'ход вниз собран неверно');
+      const same = mapView.combatPath({ col: 2, row: 2 }, { col: 2, row: 2 });
+      assert.deepStrictEqual(same, [{ col: 2, row: 2 }], 'ход в ту же клетку должен быть пустым');
     });
 
     check('подпись расстояния называет шаги, клетки и футы', () => {
@@ -1385,7 +1402,17 @@
         })}`);
         assert(/\d+ шаг/.test(mapView.routeLabel.textContent), `подпись: ${mapView.routeLabel.textContent}`);
         assert(!mapView.cellMark.hidden, 'клетка назначения не подсвечена');
-        assert(mapView.routeLine.getAttribute('stroke') !== 'transparent', 'линия маршрута не нарисована');
+        // Маршрут рисуется ломаной по центрам клеток: точек на одну больше,
+        // чем клеток пройдено, и поворачивает он ровно один раз.
+        const points = mapView.routeLine.getAttribute('points').split(' ');
+        assert(points.length >= 2, `маршрут не нарисован: ${points.length} точек`);
+        let turns = 0;
+        for (let i = 1; i < points.length - 1; i += 1) {
+          const before = points[i].split(',');
+          const current = points[i + 1].split(',');
+          if (before[0] !== current[0] && before[1] !== current[1]) turns += 1;
+        }
+        assert(turns <= 1, `маршрут поворачивает ${turns} раз, а должен один раз`);
         mapView.selectCombatToken(null);
       });
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
@@ -1396,9 +1423,10 @@
         mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
         mapView.selectCombatToken('t1');
         const rect = mapView.surface.getBoundingClientRect();
-        // Клетка номер 4: фишка t1 стоит в клетке 2, то есть ход в две клетки.
+        // Клетка номер 4 по столбцу и номер 1 по строке: от фишки в клетке
+        // (2, 4) это четыре шага вправо и три вверх, семь клеток пути.
         mapView.surface.dispatchEvent(new PointerEvent('pointerdown', new MapViewEvent(
-          rect, rect.left + ((4.5 * 46) / 400) * rect.width, rect.top + ((2.5 * 46) / 300) * rect.height
+          rect, rect.left + ((4.5 * 46) / 400) * rect.width, rect.top + ((1.5 * 46) / 300) * rect.height
         ).payload()));
         assert(mapView.walkTimer, 'фишка не пошла по клеткам');
         assert(mapView.dragState && mapView.dragState.walk, 'слой не защищён на время хода');
@@ -1412,6 +1440,22 @@
         mapView.selectCombatToken(null);
       });
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('в бою без выбранной фишки нажатие объясняет, что делать', () => {
+      const notices = [];
+      mapView.handlers.onNotice = (message) => notices.push(message);
+      withRealMapSize(() => {
+        mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
+        const rect = mapView.surface.getBoundingClientRect();
+        mapView.surface.dispatchEvent(new PointerEvent('pointerdown', new MapViewEvent(
+          rect, rect.left + rect.width / 2, rect.top + rect.height / 2
+        ).payload()));
+      });
+      delete mapView.handlers.onNotice;
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+      assert(notices.length === 1, `молчание вместо объяснения: ${notices.join('; ')}`);
+      assert(/фишк/i.test(notices[0]), `не сказано, что делать: ${notices[0]}`);
     });
 
     /* --------------------------------------------------- поверхность карта */

@@ -1072,7 +1072,8 @@
       this.routeLayer.setAttribute('viewBox', '0 0 1000 1000');
       this.routeLayer.setAttribute('preserveAspectRatio', 'none');
       surface.appendChild(this.routeLayer);
-      this.routeLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      // Ломаная, а не отрезок: путь идёт по центрам клеток с одним поворотом.
+      this.routeLine = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
       this.routeLayer.appendChild(this.routeLine);
       this.cellMark = el('div', 'map-cell');
       surface.appendChild(this.cellMark);
@@ -1276,9 +1277,21 @@
         if (!this.combat.enabled || this.editing || event.button !== 0) return;
         if (this.fogMode || this.drawMode) return;
         const token = this.combatToken();
-        if (!token) return;
+        if (!token) {
+          // Молчание здесь читается как «кнопка не работает»: режим включён,
+          // а фишка не едет. Поэтому объясняем, что нужно сделать.
+          if (this.handlers.onNotice) {
+            this.handlers.onNotice('Сначала нажмите на фишку, которая пойдёт, потом на клетку');
+          }
+          return;
+        }
         const target = this.cellAtClient(event.clientX, event.clientY);
-        if (!target) return;
+        if (!target) {
+          if (!this.cellGeometry() && this.handlers.onNotice) {
+            this.handlers.onNotice('Клеток нет: загрузите карту, сетка считается от её размера');
+          }
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         this.walkTokenTo(token, target);
@@ -2675,25 +2688,50 @@
     }
 
     /**
+     * Путь от фишки до клетки: только по сторонам клеток, с одним поворотом.
+     *
+     * Диагонали нет намеренно: сквозь угол клетки фишка не ходит, поэтому путь
+     * идёт сначала по вертикали до строки цели, потом по горизонтали до её
+     * столбца. Поворот один, и он всегда в строке цели: иначе длина пути была
+     * бы одинаковой, а рисунок скакал бы от клетки к клетке.
+     * @param {{col: number, row: number}} from
+     * @param {{col: number, row: number}} to
+     * @returns {{col: number, row: number}[]} Точки от старта до цели, без старта.
+     */
+    combatPath(from, to) {
+      const points = [];
+      // Шаг в ноль означает «по этой оси не идём»: без такой проверки цикл от
+      // равных клеток ушёл бы в бесконечность.
+      const rowStep = to.row > from.row ? 1 : (to.row < from.row ? -1 : 0);
+      for (let row = from.row + rowStep; row !== to.row; row += rowStep) {
+        points.push({ col: from.col, row });
+      }
+      // Угол пути: клетка в строке цели и в столбце фишки. Без неё ломаная
+      // перескакивала бы через угол клетки, то есть по диагонали.
+      const colStep = to.col > from.col ? 1 : (to.col < from.col ? -1 : 0);
+      if (rowStep !== 0 && colStep !== 0) points.push({ col: from.col, row: to.row });
+      for (let col = from.col + colStep; col !== to.col; col += colStep) {
+        points.push({ col, row: to.row });
+      }
+      points.push({ col: to.col, row: to.row });
+      return points;
+    }
+
+    /**
      * Расстояние между клетками.
      *
-     * По правилам 5e: шаг по прямой стоит одну клетку, шаг по диагонали —
-     * корень из двух, а именно столько занимает диагональ клетки. Число шагов
-     * считается отдельно: по диагонали до клетки можно дойти за один шаг, и
-     * мастер сравнивает ход с той же таблицей.
+     * Раз путь идёт только по сторонам клеток, диагонали в нём нет, а значит
+     * шаг равен клетке, и расстояние считается как в сетке: разница по столбцам
+     * плюс разница по строкам. Футы берутся из настройки стола, поэтому у карты
+     * со своей мерой счёт остаётся верным.
      * @param {{col: number, row: number}} from
      * @param {{col: number, row: number}} to
      * @returns {{steps: number, cells: number, feet: number}}
      */
     combatMeasure(from, to) {
-      const dc = Math.abs(to.col - from.col);
-      const dr = Math.abs(to.row - from.row);
-      const diagonal = Math.min(dc, dr);
-      const straight = Math.max(dc, dr) - diagonal;
-      const steps = straight + diagonal;
-      const cells = straight + diagonal * Math.SQRT2;
+      const steps = Math.abs(to.col - from.col) + Math.abs(to.row - from.row);
       const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
-      return { steps, cells, feet: cells * feetPerCell };
+      return { steps, cells: steps, feet: steps * feetPerCell };
     }
 
     /**
@@ -2765,16 +2803,18 @@
       const measure = this.combatMeasure(from, route);
       const fromCenter = this.cellCenterInMap(from.col, from.row);
       const toCenter = this.cellCenterInMap(route.col, route.row);
-
-      line.setAttribute('x1', String(fromCenter.x * 1000));
-      line.setAttribute('y1', String(fromCenter.y * 1000));
-      line.setAttribute('x2', String(toCenter.x * 1000));
-      line.setAttribute('y2', String(toCenter.y * 1000));
+      // Путь рисуется ломаной по центрам клеток: одна точка на клетку, и линия
+      // идёт ровно там, куда потом пойдёт фишка. Прямая через угол клетки
+      // выглядела бы короче, но вела бы мимо них.
+      const points = [from, ...this.combatPath(from, route)]
+        .map((cell) => this.cellCenterInMap(cell.col, cell.row));
+      line.setAttribute('points', points.map((point) => `${point.x * 1000},${point.y * 1000}`).join(' '));
+      line.setAttribute('fill', 'none');
       line.setAttribute('stroke', 'var(--accent-hover)');
       line.setAttribute('stroke-width', '8');
-      line.setAttribute('stroke-dasharray', '18 14');
       line.setAttribute('stroke-linecap', 'round');
-      line.setAttribute('opacity', '0.85');
+      line.setAttribute('stroke-linejoin', 'round');
+      line.setAttribute('opacity', '0.9');
 
       // Клетка назначения рисуется в процентах от картинки, иначе её размер
       // уезжал бы от клетки при приближении.
@@ -2784,10 +2824,17 @@
       cellMark.style.left = `${toCenter.x * 100}%`;
       cellMark.style.top = `${toCenter.y * 100}%`;
 
+      // Подпись расстояния стоит посередине пройденного пути, а не посередине
+      // прямой между фишкой и целью: на ломаной с поворотом это разные точки,
+      // и «середина» по прямой уезжала бы с маршрута.
+      const middle = points[Math.floor((points.length - 1) / 2)];
+      const next = points[Math.floor((points.length - 1) / 2) + 1] || middle;
+      const labelX = next === middle ? middle.x : (middle.x + next.x) / 2;
+      const labelY = next === middle ? middle.y : (middle.y + next.y) / 2;
       label.hidden = false;
       label.textContent = this.combatDistanceText(measure);
-      label.style.left = `${((fromCenter.x + toCenter.x) / 2) * 100}%`;
-      label.style.top = `${((fromCenter.y + toCenter.y) / 2) * 100}%`;
+      label.style.left = `${labelX * 100}%`;
+      label.style.top = `${labelY * 100}%`;
     }
 
     /** Фишка, выбранная для хода, если её всё ещё можно двигать. */
@@ -2819,7 +2866,13 @@
       }
       const node = this.tokenLayer.querySelector(`[data-token-id="${token.id}"]`);
       const start = { x: Number(token.x), y: Number(token.y) };
-      const finish = this.cellCenterInMap(target.col, target.row);
+      // Фишка идёт по тому же пути, что нарисован: клетка за клеткой и с тем же
+      // поворотом. Прямая через угол клетки выглядела бы быстрее, но вела бы
+      // мимо клеток.
+      const route = [start, ...this.combatPath(from, target)
+        .map((cell) => this.cellCenterInMap(cell.col, cell.row))];
+      const steps = route.length - 1;
+      const finish = route[route.length - 1];
       this.route = null;
       this.paintRoute();
       if (node) node.classList.add('token--walking');
@@ -2827,15 +2880,12 @@
       this.dragState = { walk: true, tokenId: token.id, node };
 
       let step = 0;
-      const steps = measure.steps;
       this.walkTimer = setInterval(() => {
         step += 1;
-        const ratio = step / steps;
-        const x = start.x + (finish.x - start.x) * ratio;
-        const y = start.y + (finish.y - start.y) * ratio;
+        const point = route[step];
         if (node) {
-          node.style.left = `${x * 100}%`;
-          node.style.top = `${y * 100}%`;
+          node.style.left = `${point.x * 100}%`;
+          node.style.top = `${point.y * 100}%`;
         }
         if (step < steps) return;
         clearInterval(this.walkTimer);
@@ -3046,7 +3096,14 @@
         : 'Включить режим боя: ход по клеткам с подсчётом расстояния';
       if (this.role !== 'dm') combatButton.disabled = true;
       combatButton.addEventListener('click', () => {
-        if (this.handlers.onSetCombatMode) this.handlers.onSetCombatMode(!this.combat.enabled);
+        const next = !this.combat.enabled;
+        // Включить боя без карты можно, но ходить тогда нечем: клетки
+        // считаются от размера подложки. Говорим об этом сразу, а не после
+        // первого нажатия на пустую карту.
+        if (next && !this.cellGeometry() && this.handlers.onNotice) {
+          this.handlers.onNotice('Режим боя включён, но ходить пока нечем: загрузите карту');
+        }
+        if (this.handlers.onSetCombatMode) this.handlers.onSetCombatMode(next);
       });
       this.toolbar.appendChild(combatButton);
 

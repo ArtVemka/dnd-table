@@ -1392,10 +1392,13 @@ socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       room.resetInitiative();
       // Бой кончился или откатился: режим боя выключается вместе с порядком,
-      // иначе фишки продолжали бы ходить по клеткам после конца боя.
+      // иначе фишки продолжали бы ходить по клеткам после конца боя. Об этом
+      // пишем в журнал: иначе переключатель «Бой» выглядел бы сломанным — он
+      // сам по себе не трогается, а режим уходит молча.
       if (room.combat && room.combat.enabled) {
         room.combat.enabled = false;
         io.emit('combatMode', room.combat);
+        onLog('Порядок боя сброшен — режим боя выключен');
       }
       markDirty();
       emitInitiative();

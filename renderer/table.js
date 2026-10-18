@@ -9,15 +9,70 @@
 
 (function (global) {
   const DnD = global.DnD5e;
+  const {
+    darknessAlpha,
+    lightGrid,
+    lightPolygon,
+    normalizeLights,
+    normalizeWalls,
+    wallsInCells
+  } = DnD;
 
   /** Значение списка выбора, за которым стоит свободная строка имени. */
   const CUSTOM_PICK = 'custom';
+
+  /**
+   * Во сколько раз меньше холста считается свет.
+   *
+   * Свет считается по многоугольникам видимости, а не по пикселям, поэтому
+   * подробность ему не нужна. Половинного хватает с запасом: растягивание с
+   * билинейным сглаживанием убирает лесенку на границе тени, а просчёт на
+   * полном размере карты при перетаскивании фишки заметно бы подтормаживал.
+   */
+  const LIGHT_RENDER_SCALE = 0.5;
+
+  /**
+   * Размытие света, доля от ширины карты.
+   *
+   * Без него тень от стены идёт идеально прямой линией от источника: полигон
+   * видимости устроен именно так, и на настоящей настольной игре края мягкие.
+   * Размываем при выводе, а не при расчёте: считать свет попиксельно ради
+   * мягкости незачем, хватит готового буфера.
+   */
+  const LIGHT_BLUR_RATIO = 0.018;
+
+  /**
+   * Насколько пятно света подмешивается к карте.
+   *
+   * Свет рисуется экранированием поверх ночной завесы, и при полной силе он
+   * выбеливает карту в белое: видно было бы не комнату, а пятно. Половина
+   * оставляет карту читаемой, а оттенок источника всё равно различим.
+   */
+  const LIGHT_GLOW_STRENGTH = 0.5;
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
+  }
+
+  /**
+   * Ступень градиента заданным цветом с нужной прозрачностью.
+   *
+   * Отдельная функция, потому что цвет приходит строкой `#rrggbb` из модели
+   * источника, а холсту нужен rgba: разбирать цвет на каналы приходится в
+   * каждой из семи ступеней градиента, а ступеней столько у каждого пятна.
+   * @param {string} hex
+   * @param {number} alpha От 0 до 1.
+   * @returns {string}
+   */
+  function tintedStop(hex, alpha) {
+    const color = /^#[0-9a-f]{6}$/i.test(String(hex)) ? hex : '#ffffff';
+    const red = parseInt(color.slice(1, 3), 16);
+    const green = parseInt(color.slice(3, 5), 16);
+    const blue = parseInt(color.slice(5, 7), 16);
+    return `rgba(${red}, ${green}, ${blue}, ${Math.round(alpha * 255) / 255})`;
   }
 
   function formatTime(iso) {
@@ -64,6 +119,191 @@
     return node;
   }
 
+  /**
+   * Сворачиваемая секция панели: заголовок с треугольником и тело под ним.
+   *
+   * Правая колонка узкая, а секций в ней сразу несколько (список спавна, все
+   * фишки, история бросков), и каждая по отдельности редко нужна. Свёрнутое
+   * состояние помнится в localStorage: мастер, который перед боем убрал
+   * спавн, не хочет видеть его снова в следующей партии.
+   * @param {string} title
+   * @param {string} [storageKey] ключ состояния; без него состояние не хранится
+   * @param {{collapsed?: boolean, subtitle?: HTMLElement, alwaysOpen?: boolean}} [options]
+   * @returns {{wrap: HTMLElement, body: HTMLElement}}
+   */
+  function section(title, storageKey, options = {}) {
+    const wrap = el('div', 'section section--collapsible');
+    const head = el('button', 'section__head');
+    head.type = 'button';
+    head.appendChild(el('span', 'section__caret', '▾'));
+    const label = el('span', 'section__title', title);
+    head.appendChild(label);
+    if (options.subtitle) head.appendChild(options.subtitle);
+
+    const body = el('div', 'section__body');
+    const stored = storageKey ? localStorage.getItem(storageKey) : null;
+    // let, а не const: состояние переключается по клику, и на const обработчик
+    // молча падал бы с «Assignment to constant variable».
+    let collapsed = stored === null ? Boolean(options.collapsed) : stored === '1';
+
+    const apply = () => {
+      wrap.classList.toggle('is-collapsed', collapsed);
+      body.hidden = collapsed;
+      head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    };
+    head.addEventListener('click', () => {
+      collapsed = !collapsed;
+      if (storageKey) localStorage.setItem(storageKey, collapsed ? '1' : '0');
+      apply();
+      // При раскрытии содержимое успело отлежаться в свёрнутом виде: ленты,
+      // которые сами себя докручивают вниз, приходится догонять руками.
+      if (!collapsed && options.onExpand) options.onExpand();
+    });
+    apply();
+
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    return { wrap, body, head };
+  }
+
+  /* ====================================================================== *
+   * Меню фишки: одно и то же из правого клика по карте и по строке списка
+   * ====================================================================== */
+
+  /**
+   * Собирает содержимое меню фишки.
+   *
+   * Отдельная функция, а не метод одной из панелей, потому что меню открывают
+   * две разные вещи: правая кнопка по фишке на карте и правая кнопка по строке
+   * в списке. Дублировать список пунктов значило бы со временем забыть про один
+   * из них — и мастер обнаружит это в середине боя.
+   * @param {object} token
+   * @param {object[]} players список участников стола
+   * @param {object} handlers те же обработчики, что и у панели
+   * @param {Function} close закрыть меню перед действием
+   * @returns {HTMLElement}
+   */
+  function buildTokenMenu(token, players, handlers, close) {
+    const menu = el('div', 'token-menu');
+
+    const rename = el('button', 'token-menu__item', 'Переименовать');
+    rename.type = 'button';
+    rename.addEventListener('click', () => {
+      close();
+      if (handlers.onRenameToken) handlers.onRenameToken(token);
+    });
+    menu.appendChild(rename);
+
+    // Скрытое имя — отдельный пункт, а не галочка: мастер решает по одной фишке,
+    // и галочка в меню пришла бы с состоянием по умолчанию «показывать».
+    const nameVisibility = el('button', 'token-menu__item',
+      token.hideName ? 'Показать имя игрокам' : 'Скрыть имя от игроков');
+    nameVisibility.type = 'button';
+    nameVisibility.addEventListener('click', () => {
+      close();
+      if (handlers.onToggleTokenNameHidden) handlers.onToggleTokenNameHidden(token.id, !token.hideName);
+    });
+    menu.appendChild(nameVisibility);
+
+    // Подписи снизу убираются совсем и у всех, включая мастера: на тесной карте
+    // их больше, чем нужно. Это не тайна, поэтому отдельная от «скрытого имени».
+    const labels = el('button', 'token-menu__item',
+      token.hideLabels ? 'Показать подписи' : 'Скрыть подписи');
+    labels.type = 'button';
+    labels.title = token.hideLabels
+      ? 'Подписи появятся у всех участников'
+      : 'Убрать под фишкой имя, хозяина и состояния у всех участников';
+    labels.addEventListener('click', () => {
+      close();
+      if (handlers.onToggleTokenLabelsHidden) handlers.onToggleTokenLabelsHidden(token.id, !token.hideLabels);
+    });
+    menu.appendChild(labels);
+
+    const imageLabel = el('label', 'token-menu__item');
+    imageLabel.appendChild(el('span', null, token.imageUrl ? 'Заменить изображение' : 'Изображение'));
+    const file = el('input');
+    file.type = 'file';
+    file.accept = 'image/png,image/jpeg,image/webp';
+    file.hidden = true;
+    file.addEventListener('change', () => {
+      const selected = file.files && file.files[0];
+      close();
+      if (selected && handlers.onSetTokenImage) handlers.onSetTokenImage(token.id, selected);
+    });
+    imageLabel.appendChild(file);
+    menu.appendChild(imageLabel);
+
+    const assign = el('div', 'token-menu__section');
+    assign.appendChild(el('div', 'token-menu__title', 'Назначить игроку'));
+    const select = el('select', 'select');
+    const none = el('option', null, '— никому —');
+    none.value = '';
+    select.appendChild(none);
+    for (const player of players || []) {
+      if (player.role === 'dm') continue;
+      const option = el('option', null, player.name);
+      option.value = player.playerId;
+      if (player.playerId === token.assignedPlayerId) option.selected = true;
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => {
+      close();
+      if (handlers.onAssignToken) handlers.onAssignToken(token.id, select.value || null);
+    });
+    assign.appendChild(select);
+    menu.appendChild(assign);
+
+    const visibility = el('button', 'token-menu__item',
+      token.hidden ? 'Показать игрокам' : 'Скрыть от игроков');
+    visibility.type = 'button';
+    visibility.addEventListener('click', () => {
+      close();
+      if (handlers.onToggleTokenHidden) handlers.onToggleTokenHidden(token.id, !token.hidden);
+    });
+    menu.appendChild(visibility);
+
+    const remove = el('button', 'token-menu__item token-menu__item--danger', 'Удалить фишку');
+    remove.type = 'button';
+    remove.addEventListener('click', () => {
+      close();
+      if (handlers.onDeleteToken) handlers.onDeleteToken(token.id);
+    });
+    menu.appendChild(remove);
+
+    return menu;
+  }
+
+  /**
+   * Показывает меню у точки на экране и вешает его закрытие.
+   *
+   * Закрытие цепляется к документу с задержкой в такт: если убрать меню по
+   * pointerdown, кнопка исчезнет из документа раньше события click, и ни один
+   * пункт (и выбор файла) не сработает.
+   * @param {HTMLElement} menu
+   * @param {number} clientX
+   * @param {number} clientY
+   * @param {{openMenu: HTMLElement|null, closeMenuHandler: ?Function, escapeHandler: ?Function}} owner
+   */
+  function placeTokenMenu(menu, clientX, clientY, owner) {
+    owner.closeMenu();
+    menu.style.left = `${clientX}px`;
+    menu.style.top = `${clientY}px`;
+    document.body.appendChild(menu);
+    owner.openMenu = menu;
+    owner.closeMenuHandler = (event) => {
+      if (menu.contains(event.target)) return;
+      owner.closeMenu();
+    };
+    owner.escapeHandler = (event) => {
+      if (event.key === 'Escape') owner.closeMenu();
+    };
+    setTimeout(() => {
+      if (owner.openMenu !== menu) return;
+      document.addEventListener('pointerdown', owner.closeMenuHandler, true);
+      document.addEventListener('keydown', owner.escapeHandler);
+    }, 0);
+  }
+
   /* ====================================================================== *
    * Холст: нарисовать карту самому
    * ====================================================================== */
@@ -77,6 +317,13 @@
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 6;
   const ZOOM_STEP = 1.25;
+  /**
+   * Сколько миллисекунд фишка идёт на одну клетку.
+   *
+   * Быстрее 60 мс шаг сливается в прыжок, медленнее 150 — бой превращается в
+   * ожидание. 80 мгс на клетку даёт примерно двенадцать шагов в секунду.
+   */
+  const COMBAT_STEP_MS = 80;
 
   /**
    * Простой редактор карты: два холста друг над другом (фон и штрихи),
@@ -685,6 +932,46 @@
       this.fogMode = false;
       /** Радиус кисти по ширине карты. */
       this.fogBrush = 0.12;
+      /**
+       * Режим рисования стен и расстановки света.
+       *
+       * Отдельный флаг рядом с fogMode, а не вместо него: кисть тумана и
+       * протяжка стены делаются по-разному, и мастер не должен каждый раз
+       * выбирать между ними в одном переключателе. Выключен по умолчанию по
+       * той же причине, что и туман: первое же движение мыши должно двигать
+       * фишку, а не рисовать.
+       * @type {'wall'|'light'|null}
+       */
+      this.drawMode = null;
+      /** Открыта ли вкладка «Свет» вместо управления картой. */
+      this.lightTabOpen = false;
+      /** Каким источником света ставить новый: индекс в DnD.LIGHT_PRESETS. */
+      this.lightPreset = 0;
+      /** Дальность света нового источника в футах. */
+      this.lightRadius = DnD.LIGHT_PRESETS[0].radius;
+      /** Протягиваемая стена: откуда и куда, пока мастер тянет мышь. */
+      this.wallDraft = null;
+      /**
+       * Кисть поверхности карты: что рисуем (null — выключена, '' — ластик) и
+       * ширина в клетках.
+       * @type {string|null}
+       */
+      this.surfaceTool = null;
+      this.surfaceBrush = 1;
+      /** Клетки текущего мазка: уходят на сервер по отпусканию мыши. */
+      this.surfaceStroke = [];
+      /**
+       * Режим боя: выбранная фишка и её маршрут по клеткам.
+       *
+       * Хранится здесь, а не в снимке стола: выбор фишки личный, у каждого
+       * участника он свой, и это не состояние кампании.
+       * @type {{enabled: boolean, tokenId: string|null}}
+       */
+      this.combat = { enabled: false, tokenId: null };
+      /** Маршрут последнего наведения: клетка назначения и расстояние. */
+      this.route = null;
+      /** Таймер пошагового хода фишки, пока он идёт по клеткам. */
+      this.walkTimer = null;
       this.build();
     }
 
@@ -721,11 +1008,31 @@
         this.tabButtons[type] = { button, dot };
         tabs.appendChild(button);
       }
+      // Вкладка «Свет» стоит рядом с картами, но картой не является: она
+      // показывает не другую подложку, а настройки той, что открыта. Отдельная
+      // вкладка нужна потому, что панель освещения занимает пол-экрана и в
+      // тулбар, где живёт управление картой, просто не помещалась.
+      const lightTab = el('button', 'map-tab map-tab--light');
+      lightTab.type = 'button';
+      lightTab.dataset.tab = 'light';
+      lightTab.hidden = true;
+      // Точки-метки у вкладки нет намеренно: та означает «карта показана
+      // игрокам», а вкладка света картой не является.
+      lightTab.appendChild(el('span', 'map-tab__label', 'Свет'));
+      lightTab.addEventListener('click', () => this.toggleLightTab());
+      this.lightTabButton = lightTab;
+      tabs.appendChild(lightTab);
       this.root.appendChild(tabs);
 
       const toolbar = el('div', 'map-toolbar');
       this.toolbar = toolbar;
       this.root.appendChild(toolbar);
+
+      // Панель освещения: своя вкладка вместо тесного тулбара.
+      const lightPanel = el('div', 'map-lightbar');
+      lightPanel.hidden = true;
+      this.lightPanel = lightPanel;
+      this.root.appendChild(lightPanel);
 
       const stage = el('div', 'map-stage');
       this.stage = stage;
@@ -745,9 +1052,59 @@
       this.gridLayer = gridLayer;
       surface.appendChild(gridLayer);
 
+      // Поверхность по клеткам лежит под фишками и над сеткой: это пол, по
+      // которому стоят, поэтому фишка должна быть поверх лужи, а не под ней.
+      this.surfaceCanvas = document.createElement('canvas');
+      this.surfaceCanvas.className = 'map-surface-layer';
+      this.surfaceCanvas.hidden = true;
+      surface.appendChild(this.surfaceCanvas);
+      this.surfaceContext = this.surfaceCanvas.getContext('2d');
+
       const layer = el('div', 'token-layer');
       this.tokenLayer = layer;
       surface.appendChild(layer);
+
+      // Маршрут хода в режиме боя лежит поверх фишек и под туманом: линия
+      // показывает, куда пойдёт фишка, и её должно быть видно даже поверх
+      // другой фишки, но закрытый участок она выдавать не должна.
+      this.routeLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      this.routeLayer.setAttribute('class', 'map-route');
+      this.routeLayer.setAttribute('viewBox', '0 0 1000 1000');
+      this.routeLayer.setAttribute('preserveAspectRatio', 'none');
+      surface.appendChild(this.routeLayer);
+      this.routeLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      this.routeLayer.appendChild(this.routeLine);
+      this.cellMark = el('div', 'map-cell');
+      surface.appendChild(this.cellMark);
+      this.routeLabel = el('div', 'map-route__label');
+      surface.appendChild(this.routeLabel);
+
+      // Свет лежит поверх карты, сетки и фишек, но под туманом. Порядок важен
+      // в обе стороны: фишка в темноте должна быть видна, но туман должен
+      // перекрывать и освещённую фишку, иначе игрок увидел бы монстра там, где
+      // мастер его ещё не открыл.
+      this.lightCanvas = document.createElement('canvas');
+      this.lightCanvas.className = 'map-light';
+      this.lightCanvas.hidden = true;
+      surface.appendChild(this.lightCanvas);
+      this.lightContext = this.lightCanvas.getContext('2d');
+      // Пятна света лежат поверх завесы и смешиваются с ней экранированием:
+      // так тёплый факел греет карту, а холодная луна окрашивает её синим.
+      this.glowCanvas = document.createElement('canvas');
+      this.glowCanvas.className = 'map-glow';
+      this.glowCanvas.hidden = true;
+      surface.appendChild(this.glowCanvas);
+      this.glowContext = this.glowCanvas.getContext('2d');
+      // Прямоугольники стен и точки источников рисуются на том же холсте,
+      // но мастеру и только мастеру: игроку незачем знать, где стена.
+      // Именно стены: сам источник на карте не виден никому, свет виден
+      // и без точки, а точка только мешала бы читать карту.
+      this.wallOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      this.wallOverlay.setAttribute('class', 'map-walls');
+      this.wallOverlay.setAttribute('viewBox', '0 0 1000 1000');
+      this.wallOverlay.setAttribute('preserveAspectRatio', 'none');
+      this.wallOverlay.hidden = true;
+      surface.appendChild(this.wallOverlay);
 
       // Туман войны лежит поверх всего: фишка в закрытом участке не должна
       // просвечивать, поэтому слой идёт после токенов, а под ним.
@@ -833,34 +1190,128 @@
 
       this.image.addEventListener('load', () => {
         this.layoutSurface();
-        // После загрузки картинки меняется размер подложки, а с ним и холст
-        // тумана: без перерисовки туман лёг бы на прошлую карту.
-        this.paintFog(this.mapOf(this.viewedMap));
+        // После загрузки картинки меняется размер подложки, а с ним и холсты
+        // тумана и света: без перерисовки туман лёг бы на прошлую карту, а
+        // свет посчитался бы по чужим пропорциям.
+        const map = this.mapOf(this.viewedMap);
+        this.paintFog(map);
+        this.paintLight(map);
+        this.paintWallOverlay(map);
+        this.paintSurface(map);
       });
 
       // Кисть тумана живёт на самой подложке: в режиме тумана указатель
-      // открывает карту, а не двигает фишку.
+      // открывает карту, а не двигает фишку. Режим стен и света устроен так же.
       this.surface.addEventListener('pointerdown', (event) => {
-        if (!this.fogMode || this.role !== 'dm' || this.editing) return;
-        event.preventDefault();
-        event.stopPropagation();
-        this.openFogAt(event);
+        if (this.role !== 'dm' || this.editing) return;
+        if (this.fogMode) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.openFogAt(event);
+          return;
+        }
+        if (this.surfaceTool !== null) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.paintSurfaceAt(event);
+          return;
+        }
+        if (event.button !== 0) return;
+        if (this.drawMode === 'wall') {
+          event.preventDefault();
+          event.stopPropagation();
+          this.startWall(event);
+          return;
+        }
+        if (this.drawMode === 'light') {
+          event.preventDefault();
+          event.stopPropagation();
+          this.placeLight(event);
+        }
       });
       this.surface.addEventListener('pointermove', (event) => {
-        if (!this.fogMode || this.role !== 'dm' || this.editing) return;
-        if (event.buttons !== 1) return;
-        this.openFogAt(event);
+        if (this.role !== 'dm' || this.editing) return;
+        if (this.fogMode) {
+          if (event.buttons !== 1) return;
+          this.openFogAt(event);
+          return;
+        }
+        if (this.surfaceTool !== null) {
+          if (event.buttons !== 1) return;
+          this.paintSurfaceAt(event);
+          return;
+        }
+        if (this.drawMode === 'wall' && this.wallDraft && event.buttons === 1) {
+          this.moveWall(event);
+        }
+      });
+      // Стена до отпускания мыши не уходит на сервер: мастер рисует движением
+      // и рассылка на каждый пиксель утащила бы весь стол. Правый клик по уже
+      // нарисованной стене убирает её — иначе стену пришлось бы искать заново.
+      this.surface.addEventListener('pointerup', (event) => {
+        if (this.surfaceTool !== null) {
+          event.stopPropagation();
+          this.flushSurfaceStroke();
+          return;
+        }
+        if (this.drawMode !== 'wall' || !this.wallDraft) return;
+        event.stopPropagation();
+        this.finishWall(event);
+      });
+      this.surface.addEventListener('contextmenu', (event) => {
+        if (this.role !== 'dm' || this.editing) return;
+        const wall = this.wallNear(event);
+        if (!wall) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (this.handlers.onDeleteMapWall) {
+          this.handlers.onDeleteMapWall(this.viewedMap, this.currentMapId, wall.id);
+        }
+      });
+      // Режим боя: нажатие по клетке отправляет выбранную фишку туда. Слушатель
+      // свой и на всех ролях, потому что ходят и игроки, а мастерские кисти выше
+      // сюда не доходят: туман, стены и свет включаются отдельными режимами.
+      this.surface.addEventListener('pointerdown', (event) => {
+        // Кисти мастера важнее: туман, стены и свет рисуются теми же нажатиями.
+        if (!this.combat.enabled || this.editing || event.button !== 0) return;
+        if (this.fogMode || this.drawMode) return;
+        const token = this.combatToken();
+        if (!token) return;
+        const target = this.cellAtClient(event.clientX, event.clientY);
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.walkTokenTo(token, target);
+      });
+      // Маршрут рисуется под курсором: видно расстояние до того, как нажато.
+      this.surface.addEventListener('pointermove', (event) => {
+        if (!this.combat.enabled || this.editing || !this.combatToken()) return;
+        if (this.fogMode || this.drawMode) return;
+        this.paintRoute(this.cellAtClient(event.clientX, event.clientY));
+      });
+      // Увелили карту под маршрутом — перерисовываем его на новом месте.
+      this.surface.addEventListener('pointerleave', () => {
+        if (this.combat.enabled) this.paintRoute();
       });
       if (typeof ResizeObserver === 'function') {
         this.resizeObserver = new ResizeObserver(() => {
           this.layoutSurface();
           if (this.editing && this.editor) this.editor.layout();
+          // Свет считается в размерах подложки, а она меняется вместе с окном.
+          const map = this.mapOf(this.viewedMap);
+          this.paintLight(map);
+          this.paintFog(map);
+          this.paintSurface(map);
         });
         this.resizeObserver.observe(stage);
       }
       window.addEventListener('resize', () => {
         this.layoutSurface();
         if (this.editing && this.editor) this.editor.layout();
+        const map = this.mapOf(this.viewedMap);
+        this.paintLight(map);
+        this.paintFog(map);
+        this.paintSurface(map);
       });
     }
 
@@ -868,6 +1319,10 @@
       // Смена вкладки закрывает холст: рисование всегда привязано к карте,
       // поверх которой оно начато.
       if (this.editing) this.closeEditor();
+      if (this.lightTabOpen) {
+        this.lightTabOpen = false;
+        this.render();
+      }
       if (this.role === 'dm' || this.training) {
         // ДМ (и игрок в тренировочном столе) может выбрать и ещё не загруженную
         // карту: именно её он и загрузит кнопкой в панели. Раньше пустая вкладка
@@ -878,6 +1333,27 @@
       }
       // Игрок по умолчанию смотрит активную карту, но может заглянуть и в другую.
       this.playerPeek = type === this.activeMap ? null : type;
+      this.render();
+    }
+
+    /**
+     * Вкладка «Свет»: та же карта под ней, но вместо управления картой мастер
+     * видит настройки освещения.
+     *
+     * Карта остаётся на виду намеренно: темноту и огонь нельзя настраивать
+     * вслепую, мастер должен видеть, что происходит с картой под рукой.
+     */
+    toggleLightTab() {
+      if (this.editing) this.closeEditor();
+      this.lightTabOpen = !this.lightTabOpen;
+      // Режим рисования живёт на вкладке света: переключение вкладки не должно
+      // оставлять курсор «рисуем» над панелью, где рисовать нечего.
+      if (this.lightTabOpen && this.drawMode) {
+        this.drawMode = null;
+        this.wallDraft = null;
+        this.surface.classList.remove('is-drawing-light', 'is-drawing-wall');
+        this.paintWallDraft();
+      }
       this.render();
     }
 
@@ -917,6 +1393,9 @@
       if (this.zoomValue) this.zoomValue.textContent = `${Math.round(this.zoom * 100)}%`;
       if (this.zoomBar) this.zoomBar.classList.toggle('is-zoomed', this.zoom !== 1);
       this.surface.classList.toggle('is-panned', this.pan.x !== 0 || this.pan.y !== 0);
+      // Маршрут задан в долях карты, но линия и подпись двигаются вместе с
+      // подложкой: без перерисовки они остались бы на старом месте.
+      this.paintRoute();
     }
 
     setZoom(zoom) {
@@ -1041,11 +1520,194 @@
     }
 
     /**
+     * Панель света: темнота карты, два инструмента и список источников.
+     *
+     * Живёт на отдельной вкладке и в строку не умещается, поэтому каждый
+     * ползунок и каждый выбор получают подпись: без неё «20 фт» и «40 фт»
+     * рядом друг с другом неотличимы. Порядок повторяет работу мастера: сначала
+     * «наступила ночь», потом инструменты, и только потом список того, что уже
+     * горит. Список нужен ещё и для того, чтобы погасить костёр, не находя его
+     * взглядом на карте: источник на ней не виден.
+     * @param {string} type Вкладка карты.
+     * @param {object} map Текущая карта.
+     * @returns {HTMLElement}
+     */
+    buildLightControls(type, map) {
+      const box = el('div', 'light-panel');
+      const tools = el('div', 'light-panel__tools');
+
+      /** Ползунок с подписью: подпись и объяснение, что он значит. */
+      const slider = (label, hint, input) => {
+        const row = el('label', 'light-panel__field');
+        row.appendChild(el('span', 'light-panel__label', label));
+        row.appendChild(input);
+        row.title = hint;
+        return row;
+      };
+
+      const darkness = Math.round((Number(map.darkness) || 0) * 100);
+      const darknessInput = el('input', 'light-panel__slider');
+      darknessInput.type = 'range';
+      darknessInput.min = '0';
+      darknessInput.max = '100';
+      darknessInput.step = '5';
+      darknessInput.value = String(darkness);
+      darknessInput.title = 'Насколько темно на карте. 0 — дневной свет, 100 — кромешная тьма';
+      darknessInput.setAttribute('aria-label', 'Темнота карты');
+      darknessInput.addEventListener('input', () => {
+        const value = Number(darknessInput.value) / 100;
+        // Применяем сразу, без ответа сервера: мастер тянет ползунок и должен
+        // видеть темноту так же, как игрок её увидит.
+        map.darkness = value;
+        darknessValue.textContent = `${darknessInput.value}%`;
+        this.paintLight(map);
+      });
+      darknessInput.addEventListener('change', () => {
+        if (this.handlers.onSetMapDarkness) {
+          this.handlers.onSetMapDarkness(type, map.id, Number(darknessInput.value) / 100);
+        }
+      });
+      const darknessValue = el('span', 'light-panel__value', `${darkness}%`);
+      const darknessField = slider('Темнота карты', 'Ноль это дневной свет', darknessInput);
+      darknessField.appendChild(darknessValue);
+      tools.appendChild(darknessField);
+
+      const radius = el('input', 'light-panel__slider');
+      radius.type = 'range';
+      radius.min = '5';
+      radius.max = '120';
+      radius.step = '5';
+      radius.value = String(this.lightRadius);
+      radius.setAttribute('aria-label', 'Дальность света в футах');
+      radius.addEventListener('input', () => {
+        this.lightRadius = Number(radius.value);
+        radiusValue.textContent = `${radius.value} фт`;
+      });
+      const radiusValue = el('span', 'light-panel__value', `${this.lightRadius} фт`);
+      const radiusField = slider('Дальность источника', 'По правилам 5e факел светит на 20 футов', radius);
+      radiusField.appendChild(radiusValue);
+      tools.appendChild(radiusField);
+
+      const preset = el('select', 'select light-panel__select');
+      for (const item of DnD.LIGHT_PRESETS) {
+        const option = el('option', null, `${item.label} — ${item.radius} фт`);
+        option.value = item.id;
+        option.selected = item.id === (DnD.LIGHT_PRESETS[this.lightPreset] || {}).id;
+        preset.appendChild(option);
+      }
+      preset.title = 'Какой свет поставить';
+      preset.addEventListener('change', () => {
+        const index = DnD.LIGHT_PRESETS.findIndex((item) => item.id === preset.value);
+        if (index >= 0) {
+          this.lightPreset = index;
+          this.lightRadius = DnD.LIGHT_PRESETS[index].radius;
+          radius.value = String(this.lightRadius);
+          radiusValue.textContent = `${this.lightRadius} фт`;
+        }
+      });
+      const presetField = el('label', 'light-panel__field');
+      presetField.appendChild(el('span', 'light-panel__label', 'Источник'));
+      presetField.appendChild(preset);
+      tools.appendChild(presetField);
+      box.appendChild(tools);
+
+      // Инструменты отдельной строкой: они включают режим на карте, и держать
+      // их рядом с ползунками значило бы тянуться через всю панель.
+      const modes = el('div', 'light-panel__modes');
+      const lightTool = el('button', 'btn', this.drawMode === 'light' ? 'Свет: ставим' : 'Поставить свет');
+      lightTool.type = 'button';
+      lightTool.dataset.tool = 'light';
+      lightTool.classList.toggle('btn--accent', this.drawMode === 'light');
+      lightTool.title = 'Клик по карте ставит источник света. Сам источник на карте не виден';
+      lightTool.addEventListener('click', () => this.setDrawMode('light'));
+      modes.appendChild(lightTool);
+
+      const wallTool = el('button', 'btn', this.drawMode === 'wall' ? 'Стены: рисуем' : 'Рисовать стены');
+      wallTool.type = 'button';
+      wallTool.dataset.tool = 'wall';
+      wallTool.classList.toggle('btn--accent', this.drawMode === 'wall');
+      wallTool.title = 'Протяните мышью стену: она держит свет. Правый клик по стене убирает её';
+      wallTool.addEventListener('click', () => this.setDrawMode('wall'));
+      modes.appendChild(wallTool);
+
+      const clearWalls = el('button', 'btn btn--ghost', 'Убрать все стены');
+      clearWalls.type = 'button';
+      clearWalls.title = 'Снести все стены карты';
+      clearWalls.disabled = !normalizeWalls(map.walls).length;
+      clearWalls.addEventListener('click', () => {
+        if (this.handlers.onClearMapWalls) this.handlers.onClearMapWalls(type, map.id);
+      });
+      modes.appendChild(clearWalls);
+      box.appendChild(modes);
+
+      const lights = normalizeLights(map.lights);
+      box.appendChild(el('div', 'light-panel__title', lights.length
+        ? `Источников на карте: ${lights.length}`
+        : 'Источников на карте пока нет'));
+      const list = el('div', 'light-panel__list');
+      for (const light of lights) {
+        const row = el('div', `light-row${light.hidden ? ' is-hidden' : ''}`);
+        const dot = el('span', 'light-row__dot');
+        dot.style.background = light.color;
+        row.appendChild(dot);
+        row.appendChild(el('span', 'light-row__radius', light.dim ? `${light.radius} фт · тусклый` : `${light.radius} фт`));
+        row.appendChild(el('span', 'light-row__place',
+          `${Math.round(light.x * 100)}%, ${Math.round(light.y * 100)}%`));
+        if (light.hidden) row.appendChild(el('span', 'light-row__state', 'погашен'));
+
+        // Тусклый и яркий по правилам светят на разные расстояния, поэтому это
+        // переключатель, а не выбор в списке: список источников отвечает на
+        // «чем горит», а этот — на «сильно ли».
+        const dim = el('button', 'btn btn--tiny btn--ghost', light.dim ? 'Тусклый' : 'Яркий');
+        dim.type = 'button';
+        dim.title = light.dim
+          ? 'Сделать свет ярким: он будет светить на всю указанную дальность'
+          : 'Сделать свет тусклым: вдвое меньше и приглушённее, видны силуэты';
+        dim.addEventListener('click', () => {
+          if (this.handlers.onSetMapLight) {
+            this.handlers.onSetMapLight(type, map.id, light.id, { dim: !light.dim });
+          }
+        });
+        row.appendChild(dim);
+
+        const toggle = el('button', 'btn btn--tiny btn--ghost', light.hidden ? 'Зажечь' : 'Погасить');
+        toggle.type = 'button';
+        toggle.title = 'Погасить свет, не убирая источник совсем';
+        toggle.addEventListener('click', () => {
+          if (this.handlers.onSetMapLight) {
+            this.handlers.onSetMapLight(type, map.id, light.id, { hidden: !light.hidden });
+          }
+        });
+        row.appendChild(toggle);
+
+        const remove = el('button', 'btn btn--tiny btn--danger', '✕');
+        remove.type = 'button';
+        remove.title = 'Убрать источник света';
+        remove.addEventListener('click', () => {
+          if (this.handlers.onDeleteMapLight) this.handlers.onDeleteMapLight(type, map.id, light.id);
+        });
+        row.appendChild(remove);
+
+        list.appendChild(row);
+      }
+      box.appendChild(list);
+      return box;
+    }
+
+    /**
      * Включает или выключает режим кисти.
      * @param {boolean} value
      */
     setFogMode(value) {
       this.fogMode = Boolean(value);
+      // Туман и стены рисуются разными инструментами: включенный туман
+      // выключает остальное, иначе протяжка стены открывала бы ещё и карту.
+      if (this.fogMode && this.drawMode) {
+        this.drawMode = null;
+        this.wallDraft = null;
+        this.surface.classList.remove('is-drawing-light', 'is-drawing-wall');
+        this.paintWallDraft();
+      }
       this.surface.classList.toggle('is-fogging', this.fogMode);
     }
 
@@ -1060,6 +1722,183 @@
         x: rect.width ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0,
         y: rect.height ? Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) : 0
       };
+    }
+
+    /* ------------------------------------------- Поверхность карты по клеткам */
+
+    /**
+     * Рисует поверхность: кислота, огонь, вода и прочее по клеткам.
+     *
+     * Слой полупрозрачный и лежит под фишками: это пол, а не то, что стоит на
+     * нём. Каждая клетка рисуется со своей текстурой, иначе восемь типов
+     * выглядели бы восемью оттенками одного пятна.
+     * @param {object|null} map Текущая карта.
+     */
+    paintSurface(map) {
+      const canvas = this.surfaceCanvas;
+      if (!canvas) return;
+      const cells = map && map.surface && map.surface.cells ? map.surface.cells : {};
+      const keys = Object.keys(cells);
+      if (!keys.length) {
+        canvas.hidden = true;
+        return;
+      }
+      canvas.hidden = false;
+      const width = Math.max(1, Math.round(this.surface.clientWidth));
+      const height = Math.max(1, Math.round(this.surface.clientHeight));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      const context = this.surfaceContext;
+      context.clearRect(0, 0, width, height);
+      const imageWidth = this.image ? this.image.naturalWidth : 0;
+      const imageHeight = this.image ? this.image.naturalHeight : 0;
+      if (!imageWidth || !imageHeight) return;
+      const cell = this.effectiveCell();
+      const scaleX = width / imageWidth;
+      const scaleY = height / imageHeight;
+      const shiftX = (Number(this.grid.offsetX) || 0) * scaleX;
+      const shiftY = (Number(this.grid.offsetY) || 0) * scaleY;
+      const sizeX = Math.max(1, cell * scaleX);
+      const sizeY = Math.max(1, cell * scaleY);
+
+      for (const key of keys) {
+        const type = DnD.SURFACE_TYPES.find((item) => item.id === cells[key]);
+        const parts = key.split(',');
+        if (!type || parts.length !== 2) continue;
+        const col = Number(parts[0]);
+        const row = Number(parts[1]);
+        const x = shiftX + col * sizeX;
+        const y = shiftY + row * sizeY;
+        context.save();
+        context.globalAlpha = 0.55;
+        context.fillStyle = type.color;
+        context.fillRect(x, y, sizeX, sizeY);
+        // Штриховка поверх заливки: по одному цвету половина типов не
+        // отличилась бы от другой, а поверхность читают с одного взгляда.
+        context.globalAlpha = 0.35;
+        context.strokeStyle = type.color;
+        context.lineWidth = Math.max(1, Math.min(sizeX, sizeY) / 14);
+        this.surfaceTexture(context, type.id, x, y, sizeX, sizeY);
+        context.restore();
+      }
+    }
+
+    /**
+     * Штриховка типа поверхности внутри клетки.
+     *
+     * Разная у каждого типа: огонь идёт языками, вода — волной, руины —
+     * обломками. Рисуется линиями, а не картинками: картинка тянулась бы с
+     * сервера вместе с кампанией и весила бы больше, чем сама карта.
+     * @param {CanvasRenderingContext2D} context
+     * @param {string} type
+     * @param {number} x
+     * @param {number} y
+     * @param {number} width
+     * @param {number} height
+     */
+    surfaceTexture(context, type, x, y, width, height) {
+      const step = Math.max(2, Math.min(width, height) / 4);
+      context.beginPath();
+      if (type === 'fire') {
+        for (let i = 0; i <= 3; i += 1) {
+          const px = x + width * (i + 0.5) / 4;
+          context.moveTo(px, y + height);
+          context.lineTo(px + (i % 2 ? width / 8 : -width / 8), y);
+        }
+      } else if (type === 'water' || type === 'slick') {
+        for (let row = 1; row <= 2; row += 1) {
+          const py = y + height * row / 3;
+          for (let i = 0; i <= 3; i += 1) {
+            const px = x + width * i / 3;
+            context.moveTo(px, py);
+            context.lineTo(px + width / 6, py + (row === 1 ? step / 2 : -step / 2));
+          }
+        }
+      } else if (type === 'ice') {
+        context.moveTo(x, y + height / 2);
+        context.lineTo(x + width / 2, y);
+        context.lineTo(x + width, y + height / 2);
+        context.moveTo(x + width / 2, y + height / 2);
+        context.lineTo(x + width / 2, y + height);
+        context.moveTo(x, y + height / 2);
+        context.lineTo(x + width / 2, y + height / 2);
+        context.lineTo(x + width, y + height / 2);
+      } else if (type === 'rubble') {
+        context.moveTo(x, y + height);
+        context.lineTo(x + width * 0.4, y + height * 0.3);
+        context.lineTo(x + width, y + height);
+        context.moveTo(x + width * 0.4, y + height * 0.3);
+        context.lineTo(x + width * 0.7, y);
+      } else if (type === 'smoke') {
+        for (let i = 0; i <= 2; i += 1) {
+          context.moveTo(x + width * i / 2, y + height);
+          context.lineTo(x + width * (i + 0.6) / 2, y);
+        }
+      } else if (type === 'poison') {
+        context.arc(x + width / 3, y + height / 3, step / 2, 0, Math.PI * 2);
+        context.arc(x + width * 2 / 3, y + height * 2 / 3, step / 3, 0, Math.PI * 2);
+      } else {
+        // Кислота и всё, чего правила не знают: капли с краю.
+        context.moveTo(x, y + height);
+        context.quadraticCurveTo(x + width / 2, y + height * 0.4, x + width, y + height);
+      }
+      context.stroke();
+    }
+
+    /**
+     * Кисть поверхности: клетки под указателем и под ним самим.
+     *
+     * Мазок копится и уходит на сервер по отпусканию мыши: рассылка на каждое
+     * движение отправила бы сотни сообщений за один мазок.
+     * @param {PointerEvent|MouseEvent} event
+     */
+    paintSurfaceAt(event) {
+      if (!this.surfaceTool) return;
+      const map = this.mapOf(this.viewedMap);
+      if (!map) return;
+      const cell = this.cellAtClient(event.clientX, event.clientY);
+      if (!cell) return;
+      const brush = Math.max(0, Math.round(this.surfaceBrush)) - 1;
+      for (let row = cell.row - brush; row <= cell.row + brush; row += 1) {
+        for (let col = cell.col - brush; col <= cell.col + brush; col += 1) {
+          if (col < 0 || row < 0) continue;
+          const key = `${col},${row}`;
+          if (!this.surfaceStroke.some((item) => item[0] === col && item[1] === row)) {
+            this.surfaceStroke.push([col, row, this.surfaceTool]);
+          }
+        }
+      }
+      map.surface = map.surface && typeof map.surface === 'object' ? map.surface : { cells: {} };
+      map.surface.cells = { ...map.surface.cells };
+      for (const [col, row, type] of this.surfaceStroke) {
+        if (type) map.surface.cells[`${col},${row}`] = type;
+        else delete map.surface.cells[`${col},${row}`];
+      }
+      this.paintSurface(map);
+    }
+
+    /** Отправляет накопленный мазок и очищает его. */
+    flushSurfaceStroke() {
+      if (!this.surfaceStroke.length) return;
+      const cells = this.surfaceStroke;
+      this.surfaceStroke = [];
+      if (this.handlers.onPaintSurface) {
+        this.handlers.onPaintSurface(this.viewedMap, this.currentMapId, cells);
+      }
+    }
+
+    /**
+     * Включает кисть поверхности.
+     * @param {string|null} type Тип поверхности или null, если инструмент выключен.
+     */
+    setSurfaceTool(type) {
+      // Ластик и кисть несовместимы: стирать можно только тем, чем нарисовано.
+      this.surfaceTool = type === '' ? '' : (type || null);
+      this.surfaceStroke = [];
+      this.surface.classList.toggle('is-painting-surface', Boolean(this.surfaceTool !== null));
+      this.renderToolbar();
     }
 
     /**
@@ -1137,6 +1976,332 @@
       return this.fogSource;
     }
 
+    /* ------------------------------------------------------------------ *
+     * Свет: темнота карты и пятна от источников
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Рисует темноту и пятна света.
+     *
+     * Свет состоит из двух слоёв, и это не украшение, а единственный способ
+     * получить цвет. Первый слой — ночная завеса: она просто темнит карту там,
+     * где источников нет. Второй — сами пятна, каждое своим цветом, поверх
+     * завесы. Если вырезать пятна из темноты вычитанием, цвет источника
+     * никуда не попадает: вычитание убирает прозрачность, но оставляет цвет
+     * ночи, и лунный свет выглядел бы как факел.
+     *
+     * Всё считается в уменьшенных холстах: полигоны видимости строятся по
+     * лучам, а не по пикселям, и подробность тут не нужна. Наружу буферы
+     * отдаются размытыми, поэтому край тени получается мягким на любой карте.
+     * @param {object|null} map Текущая карта.
+     */
+    paintLight(map) {
+      const veil = this.lightCanvas;
+      const glow = this.glowCanvas;
+      if (!veil || !glow) return;
+      const darkness = map && Number(map.darkness) > 0 ? Number(map.darkness) : 0;
+      const sources = this.lightSources(map);
+      // Темнота без единого огня — это и есть кромешная тьма, и она должна
+      // рисоваться. Слои выключаются только там, где темноты нет вовсе:
+      // дневная карта без освещения не должна выглядеть пожелтевшей.
+      if (darkness <= 0) {
+        veil.hidden = true;
+        glow.hidden = true;
+        return;
+      }
+      veil.hidden = false;
+      glow.hidden = false;
+
+      const width = Math.max(1, Math.round(this.surface.clientWidth));
+      const height = Math.max(1, Math.round(this.surface.clientHeight));
+      for (const canvas of [veil, glow]) {
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+      }
+
+      const smallWidth = Math.max(1, Math.round(width * LIGHT_RENDER_SCALE));
+      const smallHeight = Math.max(1, Math.round(height * LIGHT_RENDER_SCALE));
+      const grid = this.lightMapGrid(map, width, height);
+      const cells = wallsInCells(normalizeWalls(map.walls), grid);
+
+      // Пятна не пересчитываются, пока не сдвинулась стена, не горит или не
+      // погас источник и не изменился размер карты. Пересчёт всех полигонов на
+      // каждое движение мыши при протяжке стены заметно подтормаживал.
+      const key = this.lightCacheKey(sources, cells, grid, smallWidth, smallHeight);
+      if (key !== this.lightKey) {
+        this.lightKey = key;
+        this.renderLightBuffers(sources, cells, grid, smallWidth, smallHeight, darkness);
+      }
+
+      const blur = Math.max(2, Math.round(width * LIGHT_BLUR_RATIO));
+      this.drawLightLayer(veil, this.lightSource, width, height, blur, this.lightContext);
+      this.drawLightLayer(glow, this.glowSource, width, height, blur, this.glowContext, LIGHT_GLOW_STRENGTH);
+    }
+
+    /**
+     * Ключ, по которому решается, что свет надо пересчитать.
+     *
+     * Темнота в него не входит намеренно: она меняет только прозрачность
+     * завесы, а пятна от неё не зависят, и тянуть ползунок не заставит
+     * перестраивать все многоугольники заново.
+     * @param {object[]} sources
+     * @param {object[]} cells Стены в клетках.
+     * @param {object} grid
+     * @param {number} smallWidth
+     * @param {number} smallHeight
+     * @returns {string}
+     */
+    lightCacheKey(sources, cells, grid, smallWidth, smallHeight) {
+      const lights = sources
+        .map((light) => `${light.x},${light.y},${light.radius},${light.color || ''},${light.dim ? 'd' : 'b'}`)
+        .join(';');
+      const walls = cells
+        .map((wall) => `${wall.x1.toFixed(3)},${wall.y1.toFixed(3)},${wall.x2.toFixed(3)},${wall.y2.toFixed(3)}`)
+        .join(';');
+      return `${smallWidth}x${smallHeight}|${grid.columns}x${grid.rows}|${lights}|${walls}`;
+    }
+
+    /**
+     * Наполняет уменьшенные буферы: ночную завесу и цветные пятна.
+     * @param {object[]} sources
+     * @param {object[]} cells Стены в клетках.
+     * @param {object} grid
+     * @param {number} smallWidth
+     * @param {number} smallHeight
+     * @param {number} darkness
+     */
+    renderLightBuffers(sources, cells, grid, smallWidth, smallHeight, darkness) {
+      if (!this.lightSource) {
+        this.lightSource = document.createElement('canvas');
+        this.lightSourceContext = this.lightSource.getContext('2d');
+        this.glowSource = document.createElement('canvas');
+        this.glowSourceContext = this.glowSource.getContext('2d');
+      }
+      const source = this.lightSource;
+      const glowSource = this.glowSource;
+      if (source.width !== smallWidth || source.height !== smallHeight) {
+        source.width = smallWidth;
+        source.height = smallHeight;
+        glowSource.width = smallWidth;
+        glowSource.height = smallHeight;
+      }
+
+      // Пятна идут первыми: их прозрачность нужна завесе, чтобы знать, где
+      // темнота уже выедена и насколько.
+      const glow = this.glowSourceContext;
+      glow.setTransform(1, 0, 0, 1, 0, 0);
+      glow.globalCompositeOperation = 'source-over';
+      glow.globalAlpha = 1;
+      glow.filter = 'none';
+      glow.clearRect(0, 0, smallWidth, smallHeight);
+
+      // Стена должна попадать в буфер шире своего пятна: иначе край тени
+      // окажется за границей кадра и размытие срежет его по прямой.
+      const bleed = smallWidth * 0.12;
+      for (const light of sources) {
+        // Тусклый свет светит вдвое меньше и выедает темноту не до конца: в нём
+        // видно силуэты, но не детали. Дальность берёт на себя модель света,
+        // здесь остаётся только приглушить само пятно.
+        const polygon = lightPolygon(light, cells, grid);
+        // Пик яркого света не единица: при перекрытии двух факелов единицы
+        // складываются в пересвет, и комната пропадает.
+        const peak = light.dim ? 0.45 : 0.85;
+        // Пятно рисуется по многоугольнику видимости, а не по кругу: иначе
+        // стены не держали бы свет и вся затея была бы пустой.
+        glow.save();
+        glow.beginPath();
+        for (let i = 0; i < polygon.points.length; i += 1) {
+          const [x, y] = polygon.points[i];
+          const px = (x / grid.columns) * smallWidth;
+          const py = (y / grid.rows) * smallHeight;
+          if (i === 0) glow.moveTo(px, py);
+          else glow.lineTo(px, py);
+        }
+        glow.closePath();
+        glow.clip();
+        // Градиент с несколькими ступенями, а не двумя: настоящий факел не
+        // гаснет рывком у края, и на двух точках край пятна читается как
+        // обводка.
+        const radiusPx = (polygon.radiusCells / grid.columns) * smallWidth;
+        const centerX = light.x * smallWidth;
+        const centerY = light.y * smallHeight;
+        const gradient = glow.createRadialGradient(
+          centerX, centerY, 0,
+          centerX, centerY, Math.max(1, radiusPx)
+        );
+        const steps = [
+          [0, peak],
+          [0.25, peak * 0.97],
+          [0.45, peak * 0.88],
+          [0.65, peak * 0.7],
+          [0.82, peak * 0.42],
+          [0.93, peak * 0.16],
+          [1, 0]
+        ];
+        for (const [offset, value] of steps) {
+          gradient.addColorStop(offset, tintedStop(light.color, value));
+        }
+        // Сложение: два рядом стоящих факела дают одно перекрытое пятно, а не
+        // два наложенных круга с видимой границей.
+        glow.globalCompositeOperation = 'lighter';
+        glow.fillStyle = gradient;
+        glow.fillRect(
+          centerX - radiusPx - bleed,
+          centerY - radiusPx - bleed,
+          (radiusPx + bleed) * 2,
+          (radiusPx + bleed) * 2
+        );
+        glow.restore();
+      }
+
+      const context = this.lightSourceContext;
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.globalCompositeOperation = 'source-over';
+      context.globalAlpha = 1;
+      context.filter = 'none';
+      context.fillStyle = DnD.LIGHT_AMBIENT;
+      context.globalAlpha = darknessAlpha(darkness, this.role);
+      context.fillRect(0, 0, smallWidth, smallHeight);
+      context.globalAlpha = 1;
+      // Завеса выедается там, где есть свет: чем ярче пятно, тем прозрачнее
+      // темнота, и два перекрытых огня дают одно общее светлое место.
+      context.globalCompositeOperation = 'destination-out';
+      context.drawImage(glowSource, 0, 0);
+      context.globalCompositeOperation = 'source-over';
+    }
+
+    /**
+     * Выводит готовый буфер на слой карты, размытым по краю.
+     *
+     * Радиус размытия считается от ширины карты, чтобы на маленькой карте край
+     * был таким же мягким, как на большой.
+     * @param {HTMLCanvasElement} canvas Слой на карте.
+     * @param {HTMLCanvasElement} source Готовый уменьшенный буфер.
+     * @param {number} width
+     * @param {number} height
+     * @param {number} blur
+     * @param {CanvasRenderingContext2D} context
+     */
+    drawLightLayer(canvas, source, width, height, blur, context, strength) {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, width, height);
+      context.globalCompositeOperation = 'source-over';
+      // Завеса рисуется в полную силу, а пятна — приглушённо: иначе свет
+      // выбеливает карту и комнату перестаёт быть видно.
+      context.globalAlpha = strength === undefined ? 1 : strength;
+      context.filter = 'none';
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.filter = `blur(${blur}px)`;
+      context.drawImage(source, 0, 0, width, height);
+      context.filter = 'none';
+      context.globalAlpha = 1;
+    }
+
+    /**
+     * Все источники света на карте: поставленные мастером и горящие фишки.
+     *
+     * Фишка светит там, где стоит, и едет вместе с ней, но только пока сама
+     * видна игроку: спрятанная фишка — заготовка, её свет посторонним не выдаёт.
+     * @param {object|null} map
+     * @returns {object[]}
+     */
+    lightSources(map) {
+      const result = [];
+      if (!map) return result;
+      for (const light of normalizeLights(map.lights)) {
+        if (!light.hidden) result.push(light);
+      }
+      for (const token of this.tokens || []) {
+        if (!token.light || token.light.radius <= 0) continue;
+        if (token.hidden) continue;
+        if (token.mapType !== this.viewedMap) continue;
+        if (token.mapId && this.currentMapId && token.mapId !== this.currentMapId) continue;
+        result.push({ x: token.x, y: token.y, radius: token.light.radius });
+      }
+      return result;
+    }
+
+    /**
+     * Сетка в клетках для расчёта света.
+     *
+     * Число клеток по ширине стол знает не всегда: если мастер задал размер
+     * клетки в пикселях, а не число клеток, колонки считаются от ширины
+     * подложки — ровно так же, как их считает видимая сетка. Иначе факел на
+     * двадцать футов светит на две сотни клетки ширины карты.
+     *
+     * Число строк берётся из пропорций картинки: высоту сетки можно узнать
+     * только глядя на карту.
+     * @param {object|null} map
+     * @param {number} width
+     * @param {number} height
+     * @returns {{columns: number, rows: number, feetPerCell: number}}
+     */
+    lightMapGrid(map, width, height) {
+      const naturalWidth = this.image ? this.image.naturalWidth : 0;
+      const naturalHeight = this.image ? this.image.naturalHeight : 0;
+      const natural = naturalWidth && naturalHeight ? naturalWidth / naturalHeight : 0;
+      // Поверхность подогнана под пропорции картинки, но на пустой карте она
+      // может быть ещё не готова: тогда верим ей самой.
+      const aspect = natural > 0 ? natural : (width && height ? width / height : 1);
+      const grid = { ...this.grid };
+      if (!(Number(grid.columns) > 0) && naturalWidth > 0) {
+        // Клетка задана в пикселях картинки: столько их и укладывается в ширину.
+        grid.columns = Math.max(
+          DnD.GRID.minColumns,
+          Math.round(naturalWidth / Math.max(1, Number(grid.cell) || DnD.GRID.defaultCell))
+        );
+      }
+      return lightGrid(grid, aspect);
+    }
+
+    /**
+     * Стены поверх карты: подсказка мастеру, а не часть освещения.
+     *
+     * Это чистая видимость, и игроку она не достаётся вовсе: стена выдала бы
+     * заранее задуманную тактику. Источники света здесь не рисуются: сам он
+     * виден и без точки, а точка только мешала бы читать карту.
+     *
+     * Рисуется SVG, а не набором повёрнутых прямоугольников: у прямоугольника
+     * нельзя задать длину отрезка одной величиной, проценты по ширине и по
+     * высоте не совпадают, и наклонная стена уезжала куда-то мимо карты.
+     * @param {object|null} map
+     */
+    paintWallOverlay(map) {
+      const overlay = this.wallOverlay;
+      if (!overlay) return;
+      while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+      const show = this.role === 'dm' && map;
+      overlay.hidden = !show;
+      if (!show) return;
+      for (const wall of normalizeWalls(map.walls)) {
+        overlay.appendChild(this.wallNode(wall, false));
+      }
+    }
+
+    /**
+     * Один отрезок стены в координатах карты.
+     * @param {object} wall Точки в долях от 0 до 1.
+     * @param {boolean} draft Черновик, который мастер тянет прямо сейчас.
+     * @returns {SVGLineElement}
+     */
+    wallNode(wall, draft) {
+      const node = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      node.setAttribute('x1', String(wall.x1 * 1000));
+      node.setAttribute('y1', String(wall.y1 * 1000));
+      node.setAttribute('x2', String(wall.x2 * 1000));
+      node.setAttribute('y2', String(wall.y2 * 1000));
+      if (draft) node.setAttribute('class', 'map-wall--draft');
+      if (!draft) {
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = 'Стена: держит свет. Правый клик по ней убирает.';
+        node.appendChild(title);
+      }
+      return node;
+    }
+
     /**
      * Открывает участок карты под указателем и показывает результат сразу.
      *
@@ -1156,6 +2321,148 @@
       if (this.handlers.onOpenMapFog) {
         this.handlers.onOpenMapFog(type, map.id, point.x, point.y, this.fogBrush);
       }
+    }
+
+    /**
+     * Начало стены: мастер зажал левую кнопку на месте.
+     *
+     * Пока мышь не отпущена, стена рисуется на месте и держит свет — иначе
+     * мастер увидел бы голый край тени и не понял бы, куда ведёт линия.
+     * @param {PointerEvent} event
+     */
+    startWall(event) {
+      const point = this.mapPoint(event);
+      // Идентификатор сразу и окончательный: сервер примет тот же, и стена не
+      // появится на карте второй копией, когда ответ придёт.
+      this.wallDraft = { id: `w${Date.now()}${Math.round(point.x * 1000)}`, x1: point.x, y1: point.y, x2: point.x, y2: point.y };
+      this.surface.classList.add('is-drawing-wall');
+      this.paintWallDraft();
+    }
+
+    /** Протяжка: конец стены следует за мышью. */
+    moveWall(event) {
+      if (!this.wallDraft) return;
+      const point = this.mapPoint(event);
+      this.wallDraft.x2 = point.x;
+      this.wallDraft.y2 = point.y;
+      this.paintWallDraft();
+    }
+
+    /**
+     * Отпустили мышь: стена уходит на сервер целиком.
+     * @param {PointerEvent} event
+     */
+    finishWall(event) {
+      const draft = this.wallDraft;
+      this.wallDraft = null;
+      this.surface.classList.remove('is-drawing-wall');
+      if (!draft) return;
+      const point = this.mapPoint(event);
+      draft.x2 = point.x;
+      draft.y2 = point.y;
+      const map = this.mapOf(this.viewedMap);
+      // Клик, а не протяжка: линия короче нескольких процентов карты — это
+      // промах, а не стена, и иначе на карте накапливались бы невидимые точки.
+      const wall = DnD.normalizeWall(draft);
+      if (map && wall) {
+        map.walls = normalizeWalls([...(map.walls || []), wall]);
+      }
+      this.paintWallDraft();
+      this.paintWallOverlay(map);
+      this.paintLight(map);
+      if (wall && this.handlers.onAddMapWall) {
+        this.handlers.onAddMapWall(this.viewedMap, this.currentMapId, wall);
+      }
+    }
+
+    /** Черновик стены показывается поверх карты, пока её рисуют. */
+    paintWallDraft() {
+      const draft = this.wallDraft;
+      let node = this.wallOverlay.querySelector('.map-wall--draft');
+      if (!draft) {
+        if (node) node.remove();
+        return;
+      }
+      if (!node) {
+        node = this.wallNode(draft, true);
+        this.wallOverlay.appendChild(node);
+      } else {
+        node.setAttribute('x2', String(draft.x2 * 1000));
+        node.setAttribute('y2', String(draft.y2 * 1000));
+      }
+      this.paintLight(this.mapOf(this.viewedMap));
+    }
+
+    /**
+     * Ставит источник света под курсор.
+     *
+     * Клик, а не протяжка: дальность задаётся ползунком в панели, а тянуть
+     * мышью круг на карте мастеру было бы медленнее, чем выбрать факел.
+     * @param {PointerEvent} event
+     */
+    placeLight(event) {
+      const map = this.mapOf(this.viewedMap);
+      if (!map) return;
+      const point = this.mapPoint(event);
+      const preset = DnD.LIGHT_PRESETS[this.lightPreset] || DnD.LIGHT_PRESETS[0];
+      const light = {
+        id: `l${Date.now()}${Math.round(point.x * 1000)}`,
+        x: point.x,
+        y: point.y,
+        radius: this.lightRadius,
+        color: preset.color,
+        // Новый источник появляется тусклым, а не ярким: яркий свет от мастера
+        // видят все сразу, и заготовка перестаёт быть заготовкой.
+        dim: true
+      };
+      // Свет рисуется сразу, на месте: иначе мастер поставил бы факел и не
+      // увидел бы света до ответа сервера, а ответ идёт по сети.
+      map.lights = normalizeLights([...(map.lights || []), light]);
+      this.paintLight(map);
+      this.paintWallOverlay(map);
+      // Тулбар перерисовывается, чтобы источник сразу появился в списке: там
+      // его можно погасить и убрать, не разыскивая точку на карте.
+      this.renderToolbar();
+      if (this.handlers.onAddMapLight) {
+        this.handlers.onAddMapLight(this.viewedMap, this.currentMapId, light);
+      }
+    }
+
+    /**
+     * Стена под курсором, если указатель близко к её отрезку.
+     *
+     * Ищется в долях карты, а не в пикселях, чтобы попадание не зависело от
+     * того, насколько мастер приблизил карту.
+     * @param {PointerEvent} event
+     * @returns {object|null}
+     */
+    wallNear(event) {
+      const map = this.mapOf(this.viewedMap);
+      if (!map) return null;
+      const point = this.mapPoint(event);
+      const grab = 0.012;
+      for (const wall of normalizeWalls(map.walls)) {
+        if (DnD.distanceToSegment(point.x, point.y, wall.x1, wall.y1, wall.x2, wall.y2) <= grab) {
+          return wall;
+        }
+      }
+      return null;
+    }
+
+    /** Включает или выключает рисование стен и расстановку света. */
+    setDrawMode(value) {
+      this.drawMode = this.drawMode === value ? null : value;
+      if (this.drawMode !== 'wall') {
+        this.wallDraft = null;
+        this.paintWallDraft();
+      }
+      this.setFogMode(false);
+      // Курсор показывает, что нажатие на карте теперь рисует, а не двигает
+      // фишку: без этого мастер тянет стену и вместо неё таскает монстра.
+      this.surface.classList.toggle('is-drawing-light', this.drawMode === 'light');
+      this.surface.classList.toggle('is-drawing-wall', this.drawMode === 'wall');
+      this.renderToolbar();
+      this.paintWallOverlay(this.mapOf(this.viewedMap));
     }
 
     /**
@@ -1187,8 +2494,21 @@
         this.grid = {
           enabled: Boolean(source.grid.enabled),
           cell: Number(source.grid.cell) || DnD.GRID.defaultCell,
-          columns: Number(source.grid.columns) || 0
+          columns: Number(source.grid.columns) || 0,
+          // Футов в клетке: по нему дальность света переводится в клетки.
+          feetPerCell: Number(source.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell,
+          // Сдвиг сетки: по нему клетка назначения считается так же, как её
+          // рисует полоса на карте.
+          offsetX: Number(source.grid.offsetX) || 0,
+          offsetY: Number(source.grid.offsetY) || 0
         };
+      }
+      // Режим боя приходит со стола: он общий, иначе участники смотрели бы
+      // на один и тот же бой по-разному.
+      const combatEnabled = Boolean(source.combat && source.combat.enabled);
+      if (combatEnabled !== this.combat.enabled) {
+        this.combat.enabled = combatEnabled;
+        if (!combatEnabled) this.combat.tokenId = null;
       }
       this.applyGrid();
 
@@ -1212,16 +2532,25 @@
       for (const type of DnD.MAP_TYPES) {
         const { button, dot } = this.tabButtons[type];
         const isActive = this.activeMap === type;
-        button.classList.toggle('is-active', this.viewedMap === type);
+        button.classList.toggle('is-active', this.viewedMap === type && !this.lightTabOpen);
         button.classList.toggle('is-empty', this.mapCount(type) === 0);
         button.title = this.mapCount(type) > 1 ? `Карт во вкладке: ${this.mapCount(type)}` : '';
         dot.classList.toggle('is-on', isActive);
         dot.title = isActive ? 'Показана игрокам' : '';
       }
+      // Вкладка света есть только у мастера и только с картой на экране:
+      // без карты настраивать нечего, а игроку это и подавно не нужно.
+      const lightMap = this.mapOf(this.viewedMap);
+      this.lightTabButton.hidden = this.role !== 'dm' || !lightMap;
+      this.lightTabButton.classList.toggle('is-active', this.lightTabOpen);
+      this.lightTabButton.title = this.lightTabOpen
+        ? 'Вернуться к управлению картой'
+        : 'Настройки освещения: темнота, источники и стены';
 
       // При смене карты сдвиг вида сбрасываем: иначе новая карта открывается
       // сдвинутой в сторону. Приближение остаётся — оно личное дело каждого.
       if (this.viewedMap !== previousViewed) this.pan = { x: 0, y: 0 };
+      this.currentMapId = (this.mapOf(this.viewedMap) || {}).id || null;
 
       if (this.editing) {
         this.badge.hidden = true;
@@ -1240,6 +2569,10 @@
     applyGrid() {
       const cell = this.effectiveCell();
       this.surface.style.setProperty('--cell', `${cell}px`);
+      // Сдвиг нужен, чтобы сетка легла на картинку с того же места, с которого
+      // начинается сетка самой карты, а не с левого верхнего угла файла.
+      this.surface.style.setProperty('--grid-shift-x', `${Number(this.grid.offsetX) || 0}px`);
+      this.surface.style.setProperty('--grid-shift-y', `${Number(this.grid.offsetY) || 0}px`);
       this.gridLayer.hidden = !this.grid.enabled;
       if (this.editor) this.editor.setGrid(cell);
     }
@@ -1254,13 +2587,267 @@
      * @returns {number}
      */
     effectiveCell() {
-      const columns = Number(this.grid.columns) || 0;
-      if (columns > 1 && this.image && this.image.naturalWidth) {
-        const fitted = Math.round(this.image.naturalWidth / columns);
-        return Math.min(DnD.GRID.maxCell, Math.max(DnD.GRID.minCell, fitted));
+      return DnD.gridCellSize(this.grid, this.image ? this.image.naturalWidth : 0);
+    }
+
+    /* --------------------------------------------- Ход по клеткам: режим боя */
+
+    /**
+     * Геометрия сетки в пикселях картинки.
+     *
+     * Всё считается от настоящей ширины подложки и от того же сдвига, что и
+     * полоса сетки на экране: клетка под курсором и нарисованная клетка обязаны
+     * быть одной и той же, иначе фишка встаёт не туда.
+     * @returns {{cell: number, offsetX: number, offsetY: number, columns: number, rows: number}|null}
+     */
+    cellGeometry() {
+      const width = this.image ? this.image.naturalWidth : 0;
+      const height = this.image ? this.image.naturalHeight : 0;
+      if (!width || !height) return null;
+      const cell = this.effectiveCell();
+      if (!cell || cell <= 0) return null;
+      const offsetX = Number(this.grid.offsetX) || 0;
+      const offsetY = Number(this.grid.offsetY) || 0;
+      return {
+        cell,
+        offsetX,
+        offsetY,
+        columns: Math.max(1, Math.ceil((width - offsetX) / cell)),
+        rows: Math.max(1, Math.ceil((height - offsetY) / cell))
+      };
+    }
+
+    /**
+     * Клетка под указателем.
+     * @param {number} clientX
+     * @param {number} clientY
+     * @returns {{col: number, row: number}|null}
+     */
+    cellAtClient(clientX, clientY) {
+      const geometry = this.cellGeometry();
+      const rect = this.surface.getBoundingClientRect();
+      if (!geometry || !rect.width || !rect.height) return null;
+      const width = this.image.naturalWidth;
+      const height = this.image.naturalHeight;
+      const px = (clientX - rect.left) / rect.width * width;
+      const py = (clientY - rect.top) / rect.height * height;
+      const col = Math.floor((px - geometry.offsetX) / geometry.cell);
+      const row = Math.floor((py - geometry.offsetY) / geometry.cell);
+      if (col < 0 || row < 0 || col >= geometry.columns || row >= geometry.rows) return null;
+      return { col, row };
+    }
+
+    /**
+     * Центр клетки в долях карты: координаты фишек по нулям и единицам.
+     * @param {number} col
+     * @param {number} row
+     * @returns {{x: number, y: number}}
+     */
+    cellCenterInMap(col, row) {
+      const geometry = this.cellGeometry();
+      if (!geometry) return { x: 0, y: 0 };
+      const width = this.image.naturalWidth;
+      const height = this.image.naturalHeight;
+      const x = geometry.offsetX + (col + 0.5) * geometry.cell;
+      const y = geometry.offsetY + (row + 0.5) * geometry.cell;
+      return { x: x / width, y: y / height };
+    }
+
+    /**
+     * Клетка, в которой стоит фишка.
+     * @param {object} token
+     * @returns {{col: number, row: number}|null}
+     */
+    tokenCell(token) {
+      const geometry = this.cellGeometry();
+      if (!geometry || !token) return null;
+      const width = this.image.naturalWidth;
+      const height = this.image.naturalHeight;
+      const px = Number(token.x) * width;
+      const py = Number(token.y) * height;
+      const col = Math.floor((px - geometry.offsetX) / geometry.cell);
+      const row = Math.floor((py - geometry.offsetY) / geometry.cell);
+      if (col < 0 || row < 0) return { col: 0, row: 0 };
+      return {
+        col: Math.min(geometry.columns - 1, col),
+        row: Math.min(geometry.rows - 1, row)
+      };
+    }
+
+    /**
+     * Расстояние между клетками.
+     *
+     * По правилам 5e: шаг по прямой стоит одну клетку, шаг по диагонали —
+     * корень из двух, а именно столько занимает диагональ клетки. Число шагов
+     * считается отдельно: по диагонали до клетки можно дойти за один шаг, и
+     * мастер сравнивает ход с той же таблицей.
+     * @param {{col: number, row: number}} from
+     * @param {{col: number, row: number}} to
+     * @returns {{steps: number, cells: number, feet: number}}
+     */
+    combatMeasure(from, to) {
+      const dc = Math.abs(to.col - from.col);
+      const dr = Math.abs(to.row - from.row);
+      const diagonal = Math.min(dc, dr);
+      const straight = Math.max(dc, dr) - diagonal;
+      const steps = straight + diagonal;
+      const cells = straight + diagonal * Math.SQRT2;
+      const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+      return { steps, cells, feet: cells * feetPerCell };
+    }
+
+    /**
+     * Подпись расстояния на карте.
+     *
+     * Три числа, потому что три вопроса: сколько шагов, сколько клеток и сколько
+     * это футов. Одного числа мастеру мало: шагов он считает за ход, а футы
+     * сверяет со скоростью персонажа.
+     * @param {{steps: number, cells: number, feet: number}} measure
+     * @returns {string}
+     */
+    combatDistanceText(measure) {
+      const plural = (value, one, few, many) => {
+        const last10 = value % 10;
+        const last100 = value % 100;
+        if (last10 === 1 && last100 !== 11) return one;
+        if (last10 >= 2 && last10 <= 4 && (last100 < 10 || last100 >= 20)) return few;
+        return many;
+      };
+      const steps = Math.round(measure.steps);
+      if (!steps) return 'здесь же';
+      const cells = measure.cells.toFixed(1).replace('.', ',');
+      const feet = Math.round(measure.feet);
+      return `${steps} ${plural(steps, 'шаг', 'шага', 'шагов')}`
+        + ` · ${cells} ${plural(Number(cells.replace(',', '.')), 'клетка', 'клетки', 'клеток')}`
+        + ` · ${feet} ${plural(feet, 'фут', 'фута', 'футов')}`;
+    }
+
+    /**
+     * Выбирает фишку, которая будет ходить.
+     * @param {string|null} tokenId
+     */
+    selectCombatToken(tokenId) {
+      const next = tokenId && this.combat.enabled ? tokenId : null;
+      if (this.combat.tokenId === next) return;
+      this.combat.tokenId = next;
+      this.route = null;
+      this.surface.classList.toggle('is-combat', Boolean(next));
+      this.renderTokens();
+      this.paintRoute();
+    }
+
+    /**
+     * Показывает маршрут: клетку назначения, линию и расстояние в середине.
+     * @param {{col: number, row: number}} [target]
+     */
+    paintRoute(target) {
+      const geometry = this.cellGeometry();
+      const cellMark = this.cellMark;
+      const label = this.routeLabel;
+      const line = this.routeLine;
+      if (!geometry) {
+        this.route = null;
+        line.setAttribute('stroke', 'transparent');
+        cellMark.hidden = true;
+        label.hidden = true;
+        return;
       }
-      const manual = Number(this.grid.cell) || DnD.GRID.defaultCell;
-      return Math.min(DnD.GRID.maxCell, Math.max(DnD.GRID.minCell, manual));
+      if (target) this.route = target;
+      const route = this.route;
+      const token = this.combatToken();
+      if (!route || !token) {
+        line.setAttribute('stroke', 'transparent');
+        cellMark.hidden = true;
+        label.hidden = true;
+        return;
+      }
+      const from = this.tokenCell(token);
+      const measure = this.combatMeasure(from, route);
+      const fromCenter = this.cellCenterInMap(from.col, from.row);
+      const toCenter = this.cellCenterInMap(route.col, route.row);
+
+      line.setAttribute('x1', String(fromCenter.x * 1000));
+      line.setAttribute('y1', String(fromCenter.y * 1000));
+      line.setAttribute('x2', String(toCenter.x * 1000));
+      line.setAttribute('y2', String(toCenter.y * 1000));
+      line.setAttribute('stroke', 'var(--accent-hover)');
+      line.setAttribute('stroke-width', '8');
+      line.setAttribute('stroke-dasharray', '18 14');
+      line.setAttribute('stroke-linecap', 'round');
+      line.setAttribute('opacity', '0.85');
+
+      // Клетка назначения рисуется в процентах от картинки, иначе её размер
+      // уезжал бы от клетки при приближении.
+      cellMark.hidden = false;
+      cellMark.style.width = `${(geometry.cell / this.image.naturalWidth) * 100}%`;
+      cellMark.style.height = `${(geometry.cell / this.image.naturalHeight) * 100}%`;
+      cellMark.style.left = `${toCenter.x * 100}%`;
+      cellMark.style.top = `${toCenter.y * 100}%`;
+
+      label.hidden = false;
+      label.textContent = this.combatDistanceText(measure);
+      label.style.left = `${((fromCenter.x + toCenter.x) / 2) * 100}%`;
+      label.style.top = `${((fromCenter.y + toCenter.y) / 2) * 100}%`;
+    }
+
+    /** Фишка, выбранная для хода, если её всё ещё можно двигать. */
+    combatToken() {
+      if (!this.combat.tokenId) return null;
+      const token = (this.tokens || []).find((item) => item.id === this.combat.tokenId);
+      if (!token || !this.canMove(token)) return null;
+      return token;
+    }
+
+    /**
+     * Ведёт фишку по клеткам до цели.
+     *
+     * Фишка не телепортируется: она проходит клетку за клеткой, и только
+     * последняя точка уходит на сервер. Так видно, куда она шла, а стол не
+     * получает сорок сообщений о движении за один ход.
+     * @param {object} token
+     * @param {{col: number, row: number}} target
+     */
+    walkTokenTo(token, target) {
+      if (this.walkTimer) return;
+      const from = this.tokenCell(token);
+      if (!from) return;
+      const measure = this.combatMeasure(from, target);
+      if (!measure.steps) {
+        this.route = null;
+        this.paintRoute();
+        return;
+      }
+      const node = this.tokenLayer.querySelector(`[data-token-id="${token.id}"]`);
+      const start = { x: Number(token.x), y: Number(token.y) };
+      const finish = this.cellCenterInMap(target.col, target.row);
+      this.route = null;
+      this.paintRoute();
+      if (node) node.classList.add('token--walking');
+      // Пока фишка идёт, слой не перерисовывается: очистка уничтожила бы её.
+      this.dragState = { walk: true, tokenId: token.id, node };
+
+      let step = 0;
+      const steps = measure.steps;
+      this.walkTimer = setInterval(() => {
+        step += 1;
+        const ratio = step / steps;
+        const x = start.x + (finish.x - start.x) * ratio;
+        const y = start.y + (finish.y - start.y) * ratio;
+        if (node) {
+          node.style.left = `${x * 100}%`;
+          node.style.top = `${y * 100}%`;
+        }
+        if (step < steps) return;
+        clearInterval(this.walkTimer);
+        this.walkTimer = null;
+        this.dragState = null;
+        if (node) node.classList.remove('token--walking');
+        if (this.handlers.onMoveToken) {
+          this.handlers.onMoveToken(token.id, Number(finish.x.toFixed(4)), Number(finish.y.toFixed(4)));
+        }
+        this.renderTokens();
+        this.paintLight(this.mapOf(this.viewedMap));
+      }, COMBAT_STEP_MS);
     }
 
     /** Создаёт холст при первом обращении: он нужен только тому, кто рисует. */
@@ -1337,13 +2924,29 @@
       this.toolbar.innerHTML = '';
       const type = this.viewedMap;
       const map = this.mapOf(type);
-      const count = this.mapCount(type);
 
       // Во время рисования у холста своя панель инструментов.
       if (this.editing) {
         this.toolbar.hidden = true;
+        this.lightPanel.hidden = true;
         return;
       }
+
+      // Вкладка «Свет» занимает место тулбара целиком: это другой экран панели
+      // карты, а не ещё одна строка кнопок в том же.
+      if (this.lightTabOpen) {
+        this.toolbar.hidden = true;
+        this.lightPanel.hidden = false;
+        this.lightPanel.innerHTML = '';
+        if (this.role !== 'dm' || !map) {
+          this.lightPanel.appendChild(el('div', 'box__note',
+            'Вкладка света доступна мастеру и только с загруженной картой.'));
+          return;
+        }
+        this.lightPanel.appendChild(this.buildLightControls(type, map));
+        return;
+      }
+      this.lightPanel.hidden = true;
 
       if (this.role !== 'dm' && !this.training) {
         this.toolbar.hidden = true;
@@ -1358,9 +2961,11 @@
 
       const slot = type ? this.maps[type] : null;
       const index = map && slot ? slot.items.findIndex((item) => item.id === map.id) : -1;
+      const count = this.mapCount(type);
 
       // Туман войны — только мастеру. Игрок получает уже открытые участки и
-      // ничего не может изменить.
+      // ничего не может изменить. Освещения здесь нет: оно живёт на своей
+      // вкладке, а тулбар и без того тесный от загрузки карт.
       if (map && this.role === 'dm') {
         this.toolbar.appendChild(this.buildFogControls(type, map));
       }
@@ -1430,6 +3035,21 @@
       });
       this.toolbar.appendChild(gridButton);
 
+      // Режим боя: фишки ходят по клеткам, а по клетке сразу видно, сколько
+      // это шагов и футов. Включает мастер, а включается он сам при броске
+      // порядка боя.
+      const combatButton = el('button', `btn btn--ghost toggle${this.combat.enabled ? ' is-on' : ''}`,
+        this.combat.enabled ? 'Бой: вкл' : 'Бой: выкл');
+      combatButton.type = 'button';
+      combatButton.title = this.combat.enabled
+        ? 'Бой идёт: фишка идёт по клеткам. Нажмите на клетку, чтобы отправить её туда'
+        : 'Включить режим боя: ход по клеткам с подсчётом расстояния';
+      if (this.role !== 'dm') combatButton.disabled = true;
+      combatButton.addEventListener('click', () => {
+        if (this.handlers.onSetCombatMode) this.handlers.onSetCombatMode(!this.combat.enabled);
+      });
+      this.toolbar.appendChild(combatButton);
+
       if (map && this.role === 'dm') {
         const activate = el('button', 'btn btn--ghost', this.activeMap === this.viewedMap ? '● Показана игрокам' : 'Показать игрокам');
         activate.type = 'button';
@@ -1464,6 +3084,11 @@
           ? 'Рисунок пока пуст: нажмите «Нарисовать карту» или загрузите изображение'
           : 'Карта ещё не загружена ДМ';
         this.tokenLayer.innerHTML = '';
+        // Пустая карта: слои света и стен гасим явно, иначе они остались бы
+        // висеть от прошлой карты, пока новая грузится.
+        this.paintLight(null);
+        this.paintFog(null);
+        this.paintWallOverlay(null);
         return;
       }
 
@@ -1481,7 +3106,10 @@
       this.layoutSurface();
       this.applyGrid();
       this.renderTokens();
+      this.paintLight(map);
       this.paintFog(map);
+      this.paintSurface(map);
+      this.paintWallOverlay(map);
     }
 
     renderTokens() {
@@ -1504,13 +3132,34 @@
       this.tokenLayer.innerHTML = '';
 
       for (const token of tokens) {
-        this.tokenLayer.appendChild(this.buildToken(token));
+        const node = this.buildToken(token);
+        if (token.id === this.combat.tokenId) node.classList.add('token--combat');
+        this.tokenLayer.appendChild(node);
       }
+      // Выбранная фишка могла исчезнуть: её удалили, скрыли или перевели на
+      // другую карту. Тогда маршрут был бы от фишки, которой на карте нет.
+      if (this.combat.tokenId && !tokens.some((token) => token.id === this.combat.tokenId)) {
+        this.selectCombatToken(null);
+      }
+      this.paintRoute();
     }
 
     canMove(token) {
       if (this.role === 'dm') return true;
-      return Boolean(token.assignedPlayerId) && token.assignedPlayerId === this.myPlayerId;
+      if (!token.assignedPlayerId || token.assignedPlayerId !== this.myPlayerId) return false;
+      // Состояние, отнимающее скорость, запрещает игроку переставить фишку самому.
+      // Мастеру движение остаётся всегда: он водит фишки руками в любом случае.
+      return !DnD.conditionBlocksMove(token.conditions);
+    }
+
+    /**
+     * Состояние, из-за которого игрок не двигает фишку. Нужно и для подсказки,
+     * и для класса: запрет должен быть виден на карте, а не выясняться попыткой.
+     * @param {object} token
+     * @returns {object|null}
+     */
+    moveBlocker(token) {
+      return DnD.conditionBlocksMove(token && token.conditions);
     }
 
     buildToken(token) {
@@ -1522,6 +3171,7 @@
       // забудет, что она заготовка, и начнёт бой с монстрами, которых никто
       // из игроков не видит.
       node.classList.toggle('token--hidden', Boolean(token.hidden));
+      node.classList.toggle('token--bound', !movable && this.role !== 'dm' && Boolean(this.moveBlocker(token)));
       node.dataset.tokenId = token.id;
       node.style.left = `${token.x * 100}%`;
       node.style.top = `${token.y * 100}%`;
@@ -1542,23 +3192,33 @@
         node.appendChild(hpNode);
       }
 
+      // Кружок лежит в своей обёртке: рисунки состояний должны сидеть ровно по его
+      // краям, а фишка растёт вниз подписями и прочностью, и «низ фишки» от
+      // кружка каждый раз был бы разным.
+      const body = el('div', 'token__body');
       const circle = el('div', 'token__circle');
       if (token.imageUrl) {
         circle.style.backgroundImage = `url("${this.resolveUrl(token.imageUrl)}")`;
         circle.classList.add('token__circle--image');
       } else {
         circle.style.setProperty('--token-color', token.color || '#c96f4a');
-        circle.appendChild(el('span', 'token__initial', initials(token.name)));
+        // У фишки со скрытым именем сервер присылает пустую строку, а не флаг
+        // «не рисуй»: иначе имя осталось бы в снимке состояния. Буква отсюда
+        // тоже браться не может, поэтому вместо неё вопросительный знак.
+        circle.appendChild(el('span', 'token__initial', token.nameHidden ? '?' : initials(token.name)));
       }
-      node.appendChild(circle);
+      body.appendChild(circle);
+      node.appendChild(body);
 
-      const label = el('div', 'token__label', token.name);
-      node.appendChild(label);
+      if (!token.nameHidden && !token.hideLabels) {
+        const label = el('div', 'token__label', token.name);
+        node.appendChild(label);
+      }
 
       // Состояния под фишкой видны всем: по ним и ориентируются, кого бить
       // можно, а кого нельзя.
       const conditions = Array.isArray(token.conditions) ? token.conditions : [];
-      if (conditions.length) {
+      if (conditions.length && !token.hideLabels) {
         const badges = el('div', 'token__conditions');
         for (const id of conditions) {
           const item = DnD.CONDITIONS.find((entry) => entry.id === id);
@@ -1570,13 +3230,35 @@
           .join(', ');
         node.appendChild(badges);
       }
+      // Рисунок состояния рисуется независимо от подписей: лоза под фишкой и
+      // скрытая подпись — разные вещи, и состояние не должно пропадать вместе
+      // с именем.
+      const effects = DnD.conditionEffects(conditions);
+      if (effects.length) {
+        node.classList.add('token--conditioned');
+        // Класс по самому состоянию, а не по рисунку: несколько состояний
+        // делят один рисунок, но двигают и дрожат фишку по-разному.
+        for (const id of conditions) {
+          node.classList.add(`token--cond-${id}`);
+        }
+        for (const effect of effects) {
+          body.appendChild(el('div', `token__fx token__fx--${effect}`));
+        }
+        node.title = conditions
+          .map((id) => (DnD.CONDITIONS.find((entry) => entry.id === id) || {}).label || id)
+          .join(', ');
+      }
       // Невидимую фишку видно только мастеру и полупрозрачно: так её не спутать
       // со снятой картинкой.
       if (conditions.includes('invisible')) node.classList.add('token--invisible');
 
       if (token.assignedPlayerId) {
         const owner = this.players.find((player) => player.playerId === token.assignedPlayerId);
-        if (owner) node.appendChild(el('div', 'token__owner', owner.name));
+        // Имя владельца — тоже имя, и скрытие подписи без скрытия подписи
+        // хозяина оставило бы мастеру подсказку там, где он просил убрать всё.
+        if (owner && !token.nameHidden && !token.hideLabels) {
+          node.appendChild(el('div', 'token__owner', owner.name));
+        }
       }
 
       node.addEventListener('contextmenu', (event) => {
@@ -1585,10 +3267,39 @@
         this.showTokenMenu(token, event.clientX, event.clientY);
       });
 
+      // Двойной клик переименовывает: правый клик работает, но догадаться о нём
+      // трудно, а переименовывать приходится часто.
+      node.addEventListener('dblclick', (event) => {
+        if (this.role !== 'dm') return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (this.handlers.onRenameToken) this.handlers.onRenameToken(token);
+      });
+
       if (movable) {
-        node.addEventListener('pointerdown', (event) => this.startDrag(event, token));
+        if (this.combat.enabled) {
+          // В бою фишку не таскают: нажатие выбирает её, а ход идёт по клеткам.
+          node.classList.add('token--selectable');
+          node.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const next = this.combat.tokenId === token.id ? null : token.id;
+            this.selectCombatToken(next);
+          });
+        } else {
+          node.addEventListener('pointerdown', (event) => this.startDrag(event, token));
+        }
       } else if (this.role !== 'dm') {
         node.addEventListener('click', () => {
+          const blocker = this.moveBlocker(token);
+          if (blocker) {
+            // Отказ объясняем словами состояния: иначе фишка просто не едет,
+            // и игрок решит, что карта сломалась.
+            if (this.handlers.onNotice) {
+              this.handlers.onNotice(`Фишка «${blocker.label.toLowerCase()}»: сними состояние, и снова можно будет двигать`);
+            }
+            return;
+          }
           if (this.handlers.onNotice) this.handlers.onNotice('Эта фишка назначена другому игроку');
         });
       }
@@ -1596,90 +3307,12 @@
     }
 
     showTokenMenu(token, clientX, clientY) {
-      this.closeMenu();
-      const menu = el('div', 'token-menu');
-      menu.style.left = `${clientX}px`;
-      menu.style.top = `${clientY}px`;
-
-      const rename = el('button', 'token-menu__item', 'Переименовать');
-      rename.type = 'button';
-      rename.addEventListener('click', () => {
-        this.closeMenu();
-        if (this.handlers.onRenameToken) this.handlers.onRenameToken(token);
-      });
-      menu.appendChild(rename);
-
-      const imageLabel = el('label', 'token-menu__item');
-      imageLabel.appendChild(el('span', null, token.imageUrl ? 'Заменить изображение' : 'Изображение'));
-      const file = el('input');
-      file.type = 'file';
-      file.accept = 'image/png,image/jpeg,image/webp';
-      file.hidden = true;
-      file.addEventListener('change', () => {
-        const selected = file.files && file.files[0];
-        this.closeMenu();
-        if (selected && this.handlers.onSetTokenImage) this.handlers.onSetTokenImage(token.id, selected);
-      });
-      imageLabel.appendChild(file);
-      menu.appendChild(imageLabel);
-
-      const assign = el('div', 'token-menu__section');
-      assign.appendChild(el('div', 'token-menu__title', 'Назначить игроку'));
-      const select = el('select', 'select');
-      const none = el('option', null, '— никому —');
-      none.value = '';
-      select.appendChild(none);
-      for (const player of this.players) {
-        if (player.role === 'dm') continue;
-        const option = el('option', null, player.name);
-        option.value = player.playerId;
-        if (player.playerId === token.assignedPlayerId) option.selected = true;
-        select.appendChild(option);
-      }
-      select.addEventListener('change', () => {
-        this.closeMenu();
-        if (this.handlers.onAssignToken) this.handlers.onAssignToken(token.id, select.value || null);
-      });
-      assign.appendChild(select);
-      menu.appendChild(assign);
-
-      // Скрытие решает мастер и только он: игрок фишку ни спрячет, ни откроет.
-      if (this.role === 'dm') {
-        const visibility = el('button', 'token-menu__item',
-          token.hidden ? 'Показать игрокам' : 'Скрыть от игроков');
-        visibility.type = 'button';
-        visibility.addEventListener('click', () => {
-          this.closeMenu();
-          if (this.handlers.onToggleTokenHidden) this.handlers.onToggleTokenHidden(token.id, !token.hidden);
-        });
-        menu.appendChild(visibility);
-      }
-
-      const remove = el('button', 'token-menu__item token-menu__item--danger', 'Удалить фишку');
-      remove.type = 'button';
-      remove.addEventListener('click', () => {
-        this.closeMenu();
-        if (this.handlers.onDeleteToken) this.handlers.onDeleteToken(token.id);
-      });
-      menu.appendChild(remove);
-
-      document.body.appendChild(menu);
-      this.openMenu = menu;
-      // Меню закрывается по клику вне него — но не по клику внутри: если
-      // убрать меню на pointerdown, кнопка исчезнет из документа раньше
-      // события click, и ни один пункт (и выбор файла) не сработает.
-      this.closeMenuHandler = (event) => {
-        if (menu.contains(event.target)) return;
-        this.closeMenu();
-      };
-      this.escapeHandler = (event) => {
-        if (event.key === 'Escape') this.closeMenu();
-      };
-      setTimeout(() => {
-        if (this.openMenu !== menu) return;
-        document.addEventListener('pointerdown', this.closeMenuHandler, true);
-        document.addEventListener('keydown', this.escapeHandler);
-      }, 0);
+      placeTokenMenu(
+        buildTokenMenu(token, this.players, this.handlers, () => this.closeMenu()),
+        clientX,
+        clientY,
+        this
+      );
     }
 
     closeMenu() {
@@ -1697,6 +3330,15 @@
 
     startDrag(event, token) {
       event.preventDefault();
+      // Повторная проверка на самом перетаскивании: между отрисовкой фишки и
+      // кликом мастер мог повесить состояние, и сервер всё равно откажет.
+      if (!this.canMove(token)) {
+        const blocker = this.moveBlocker(token);
+        if (blocker && this.handlers.onNotice) {
+          this.handlers.onNotice(`Фишка «${blocker.label.toLowerCase()}»: сними состояние, и снова можно будет двигать`);
+        }
+        return;
+      }
       const rect = this.surface.getBoundingClientRect();
       const node = event.currentTarget;
       node.classList.add('token--dragging');
@@ -1745,6 +3387,14 @@
       const { tokenId, x, y, node } = this.dragState;
       node.classList.remove('token--dragging');
       this.dragState = null;
+      // Свет едет вместе с фишкой: пятно от факела должно подъехать к новому
+      // месту, а не остаться там, откуда фишку увели.
+      const token = this.tokens.find((item) => item.id === tokenId);
+      if (token && typeof x === 'number' && typeof y === 'number') {
+        token.x = x;
+        token.y = y;
+        this.paintLight(this.mapOf(this.viewedMap));
+      }
       if (typeof x === 'number' && typeof y === 'number' && this.handlers.onMoveToken) {
         this.handlers.onMoveToken(tokenId, Number(x.toFixed(4)), Number(y.toFixed(4)));
       }
@@ -1757,6 +3407,11 @@
       if (token) {
         token.x = x;
         token.y = y;
+        // Пока фишку тянут, пятно света обязано ехать вместе с ней: иначе
+        // мастер водит факел в темноте и ничего не видит.
+        if (token.light && token.light.radius > 0) {
+          this.paintLight(this.mapOf(this.viewedMap));
+        }
       }
       const node = this.tokenLayer.querySelector(`[data-token-id="${tokenId}"]`);
       if (node) {
@@ -1779,8 +3434,65 @@
       this.root = root;
       this.handlers = handlers;
       this.role = 'player';
+      // Портрет мастера живёт над списком и перерисовывается вместе с ним:
+      // отдельно он жил во вкладке листа, а лист у мастера — только чужой.
+      this.selfNode = el('div', 'players-self');
+      this.selfNode.hidden = true;
+      root.appendChild(this.selfNode);
       this.listNode = el('div', 'players');
       root.appendChild(this.listNode);
+    }
+
+    /**
+     * Блок «Ваш портрет» над списком участников.
+     *
+     * У мастера нет листа персонажа, а портрет нужен: он стоит рядом с его
+     * именем в списке и у его бросков в чате. Раньше блок жил во вкладке
+     * листов, но лист открывают чужие игроки, а свой портрет мастер туда не
+     * вносит, и вкладка в этом не участвует.
+     * @param {{avatarUrl: string|null, name: string}} own
+     */
+    renderSelfAvatar(own) {
+      const self = own || {};
+      const show = this.role === 'dm' && Boolean(this.handlers.onAvatarPick);
+      this.selfNode.hidden = !show;
+      if (!show) return;
+      this.selfNode.innerHTML = '';
+      this.selfNode.appendChild(el('div', 'players-self__title', 'Ваш портрет'));
+
+      const row = el('div', 'avatar-pick');
+      const preview = avatarNode(this.handlers.resolveUrl
+        ? this.handlers.resolveUrl(self.avatarUrl)
+        : self.avatarUrl, self.name || '');
+      preview.classList.add('avatar-pick__preview');
+      row.appendChild(preview);
+
+      const side = el('div', 'avatar-pick__side');
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/png,image/jpeg,image/webp';
+      input.className = 'avatar-pick__file';
+      input.hidden = true;
+      input.addEventListener('change', () => {
+        const file = input.files && input.files[0];
+        input.value = '';
+        if (file && this.handlers.onAvatarPick) this.handlers.onAvatarPick(file);
+      });
+      side.appendChild(input);
+      const pick = el('button', 'btn btn--tiny', self.avatarUrl ? 'Заменить' : 'Поставить портрет');
+      pick.type = 'button';
+      pick.addEventListener('click', () => input.click());
+      side.appendChild(pick);
+      if (self.avatarUrl && this.handlers.onAvatarClear) {
+        const clear = el('button', 'btn btn--ghost btn--tiny', 'Убрать');
+        clear.type = 'button';
+        clear.addEventListener('click', () => this.handlers.onAvatarClear());
+        side.appendChild(clear);
+      }
+      row.appendChild(side);
+      this.selfNode.appendChild(row);
+      this.selfNode.appendChild(el('div', 'muted',
+        'Виден игрокам в списке участников и рядом с вашими бросками в чате.'));
     }
 
     render(players, ctx) {
@@ -2174,9 +3886,15 @@
       this.last.hidden = true;
       this.root.appendChild(this.last);
 
-      this.root.appendChild(el('div', 'panel__title panel__title--sub', 'История бросков'));
+      // История сворачивается: за бой она идёт вниз и занимает полпанели,
+// а бросить кость мастеру нужнее, чем перечитывать двести строк. Свёрнутое
+// состояние переживает перезапуск окна.
+      const history = section('История бросков', 'dnd-table.panel.diceHistory', {
+        onExpand: () => this.scrollToEnd()
+      });
       this.history = el('div', 'dice__history');
-      this.root.appendChild(this.history);
+      history.body.appendChild(this.history);
+      this.root.appendChild(history.wrap);
     }
 
     /**
@@ -2575,6 +4293,116 @@
   }
 
   /* ====================================================================== *
+   * Панель поверхности карты
+   * ====================================================================== */
+
+  /**
+   * Панель рисования поверхности: кислота, огонь, вода и прочее.
+   *
+   * Отдельная вкладка, а не ещё одна кнопка в строке карты: типов восемь, и
+   * в строке они не поместились бы вместе с туманом, светом и загрузкой карты.
+   * Кисть при этом живёт на карте — выбрали здесь, рисуем там.
+   */
+  class SurfacePanel {
+    /**
+     * @param {HTMLElement} root
+     * @param {{onPick?: Function, onBrush?: Function, onErase?: Function, onClear?: Function}} handlers
+     */
+    constructor(root, handlers = {}) {
+      this.root = root;
+      this.handlers = handlers;
+      this.tool = null;
+      this.brush = 1;
+      this.count = 0;
+      this.build();
+    }
+
+    build() {
+      this.root.appendChild(el('div', 'panel__title', 'Поверхность'));
+
+      this.hint = el('div', 'muted',
+        'Выберите, что рисовать, и проведите по карте. Поверхность ложится по клеткам под фишки, и её видят все участники.');
+      this.root.appendChild(this.hint);
+
+      const grid = el('div', 'surface-panel__types');
+      this.typeNodes = new Map();
+      for (const item of DnD.SURFACE_TYPES) {
+        const chip = el('button', 'surface-chip');
+        chip.type = 'button';
+        chip.title = `${item.label}: рисуется по клеткам`;
+        const dot = el('span', 'surface-chip__dot');
+        // Цвет берём из правил, а не из темы: это содержимое карты, и мастер
+        // должен узнавать лужу по цвету при любом оформлении.
+        dot.style.background = item.color;
+        chip.appendChild(dot);
+        chip.appendChild(el('span', null, item.label));
+        chip.addEventListener('click', () => {
+          if (this.handlers.onPick) this.handlers.onPick(this.tool === item.id ? null : item.id);
+        });
+        this.typeNodes.set(item.id, chip);
+        grid.appendChild(chip);
+      }
+      this.root.appendChild(grid);
+
+      const row = el('div', 'surface-panel__row');
+      this.eraseButton = el('button', 'btn btn--tiny btn--ghost', 'Ластик');
+      this.eraseButton.type = 'button';
+      this.eraseButton.title = 'Стирать поверхность по клеткам';
+      this.eraseButton.addEventListener('click', () => {
+        if (this.handlers.onErase) this.handlers.onErase();
+      });
+      row.appendChild(this.eraseButton);
+
+      const brushWrap = el('label', 'surface-panel__brush');
+      brushWrap.appendChild(el('span', null, 'Ширина'));
+      this.brushInput = el('input', 'fog-bar__brush');
+      this.brushInput.type = 'range';
+      this.brushInput.min = '1';
+      this.brushInput.max = '5';
+      this.brushInput.step = '1';
+      this.brushInput.value = String(this.brush);
+      this.brushInput.title = 'Ширина кисти в клетках';
+      this.brushInput.addEventListener('input', () => {
+        this.brush = Number(this.brushInput.value);
+        if (this.handlers.onBrush) this.handlers.onBrush(this.brush);
+      });
+      brushWrap.appendChild(this.brushInput);
+      row.appendChild(brushWrap);
+
+      this.clearButton = el('button', 'btn btn--tiny btn--ghost', 'Очистить карту');
+      this.clearButton.type = 'button';
+      this.clearButton.title = 'Убрать всю поверхность с открытой карты';
+      this.clearButton.addEventListener('click', () => {
+        if (this.handlers.onClear) this.handlers.onClear();
+      });
+      row.appendChild(this.clearButton);
+      this.root.appendChild(row);
+
+      this.countNode = el('div', 'muted', '');
+      this.root.appendChild(this.countNode);
+    }
+
+    /**
+     * Показывает выбранный инструмент и число раскрашенных клеток.
+     * @param {{tool: string|null, brush: number, painted: number}} state
+     */
+    render(state) {
+      const next = state || {};
+      this.tool = next.tool === undefined ? this.tool : next.tool;
+      this.brush = next.brush || this.brush;
+      this.brushInput.value = String(this.brush);
+      this.count = Number(next.painted) || 0;
+      for (const [id, chip] of this.typeNodes) {
+        chip.classList.toggle('is-on', this.tool === id);
+      }
+      this.eraseButton.classList.toggle('is-on', this.tool === '');
+      this.clearButton.disabled = this.count === 0;
+      const active = this.tool === null ? '' : `Выбрано: ${this.tool === '' ? 'ластик' : (DnD.SURFACE_TYPES.find((item) => item.id === this.tool) || {}).label}.`;
+      this.countNode.textContent = `${active} Клеток на карте: ${this.count}`;
+    }
+  }
+
+  /* ====================================================================== *
    * Панель фишек ДМ
    * ====================================================================== */
 
@@ -2582,6 +4410,13 @@
     constructor(root, handlers = {}) {
       this.root = root;
       this.handlers = handlers;
+      /** Поиск и фильтры живут в панели, а не в контроллере: ими пользуется
+       *  только мастер и только здесь, а в снимок состояния они попадать не
+       *  должны. Пустая строка означает «все фишки». */
+      this.query = '';
+      this.filter = 'all';
+      this.tokens = [];
+      this.players = [];
       this.build();
     }
 
@@ -2619,22 +4454,123 @@
         input.value = '';
         hpInput.value = '';
       });
+      form.appendChild(create);
       this.root.appendChild(form);
       // Фишки создаёт ДМ; игроку эта форма не нужна — кроме тренировочного
       // стола, где просить фишку не у кого.
       this.form = form;
 
-      this.note = el('div', 'muted', 'Правый клик по фишке на карте — переименовать, назначить игроку, задать изображение или удалить.');
+      this.note = el('div', 'muted', 'Правый клик по фишке на карте или по строке ниже — переименовать, назначить игроку, задать изображение или удалить.');
       this.root.appendChild(this.note);
 
-      // Кто ещё без фишки. Живёт здесь, а не только в панели участников:
-      // левую панель мастер часто сворачивает, а вывести игрока на поле
-      // удобнее оттуда, где уже работают с фишками.
-      this.spawnNode = el('div', 'token-spawn');
-      this.root.appendChild(this.spawnNode);
+      // Поиск и фильтры. Под списком, а не над всей панелью: ищут по фишкам,
+      // а не по листу и не по чату.
+      this.searchBox = this.buildSearch();
+      this.root.appendChild(this.searchBox);
 
       this.list = el('div', 'token-list');
       this.root.appendChild(this.list);
+
+      // Подсказка «ничего не найдено». Отдельным узлом, а не пустым списком:
+      // пустой список рядом с полем поиска выглядит как «фишек нет вовсе», и
+      // мастер начинает искать монстра там, где он уже на столе.
+      this.emptyHint = el('div', 'muted token-list__empty', 'Фишек пока нет');
+      this.emptyHint.hidden = true;
+      this.root.appendChild(this.emptyHint);
+    }
+
+    /**
+     * Прячет строки, которые не прошли поиск и фильтр.
+     *
+     * Список перерисовывается целиком на каждое событие фишки, поэтому поиск
+     * живёт в панели и применяется сразу к новому списку, а не после лишнего
+     * рендера: сорок фишек перерисовывать ради одного введённого символа
+     * незачем.
+     */
+    applyFilters() {
+      const shown = this.filteredTokens();
+      for (const node of this.list.querySelectorAll('.token-row[data-token-id]')) {
+        node.hidden = !shown.has(node.dataset.tokenId);
+      }
+      for (const [id, button] of Object.entries(this.filterButtons)) {
+        button.classList.toggle('is-on', this.filter === id);
+      }
+      const none = shown.size === 0;
+      this.emptyHint.hidden = !none;
+      if (none) {
+        this.emptyHint.textContent = this.tokens.length
+          ? `Ничего не найдено: показано 0 из ${this.tokens.length}`
+          : 'Фишек пока нет';
+      }
+    }
+
+    /**
+     * Поле поиска и три переключателя фильтра.
+     *
+     * Фильтр — это не украшение: за бой на столе под полсотни фишек, и найти
+     * нужную в списке прокруткой мастер не может.
+     * @returns {HTMLElement}
+     */
+    buildSearch() {
+      const box = el('div', 'token-search');
+
+      const search = el('input', 'input token-search__input');
+      search.type = 'search';
+      search.placeholder = 'Найти фишку по имени';
+      search.maxLength = DnD.LIMITS.maxNameLength;
+      search.setAttribute('aria-label', 'Поиск по фишкам');
+      search.addEventListener('input', () => {
+        this.query = search.value.trim().toLowerCase();
+        this.applyFilters();
+      });
+      // Escape в поле поиска снимает его: привычка из поиска в браузере, а у
+      // нас он же закрывает открытое меню, поэтому останавливаем всплытие.
+      search.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        event.stopPropagation();
+        search.value = '';
+        this.query = '';
+        this.applyFilters();
+      });
+      box.appendChild(search);
+      this.searchInput = search;
+
+      const filters = el('div', 'token-search__filters');
+      this.filterButtons = {};
+      const variants = [
+        { id: 'all', label: 'Все' },
+        { id: 'hidden', label: 'Скрытые' },
+        { id: 'named', label: 'С моим именем' },
+        { id: 'nameless', label: 'Без имени' }
+      ];
+      for (const variant of variants) {
+        const button = el('button', 'btn btn--tiny btn--ghost token-filter', variant.label);
+        button.type = 'button';
+        button.addEventListener('click', () => {
+          this.filter = variant.id;
+          this.applyFilters();
+        });
+        filters.appendChild(button);
+        this.filterButtons[variant.id] = button;
+      }
+      box.appendChild(filters);
+      return box;
+    }
+
+    /**
+     * Фишки, прошедшие поиск и фильтр.
+     * @returns {Set<string>}
+     */
+    filteredTokens() {
+      const result = new Set();
+      for (const token of this.tokens) {
+        if (this.query && !String(token.name || '').toLowerCase().includes(this.query)) continue;
+        if (this.filter === 'hidden' && !token.hidden) continue;
+        if (this.filter === 'nameless' && !token.hideName) continue;
+        if (this.filter === 'named' && token.hideName) continue;
+        result.add(token.id);
+      }
+      return result;
     }
 
     /**
@@ -2645,6 +4581,10 @@
     render(tokens, players, ctx) {
       const training = Boolean(ctx.training);
       const isDm = ctx.role === 'dm';
+      this.tokens = tokens || [];
+      this.players = players || [];
+      this.searchBox.hidden = !(isDm && this.tokens.length > 3);
+      this.searchBox.dataset.dm = isDm ? '1' : '0';
       this.form.hidden = !isDm && !training;
       this.note.hidden = !isDm && !training;
       this.note.textContent = isDm
@@ -2652,13 +4592,24 @@
         : 'Проверка без сети: созданная фишка сразу ваша — её можно двигать по карте и задать картинку.';
 
       this.list.innerHTML = '';
+      // Секции пересобираются на каждом рендере, а свёрнутое состояние живёт в
+      // localStorage внутри section(): иначе состояние потерялось бы вместе с
+      // узлом, и панель прыгала бы при каждом событии фишки.
+      // Кто ещё без фишки. Живёт здесь, а не только в панели участников:
+// левую панель мастер часто сворачивает, а вывести игрока на поле
+// удобнее оттуда, где уже работают с фишками.
+      const spawn = section('Вывести из листа', 'dnd-table.panel.tokensSpawn');
+      this.spawnNode = el('div', 'token-spawn');
+      spawn.body.appendChild(this.spawnNode);
+      spawn.wrap.hidden = !isDm;
+      this.list.appendChild(spawn.wrap);
       this.renderSpawnSection(players, ctx);
+
       const mine = this.buildMineSection(tokens, ctx);
       if (mine) this.list.appendChild(mine);
 
       if (isDm) {
-        const all = el('div', 'token-list__section');
-        all.appendChild(el('div', 'panel__title panel__title--sub', 'Все фишки'));
+        const all = section('Все фишки', 'dnd-table.panel.tokensAll');
 
         // Массовые переключатели: подготовка кончилась — открыть всё разом,
         // откатился — спрятать всё разом. Без них пришлось бы кликать по
@@ -2681,44 +4632,158 @@
           });
           bulk.appendChild(showAll);
           bulk.appendChild(hideAll);
-          all.appendChild(bulk);
+          all.body.appendChild(bulk);
         }
 
-        if (!tokens.length) {
-          all.appendChild(el('div', 'muted', 'Фишек пока нет'));
-        }
+        // Про «фишек пока нет» отдельно не пишем: applyFilters() и так говорит
+        // это под списком, и два одинаковых предложения подряд выглядят как
+        // сбой отрисовки.
         for (const token of tokens) {
-          const row = el('div', 'token-row');
-          if (token.hidden) row.classList.add('token-row--hidden');
-          row.appendChild(el('span', 'token-row__dot'));
-          row.lastChild.style.background = token.color;
-          row.appendChild(el('span', 'token-row__name', token.name));
-          row.appendChild(el('span', 'token-row__meta', DnD.MAP_LABELS[token.mapType]));
-          const owner = players.find((player) => player.playerId === token.assignedPlayerId);
-          row.appendChild(el('span', 'token-row__meta', owner ? `→ ${owner.name}` : 'не назначена'));
-          if (token.maxHp) row.appendChild(this.buildHpControl(token));
-          row.appendChild(this.buildConditionsControl(token));
-          const eye = el('button',
-            `btn btn--tiny ${token.hidden ? 'btn--ghost' : ''}`,
-            token.hidden ? 'Скрыта' : 'Видна');
-          eye.type = 'button';
-          eye.title = token.hidden
-            ? 'Показать фишку игрокам'
-            : 'Скрыть фишку от игроков';
-          eye.addEventListener('click', () => {
-            if (this.handlers.onToggleTokenHidden) this.handlers.onToggleTokenHidden(token.id, !token.hidden);
-          });
-          row.appendChild(eye);
-          const del = el('button', 'btn btn--tiny btn--danger', 'Удалить');
-          del.type = 'button';
-          del.addEventListener('click', () => {
-            if (this.handlers.onDeleteToken) this.handlers.onDeleteToken(token.id);
-          });
-          row.appendChild(del);
-          all.appendChild(row);
+          all.body.appendChild(this.buildTokenRow(token, players));
         }
-        this.list.appendChild(all);
+        this.list.appendChild(all.wrap);
       }
+      this.applyFilters();
+    }
+
+    /**
+     * Строка фишки в списке.
+     *
+     * Правый клик открывает то же меню, что и клик по фишке на карте, а
+     * переключатель имени стоит прямо в строке: скрывать подпись приходится
+     * часто и по одной фишке, лезть в меню ради этого не нужно.
+     * @param {object} token
+     * @param {object[]} players
+     * @returns {HTMLElement}
+     */
+    buildTokenRow(token, players) {
+      const row = el('div', 'token-row');
+      row.dataset.tokenId = token.id;
+      row.title = 'Правый клик — переименовать, назначить, скрыть имя или удалить';
+      if (token.hidden) row.classList.add('token-row--hidden');
+      if (token.hideName) row.classList.add('token-row--nameless');
+      row.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        this.showTokenMenu(token, event.clientX, event.clientY);
+      });
+      row.addEventListener('dblclick', (event) => {
+        if (event.target.closest('button, input, select')) return;
+        if (this.handlers.onRenameToken) this.handlers.onRenameToken(token);
+      });
+
+      row.appendChild(el('span', 'token-row__dot'));
+      row.lastChild.style.background = token.color;
+      const name = el('span', 'token-row__name', token.hideName ? 'Имя скрыто' : token.name);
+      row.appendChild(name);
+      row.appendChild(el('span', 'token-row__meta', DnD.MAP_LABELS[token.mapType]));
+      const owner = players.find((player) => player.playerId === token.assignedPlayerId);
+      row.appendChild(el('span', 'token-row__meta', owner ? `→ ${owner.name}` : 'не назначена'));
+      if (token.maxHp) row.appendChild(this.buildHpControl(token));
+      row.appendChild(this.buildConditionsControl(token));
+
+      const nameless = el('button',
+        `btn btn--tiny ${token.hideName ? '' : 'btn--ghost'}`,
+        token.hideName ? 'Без имени' : 'С именем');
+      nameless.type = 'button';
+      nameless.classList.toggle('is-on', Boolean(token.hideName));
+      nameless.title = token.hideName
+        ? 'Показать имя фишки игрокам'
+        : 'Скрыть имя фишки от игроков: подпись исчезнет, сама фишка останется';
+      nameless.addEventListener('click', () => {
+        if (this.handlers.onToggleTokenNameHidden) {
+          this.handlers.onToggleTokenNameHidden(token.id, !token.hideName);
+        }
+      });
+      row.appendChild(nameless);
+
+      // Подписи снизу: убираются у всех сразу, в том числе у мастера. Отдельная
+      // кнопка от «Без имени», потому что там тайна от игроков, а здесь — чистая
+      // картинка без подписей.
+      const nolabels = el('button',
+        `btn btn--tiny ${token.hideLabels ? '' : 'btn--ghost'}`,
+        token.hideLabels ? 'Без подписей' : 'С подписями');
+      nolabels.type = 'button';
+      nolabels.classList.toggle('is-on', Boolean(token.hideLabels));
+      nolabels.title = token.hideLabels
+        ? 'Показать под фишкой имя, хозяина и состояния'
+        : 'Убрать под фишкой имя, хозяина и состояния у всех участников';
+      nolabels.addEventListener('click', () => {
+        if (this.handlers.onToggleTokenLabelsHidden) {
+          this.handlers.onToggleTokenLabelsHidden(token.id, !token.hideLabels);
+        }
+      });
+      row.appendChild(nolabels);
+
+      // Свет фишки: ноль футов — не светит. Дальность в футах, потому что в
+      // правилах так, и мастер не должен пересчитывать её в клетки за столом.
+      const lightSelect = el('select', 'select select--tiny token-row__light');
+      const off = el('option', null, 'Без света');
+      off.value = '0';
+      lightSelect.appendChild(off);
+      for (const preset of DnD.LIGHT_PRESETS) {
+        const option = el('option', null, preset.label);
+        option.value = String(preset.radius);
+        lightSelect.appendChild(option);
+      }
+      const currentRadius = token.light ? Number(token.light.radius) || 0 : 0;
+      lightSelect.value = String(currentRadius);
+      // Свою дальность мастер мог задать руками: её в списке нет, поэтому
+      // добавляем отдельной строкой, иначе ползунок молча сбросился бы.
+      if (currentRadius > 0 && !lightSelect.querySelector(`option[value="${currentRadius}"]`)) {
+        const custom = el('option', null, `${currentRadius} фт`);
+        custom.value = String(currentRadius);
+        lightSelect.appendChild(custom);
+      }
+      lightSelect.title = 'Свет, который испускает фишка';
+      lightSelect.addEventListener('change', () => {
+        const radius = Number(lightSelect.value) || 0;
+        if (this.handlers.onSetTokenLight) {
+          const preset = DnD.LIGHT_PRESETS.find((item) => item.radius === radius);
+          this.handlers.onSetTokenLight(token.id, radius, preset ? preset.color : '#ffb347');
+        }
+      });
+      row.appendChild(lightSelect);
+
+      const eye = el('button',
+        `btn btn--tiny ${token.hidden ? 'btn--ghost' : ''}`,
+        token.hidden ? 'Скрыта' : 'Видна');
+      eye.type = 'button';
+      eye.title = token.hidden
+        ? 'Показать фишку игрокам'
+        : 'Скрыть фишку от игроков';
+      eye.addEventListener('click', () => {
+        if (this.handlers.onToggleTokenHidden) this.handlers.onToggleTokenHidden(token.id, !token.hidden);
+      });
+      row.appendChild(eye);
+      const del = el('button', 'btn btn--tiny btn--danger', 'Удалить');
+      del.type = 'button';
+      del.addEventListener('click', () => {
+        if (this.handlers.onDeleteToken) this.handlers.onDeleteToken(token.id);
+      });
+      row.appendChild(del);
+      return row;
+    }
+
+    showTokenMenu(token, clientX, clientY) {
+      placeTokenMenu(
+        buildTokenMenu(token, this.players, this.handlers, () => this.closeMenu()),
+        clientX,
+        clientY,
+        this
+      );
+    }
+
+    closeMenu() {
+      if (this.closeMenuHandler) {
+        document.removeEventListener('pointerdown', this.closeMenuHandler, true);
+        this.closeMenuHandler = null;
+      }
+      if (this.escapeHandler) {
+        document.removeEventListener('keydown', this.escapeHandler);
+        this.escapeHandler = null;
+      }
+      if (this.openMenu && this.openMenu.parentNode) this.openMenu.parentNode.removeChild(this.openMenu);
+      this.openMenu = null;
     }
 
     /**
@@ -2850,12 +4915,20 @@
         return;
       }
       node.hidden = false;
-      const waiting = players.filter((player) => player.role !== 'dm' && !player.tokenId);
+      const playersOnly = players.filter((player) => player.role !== 'dm');
+      const waiting = playersOnly.filter((player) => !player.tokenId);
+      if (!playersOnly.length) {
+        // Разницы между «игроков нет» и «у всех есть фишки» нет только на
+        // словах, а на деле она первая: пустой список пугал мастера так,
+        // будто кнопка сломалась.
+        node.appendChild(el('div', 'muted',
+          'За столом пока нет игроков: подключите их по билету из панели слева'));
+        return;
+      }
       if (!waiting.length) {
         node.appendChild(el('div', 'muted', 'У всех игроков за столом уже есть фишки'));
         return;
       }
-      node.appendChild(el('div', 'panel__title panel__title--sub', 'Вывести из листа'));
       for (const player of waiting) {
         const row = el('div', 'token-spawn__row');
         row.appendChild(el('span', 'token-spawn__name', player.name));
@@ -2905,5 +4978,5 @@
     }
   }
 
-  global.TableUI = { MapView, PlayersList, ChatPanel, DicePanel, InitiativePanel, TokenPanel, SketchEditor, formatTime };
+  global.TableUI = { MapView, PlayersList, ChatPanel, DicePanel, InitiativePanel, SurfacePanel, TokenPanel, SketchEditor, formatTime };
 })(window);

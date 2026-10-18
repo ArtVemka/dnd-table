@@ -1,0 +1,842 @@
+/* ==================================================================
+ * Лист персонажа.
+ * Раскладка листа, настройки стола, импорт и справочник приключения.
+ *
+ * Файл выделен из styles.css без перестановки правил: порядок в CSS значим
+ * для правил одинаковой специфичности. Части обязаны подключаться по
+ * порядку номеров в index.html.
+ * ================================================================== */
+
+/* ------------------------------------------------------------- Лист персонажа */
+
+.sheet {
+  gap: 12px;
+  /* Именно здесь, а не на сетке: запрос по контейнеру оформляет потомков, и
+     объявленный на самой сетке контейнер её бы не оформил. */
+  container: sheet-panel / inline-size;
+}
+
+.sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sheet__title {
+  font-family: var(--font-title);
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--gold);
+}
+
+.sheet__head-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sheet__status {
+  font-size: 11.5px;
+  color: var(--ok);
+}
+
+.sheet__grid {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(260px, 1.15fr) minmax(200px, 1fr);
+  gap: 10px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+/* В панели стола лист живёт в колонке шириной около 330px, а три колонки
+   требуют семьсот. Сетка сжималась до нечитаемой: подписи навыков исчезали,
+   а карточки характеристик превращались в узкие полоски. В узком контейнере
+   лист идёт в одну колонку, он и так прокручивается по вертикали.
+   Контейнер объявлен на корне листа, а не на самой сетке: запрос по контейнеру
+   оформляет потомков, а контейнер оформить им же нельзя. */
+@container sheet-panel (max-width: 700px) {
+  .sheet__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.sheet__col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.box {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.box__title {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--gold);
+}
+
+.box__note {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.abil-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.abil {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px;
+  text-align: center;
+}
+
+.abil__name {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+
+.abil__score {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-title);
+  font-size: 22px;
+  text-align: center;
+  padding: 2px 0;
+}
+
+.abil__score:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+.abil__mod {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold);
+  margin-top: 2px;
+}
+
+/* Проверка прямо в листе: кубик у характеристики, спасброска и каждого навыка.
+   Кнопка маленькая и всегда на своём месте, чтобы не искать её за столом. */
+.roll-check {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 5px;
+  cursor: pointer;
+  flex: none;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.roll-check:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  transform: scale(1.12);
+}
+
+.roll-check:active {
+  transform: scale(0.95);
+}
+
+.abil .roll-check {
+  /* Карточка характеристики выровнена по центру, и без этого кубик
+     растягивался на всю её ширину. */
+  align-self: center;
+  margin-top: 4px;
+}
+
+/* Переключатель режима проверки: один на весь лист, живёт рядом с
+   характеристиками, а не в шапке: в колонке стола шапка для него не помещалась
+   и выдавливала кнопки печати. */
+.sheet__roll-row {
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.sheet__roll-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sheet__roll-modes {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  flex: 1;
+  min-width: 0;
+  /* Переносы внутри: в колонке стола три подписи не помещаются в строку, а
+     панель режет по горизонтали, и перенос переносился бы в обрезанное
+     место. */
+  flex-wrap: wrap;
+}
+
+.sheet__roll-mode {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.sheet__roll-mode:hover {
+  color: var(--text);
+}
+
+.sheet__roll-mode.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast, #1a1008);
+  font-weight: 600;
+}
+
+.prof-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.prof-row:hover {
+  background: var(--surface-3);
+}
+
+.prof-row input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.prof-row__expert {
+  opacity: 0.75;
+}
+
+.prof-row__value {
+  min-width: 34px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 4px;
+}
+
+.prof-row__value.is-proficient {
+  color: var(--gold);
+  border-color: var(--border-strong);
+}
+
+.prof-row__value.is-expertise {
+  color: var(--expertise);
+  background: var(--expertise-soft);
+}
+
+.prof-row__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prof-row__ability {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  /* Название характеристики уступает кубику проверки: он нужен каждый ход, а
+     сокращение Ловк. и так понятно. Без этого в узкой колонке панели стола
+     пропадали сами названия навыков. */
+  flex: none;
+}
+
+@media (max-width: 1500px) {
+  .prof-row__ability {
+    display: none;
+  }
+}
+
+.prof-row--manual {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.inline-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.is-readonly .prof-row {
+  cursor: default;
+}
+
+.is-readonly .prof-row:hover {
+  background: transparent;
+}
+
+/* --------------------------------------------------------------- Модалка */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: var(--scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: toast-in 0.15s ease;
+}
+
+.modal {
+  width: 100%;
+  max-width: 420px;
+  background: linear-gradient(170deg, var(--surface-2), var(--surface));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal__title {
+  font-family: var(--font-title);
+  font-size: 18px;
+}
+
+.modal__text {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* --------------------------------------------------------------- Тосты */
+
+.toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 2000;
+  max-width: 380px;
+}
+
+.toast {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--accent);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  animation: toast-in 0.2s ease;
+}
+
+.toast--ok {
+  border-left-color: var(--ok);
+}
+
+.toast--error {
+  border-left-color: var(--danger);
+}
+
+.toast--info {
+  border-left-color: var(--gold);
+}
+
+.toast.is-out {
+  opacity: 0;
+  transform: translateX(12px);
+  transition: all 0.28s ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* --------------------------------------------------------------- Скролл */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 6px;
+  border: 2px solid var(--surface);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* ------------------------------------------------------- Узкие окна */
+
+@media (max-width: 1500px) {
+  .layout {
+    --left-col: 268px;
+    --right-default: 350px;
+  }
+}
+
+@media (max-width: 1250px) {
+  .sheet__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ------------------------------------------------- Панель адресов */
+
+.panel__title--row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* Заголовок с кнопкой живёт в узкой панели, поэтому он мельче и не
+     переносится: две строки подряд с кнопкой читались бы как ошибка. */
+  font-size: 12.5px;
+  letter-spacing: 0.8px;
+}
+
+.panel__title--row > span {
+  white-space: nowrap;
+}
+
+/*
+ * У заголовка с кнопкой волосяной линии быть не должно: она отбирала бы
+ * место у кнопки, и название панели переносилось на две строки.
+ * Селектор с двумя классами — иначе правило из «живого слоя» перебило бы
+ * это по порядку следования.
+ */
+.panel__title.panel__title--row::after {
+  display: none;
+}
+
+.addr-summary {
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+/* Панель приглашения: билет один, но длинный. Он прокручивается внутри панели,
+   а кнопка импорта остаётся на виду под ним. */
+#addresses-root {
+  max-height: 34vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#addresses-panel.is-collapsed #addresses-root,
+#addresses-panel.is-collapsed .hint {
+  display: none;
+}
+
+/* Билет — не URL: переносим по любому символу и разрешаем выделение, чтобы
+   можно было выделить и скопировать мышью, а не только кликом. */
+.addr__url--ticket {
+  cursor: copy;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  word-break: break-all;
+  user-select: text;
+}
+
+.btn.toggle.is-on {
+  border-color: var(--ok);
+  color: var(--ok-text);
+}
+
+/* ------------------------------------- Подсказка выбора игрока во вкладке */
+
+/* Списка игроков в панели листа больше нет: он живёт в панели участников
+   слева, и здесь мастер видит только куда нажать. */
+.sheet__pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.sheet__pick-title {
+  font-family: var(--font-title);
+  font-size: 15px;
+  color: var(--text);
+}
+
+.player-row--button {
+  appearance: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.player-row--button:hover {
+  border-color: var(--accent);
+}
+
+.player-row--button.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.player-row__go {
+  font-size: 11.5px;
+  color: var(--accent-hover);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------- Настройки */
+
+.modal--settings {
+  max-width: 540px;
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.settings__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.settings__label {
+  color: var(--muted);
+  min-width: 104px;
+  flex-shrink: 0;
+}
+
+.settings__value {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings__value--path {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.settings__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.settings__check input {
+  accent-color: var(--accent);
+}
+
+.settings__select {
+  width: auto;
+  min-width: 150px;
+}
+
+/* ------------------------------------------- Лист в отдельном окне */
+
+.sheet-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sheet-window__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sheet-window__title {
+  font-family: var(--font-title);
+  font-size: 17px;
+}
+
+.sheet-window__sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sheet-window__sub.status--error {
+  color: var(--danger-text);
+}
+
+.sheet-window__sub.status--ok {
+  color: var(--ok);
+}
+
+.sheet-window__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sheet-window__body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+}
+
+.sheet-window__body .panel--tab {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* --------------------------------------------------- Импорт приключения */
+
+/* Отдельный класс, а не .modal-overlay: окно импорта живёт в статическом HTML,
+   а окно настроек создаётся скриптом. С общим классом поиск «первого оверлея»
+   находил бы не то окно. */
+.import-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: var(--scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: toast-in 0.15s ease;
+}
+
+.addr-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow: auto;
+  margin: 12px 0;
+}
+
+.import-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.import-row input[type='checkbox'] {
+  margin-top: 3px;
+  flex: none;
+}
+
+.import-row.is-disabled {
+  opacity: 0.55;
+}
+
+.import-row__text {
+  min-width: 0;
+}
+
+.import-row__name {
+  font-size: 13px;
+}
+
+.import-row__meta,
+.import-row__note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.import-row__note {
+  color: var(--accent);
+}
+
+.import-warnings {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--warn, #d9a441);
+}
+
+.import-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-right: auto;
+  cursor: pointer;
+}
+
+/* ------------------------------------------- Справочник приключения */
+
+.adv-head {
+  padding: 0 0 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--border-strong);
+}
+
+.adv-head__name {
+  font-family: var(--font-title);
+  font-size: 15px;
+}
+
+.adv-head__meta,
+.adv-item__type {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.adv-search {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.adv-section {
+  margin-bottom: 12px;
+}
+
+.adv-section__title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.adv-item {
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.adv-item__title {
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+
+.adv-item__text {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+.adv-item__more {
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.adv-item__row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+
+.adv-item__img {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+.adv-empty {
+  font-size: 12px;
+  padding: 6px 2px;
+}

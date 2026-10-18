@@ -1,0 +1,654 @@
+/* ==================================================================
+ * Раскладка и левая панель.
+ * Сетка экрана, сворачиваемые панели, вкладки, участники, адреса.
+ *
+ * Файл выделен из styles.css без перестановки правил: порядок в CSS значим
+ * для правил одинаковой специфичности. Части обязаны подключаться по
+ * порядку номеров в index.html.
+ * ================================================================== */
+
+/* ------------------------------------------------------------ Раскладка */
+
+.layout {
+  flex: 1;
+  display: grid;
+  --left-col: 300px;
+  /* Ширина, которую мастер выбрал перетаскиванием. Живёт отдельно от
+     --right-col: свёрнутая панель задаёт --right-col = 54px, и если бы она
+     переопределяла то же самое свойство, сохранённая ширина перестала бы
+     действовать сразу после сворачивания. Пока мастер ничего не выбирал,
+     работает --right-default, который сужается вместе с окном. */
+  --right-default: 420px;
+  --right-col: var(--right-user-width, var(--right-default));
+  /* Высота нижней панели: та же мысль, что у ширины, только по вертикали. */
+  --right-row: var(--right-user-height, minmax(170px, 30vh));
+  /* Порядок треков обязан совпадать с порядком детей в index.html:
+     левая колонка, карта, разделитель, правая колонка. Grid раскладывает
+     элементы по трекам по порядку, и при несовпадении карта уезжает в
+     шестипиксельный трек разделителя.
+
+     Имена областей вместо порядка: правую панель можно положить под карту, и
+     пришлось бы переписывать и треки, и области, а не одну строку. */
+  grid-template-columns: var(--left-col) minmax(0, 1fr) 6px var(--right-col);
+  grid-template-areas: "left center gap right";
+  min-height: 0;
+  gap: 12px;
+  padding: 12px;
+}
+
+.col--left { grid-area: left; }
+.col--center { grid-area: center; }
+.col--right { grid-area: right; }
+.col-resizer--right { grid-area: gap; }
+
+/* Панель вкладок под картой. На широком мониторе карта от этого выигрывает,
+   а на узком — наоборот, но выбирает мастер, и переключение мгновенное:
+   это класс на раскладке, а не перерисовка интерфейса. */
+.layout.is-right-bottom {
+  grid-template-columns: var(--left-col) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 6px var(--right-row);
+  grid-template-areas:
+    "left center"
+    "left gap"
+    "left right";
+}
+
+.layout.is-right-bottom .col--right {
+  max-height: none;
+}
+
+/* Свёрнутая панель внизу: вкладки уезжают в иконки, а сама панель — в полоску. */
+.layout.is-right-bottom.is-right-collapsed {
+  --right-row: 54px;
+}
+
+/* Свёрнутая панель внизу: иконки вкладок встают в ряд, а не столбиком. */
+.layout.is-right-bottom.is-right-collapsed .tabs {
+  flex-direction: row;
+}
+
+/* Разделитель колонки: тонкая полоса, которая на подходе мыши
+   превращается в заметную. Толщина 6px вместо нулевой нужна, чтобы полосу
+   вообще можно было поймать мышью. */
+.col-resizer {
+  cursor: col-resize;
+  background: transparent;
+  border-radius: 4px;
+  position: relative;
+  touch-action: none;
+}
+
+.col-resizer:hover {
+  background: var(--accent-soft);
+}
+
+/* Фокус разделителя теперь общий: раньше тут был свой `outline: none` и тень
+   внутри, и рядом с кольцом остальных полей он выглядел отдельным элементом. */
+.col-resizer:focus-visible {
+  background: var(--accent-soft);
+}
+
+body.is-resizing {
+  /* Курсор и выделение: иначе при перетаскивании выделяется текст карты
+     под разделителем и панель дёргает вслед за выделением. */
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.is-resizing * {
+  cursor: col-resize !important;
+}
+
+/* Панели можно свернуть: слева — совсем, справа — до иконок вкладок. */
+.layout.is-left-collapsed {
+  --left-col: 0px;
+  /* Убираем переполнение: при свёртывании элементы не вылазят за границы контента. */
+  overflow: hidden;
+}
+
+.layout.is-left-collapsed .col--left {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  flex-basis: 0 !important;
+  flex-shrink: 0 !important;
+  flex-grow: 0 !important;
+  overflow: hidden !important;
+  /* display: none нельзя — остаётся в grid-треке с шириной 0, но flex-свойства
+     могут вызвать переполнение. Используем нулевую ширину + скрытие переполнения. */
+}
+
+.layout.is-right-collapsed {
+  --right-col: 54px;
+}
+
+.layout.is-right-collapsed .col--right {
+  overflow: visible;
+}
+
+.layout.is-right-collapsed .tabs {
+  flex-direction: column;
+}
+
+.layout.is-right-collapsed .tabs__btn {
+  padding: 9px 4px;
+}
+
+.layout.is-right-collapsed .tabs__label {
+  display: none;
+}
+
+.layout.is-right-collapsed .tabs__icon {
+  font-size: 17px;
+}
+
+.layout.is-right-collapsed .panel--tab {
+  display: none !important;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.col--left,
+.col--right {
+  overflow: auto;
+}
+
+/* Панели левой колонки не сжимаются. Иначе флексбокс ужимает их до размера
+   колонки, содержимое вылезает за границы панели и наезжает на соседнюю:
+   участники поверх адресов. Колонка и так прокручивается (overflow: auto). */
+.col--left > .panel {
+  flex-shrink: 0;
+}
+
+.panel {
+  background: var(--surface);
+  border: var(--frame) var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--frame-inner), var(--panel-shadow);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  position: relative;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/*
+ * Уголки панелей. Идея простая: маленькая линия в углу, цветом темы. В
+ * «Трактире» и «Магии» она светящаяся, в «Лесу» и «Океане» просто тонкая.
+ * Панели без содержимого (карта) лишних уголков не получают.
+ */
+.panel::before,
+.panel::after {
+  content: '';
+  position: absolute;
+  width: var(--corner);
+  height: var(--corner);
+  border: 1px solid var(--glow);
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.panel::before {
+  top: 6px;
+  left: 6px;
+  border-right: 0;
+  border-bottom: 0;
+  border-top-left-radius: var(--radius-sm);
+}
+
+.panel::after {
+  right: 6px;
+  bottom: 6px;
+  border-left: 0;
+  border-top: 0;
+  border-bottom-right-radius: var(--radius-sm);
+}
+
+.panel:hover::before,
+.panel:hover::after {
+  opacity: 0.9;
+}
+
+.panel__title {
+  font-family: var(--font-title);
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--gold);
+}
+
+.panel__title--sub {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.6px;
+}
+
+.panel--map {
+  padding: 12px;
+  min-height: 0;
+  flex: 1;
+}
+
+.panel--tab {
+  display: none;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel--tab.is-active {
+  display: flex;
+}
+
+/* --------------------------------------------------------------- Табы */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+  flex-shrink: 0;
+  /* Вкладок стало шесть, а колонка узкая: подписи не влезают и начинают
+     переноситься на две строки, из-за чего панель прыгает. Справочник
+     приключения у мастера — самая редкая вкладка, поэтому у неё только
+     иконка, а остальные подписи ужимаются шрифтом. */
+  container-type: inline-size;
+}
+
+.tabs__label {
+  white-space: nowrap;
+}
+
+/* Справочник приключения: иконка с подсказкой вместо длинного слова. */
+.tabs__btn--compact .tabs__label {
+  display: none;
+}
+
+@container (max-width: 330px) {
+  /* Совсем узкое окно: оставляем только иконки, иначе подписи ломают строку. */
+  .tabs__label {
+    display: none;
+  }
+
+  .tabs__btn {
+    padding: 7px 2px;
+  }
+}
+
+@container (max-width: 460px) {
+  .tabs__btn {
+    font-size: 11.5px;
+    gap: 3px;
+  }
+
+  .tabs__icon {
+    font-size: 12px;
+  }
+}
+
+.tabs__btn {
+  flex: 1;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.tabs__icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tabs__btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.tabs__btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------- Участники и адреса */
+
+/* Портрет мастера стоит над списком участников. Раньше он жил во вкладке
+   листов, но лист открывают чужие игроки, а свой портрет мастер туда не
+   вносит, и вкладка в этом не участвовала. */
+.players-self {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.players-self[hidden] {
+  display: none;
+}
+
+.players-self__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.players {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.player-row {
+  display: flex;
+  align-items: center;
+  /* Кнопок в строке стало две («Открыть лист» и «Вывести»), и в узкой
+     колонке они переставали помещаться: текст с игрока ломался на слова.
+     Теперь строка переносится целиком, а поля внутри обрезаются. */
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid transparent;
+}
+
+.player-row__avatar {
+  flex: none;
+}
+
+.player-row.is-offline {
+  opacity: 0.55;
+}
+
+.player-row__avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+/* Портрет в кружке: обрезан по кругу и прижат к краям, иначе квадратная
+   фотография торчит за скруглённый угол. */
+.player-row__avatar.has-image {
+  background: var(--surface-2);
+}
+
+.player-row__avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.player-row__avatar--dm {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.player-row__avatar--dm.has-image {
+  border-color: var(--gold);
+}
+
+/* ------------------------------------------------- Аватар в шапке листа */
+
+.avatar-pick {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.avatar-pick__preview {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 2px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.avatar-pick__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.avatar-pick__fallback {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.avatar-pick__side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.avatar-pick__file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Поле выбора файла спрятано, а по кнопке открывается окно выбора. Кнопка, а не
+   надпись: `<label>` не срабатывает, когда поле лежит рядом с ним, а не внутри. */
+.avatar-pick__label {
+  appearance: none;
+  display: inline-block;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text);
+  padding: 7px 13px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.avatar-pick__label:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.avatar-pick__label:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Блок портрета самого мастера в списке игроков. */
+.sheet__self {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+  margin-bottom: 10px;
+}
+
+.sheet__self-title {
+  font-size: 12px;
+  color: var(--gold);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* -------------------------------------------------------- Аватар в чате */
+
+.chat__avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.chat__avatar .player-row__avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.player-row__main {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+
+/*
+ * Кнопки игрока. Стоят справа, а если места в колонке не хватает, вся группа
+ * переносится на следующую строку целиком: разнесённые по строкам кнопки
+ * читались бы как разные записи.
+ */
+.player-row__actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.player-row__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  /* Строка статуса не переносится: «в сети · фишка на поле» — одна мысль,
+     и разбивать её на три строки незачем. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Кнопки в строке участника мельче обычных: в колонке шириной 300 px
+   помещаются только так. */
+.player-row .btn {
+  flex: none;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot--on {
+  background: var(--ok);
+  box-shadow: 0 0 6px rgba(111, 174, 90, 0.8);
+}
+
+.dot--off {
+  background: var(--off);
+}
+
+.addr-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.addr-group__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.addr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.addr__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.addr__url {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12.5px;
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.addr__meta {
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+.addr-note {
+  font-size: 11.5px;
+}

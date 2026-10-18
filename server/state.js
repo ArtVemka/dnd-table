@@ -15,11 +15,27 @@ const diceModule = require('../renderer/dice.js');
 // нём нет. Своя копия здесь разъехалась бы на первом же новом состоянии.
 const CONDITIONS = require('../renderer/dnd5e.js').CONDITIONS || [];
 const CONDITION_IDS = new Set(CONDITIONS.map((item) => item.id));
+// Правило «состояние отнимает скорость» тоже оттуда: клиент и сервер обязаны
+// отвечать одинаково, иначе игрок увидит «можно двигать», а сервер откажет.
+const conditionBlocksMove = require('../renderer/dnd5e.js').conditionBlocksMove;
 // Ступени ячеек заклинаний: их девять, и это знает сервер.
 const SPELL_SLOT_LEVELS = require('../renderer/dnd5e.js').SPELL_SLOT_LEVELS || [1, 2, 3, 4, 5, 6, 7, 8, 9];
 // Разбор маски тумана тоже оттуда: своя копия в сервере разъехалась бы с
 // интерфейсом при первом же изменении разрешения сетки.
 const fogModel = require('../renderer/dnd5e.js');
+// Сетка тоже приводится к виду там же: пределы, округление до половины клетки
+// и сдвиг должны совпадать у клиента и сервера до последнего пикселя.
+const normalizeGrid = fogModel.normalizeGrid;
+// Поверхности приводятся к виду там же: список типов один на клиента и сервер,
+// и сервер не примет то, чего нет в правилах.
+const normalizeSurface = fogModel.normalizeSurface;
+// Стены и источники света приводятся к виду там же: свет — это чистый расчёт,
+// и вторая копия правил разошлась бы с первой при первом же изменении.
+const normalizeWalls = fogModel.normalizeWalls;
+const normalizeLights = fogModel.normalizeLights;
+const LIGHT_LIMITS = fogModel.LIGHT_LIMITS || { maxRadius: 200 };
+/** Цвет света по умолчанию: тёплый, как факел. */
+const DEFAULT_LIGHT_COLOR = '#ffb347';
 
 const CAMPAIGN_FORMAT_VERSION = 2;
 
@@ -149,6 +165,40 @@ function normalizeFog(raw) {
   return fogModel.normalizeFogMask(raw);
 }
 
+/**
+ * Насколько карта тёмная: доля от 0 до 1.
+ *
+ * Значение из кампании, с сервера или из файла может оказаться чем угодно,
+ * поэтому приводится здесь же. Карта без освещения — это 0, а не полная темнота:
+ * иначе кампании, созданные до появления света, открылись бы чёрными.
+ * @param {unknown} raw
+ * @returns {number}
+ */
+function normalizeDarkness(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+/**
+ * Свет фишки: дальность в футах и цвет, либо ничего.
+ *
+ * Фишка без света хранит ноль, а не отсутствие поля: иначе у каждой фишки в
+ * кампании лишний ключ, а проверка «светит ли кто-нибудь» писалась бы в трёх
+ * местах по-разному.
+ * @param {unknown} raw
+ * @returns {{radius: number, color: string}}
+ */
+function normalizeTokenLight(raw) {
+  if (!raw || typeof raw !== 'object') return { radius: 0, color: DEFAULT_LIGHT_COLOR };
+  const radius = Number(raw.radius);
+  const color = typeof raw.color === 'string' && /^#[0-9a-f]{6}$/i.test(raw.color)
+    ? raw.color
+    : DEFAULT_LIGHT_COLOR;
+  if (!Number.isFinite(radius) || radius <= 0) return { radius: 0, color };
+  return { radius: Math.min(LIGHT_LIMITS.maxRadius, Math.round(radius)), color };
+}
+
 function clampSlotArray(raw) {
   const rows = Array.isArray(raw) ? raw.slice(0, 9) : [];
   return SPELL_SLOT_LEVELS.map((level, index) => clampInt(rows[index], 0, LIMITS.maxSpellSlotsPerLevel, 0));
@@ -240,7 +290,13 @@ const GRID = {
   maxCell: 512,
   defaultCell: 46,
   minColumns: 2,
-  maxColumns: 200
+  maxColumns: 200,
+  // Футов в клетке. Дублируется из renderer/dnd5e.js: сервер не может
+  // потребовать файл интерфейса ради двух чисел, а разойтись им нельзя —
+  // иначе игрок посчитал бы свет иначе, чем мастер.
+  minFeetPerCell: 1,
+  maxFeetPerCell: 50,
+  defaultFeetPerCell: 5
 };
 const ROLE_DM = 'dm';
 const ROLE_PLAYER = 'player';
@@ -479,6 +535,15 @@ class RoomState {
      * @type {{entries: object[], turnId: string|null, round: number}}
      */
     this.initiative = emptyInitiative();
+    /**
+     * Режим боя: фишка ходит по клеткам, а не свободно.
+     *
+     * Отдельный переключатель, а не следствие наличия порядка боя: бой можно
+     * вести и без клеток, а клетки — и без боя. Включается мастером вручную и
+     * сам собой при общем броске инициативы.
+     * @type {{enabled: boolean}}
+     */
+    this.combat = { enabled: false };
     /** @type {object[]} */
     this.diceHistory = [];
     /** @type {object[]} */
@@ -534,14 +599,9 @@ class RoomState {
       : (MAP_TYPES.find((type) => this.maps[type].items.length) || null);
 
     const grid = data.grid && typeof data.grid === 'object' ? data.grid : {};
-    this.grid = {
-      enabled: Boolean(grid.enabled),
-      cell: clampInt(grid.cell, GRID.minCell, GRID.maxCell, GRID.defaultCell),
-      // columns — сколько клеток укладывается по ширине карты. Ноль означает
-      // «размер клетки задаёт мастер», иначе клетка считается от ширины карты
-      // и сетка одинаково ложится на любую подложку.
-      columns: clampInt(grid.columns, 0, GRID.maxColumns, 0)
-    };
+    // Правила сетки — из того же файла, что читает интерфейс: иначе снимок
+    // состояния и сообщение о смене сетки разошлись бы с тем, что рисует карта.
+    this.grid = normalizeGrid(grid);
 
     const tokens = Array.isArray(data.tokens) ? data.tokens.slice(0, LIMITS.maxTokens) : [];
     this.tokens = tokens
@@ -555,6 +615,7 @@ class RoomState {
       ? data.chatHistory.slice(-LIMITS.maxChatHistory)
       : [];
     this.initiative = normalizeInitiative(data.initiative);
+    this.combat = { enabled: Boolean(data.combat && data.combat.enabled) };
     this.adventure = normalizeAdventure(data.adventure);
   }
 
@@ -745,9 +806,15 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
         name: sanitizeText(source.name, MAP_NAME_MAX) || 'Карта',
         // Туман живёт у карты, а не у стола: у каждой карты он свой, и при
         // переключении вкладки мастер не должен открывать заново.
-        fogMask: normalizeFog(source.fogMask),
-        uploadedAt: source.uploadedAt || new Date().toISOString()
-      });
+fogMask: normalizeFog(source.fogMask),
+          // Поверхность по клеткам: кислота, огонь, вода. Видна всем, рисует
+          // мастер, и переживает кампанию вместе с картой.
+          surface: normalizeSurface(source.surface),
+          walls: normalizeWalls(source.walls),
+          lights: normalizeLights(source.lights),
+          darkness: normalizeDarkness(source.darkness),
+          uploadedAt: source.uploadedAt || new Date().toISOString()
+        });
     } else if (Array.isArray(source.items)) {
       for (const item of source.items.slice(0, LIMITS.maxMapsPerType)) {
         if (!item || typeof item.url !== 'string') continue;
@@ -758,6 +825,10 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
           // Маска из кампании может достаться от другой версии игры или быть
           // правлена руками, поэтому чинится здесь же.
           fogMask: normalizeFog(item.fogMask),
+          surface: normalizeSurface(item.surface),
+          walls: normalizeWalls(item.walls),
+          lights: normalizeLights(item.lights),
+          darkness: normalizeDarkness(item.darkness),
           uploadedAt: item.uploadedAt || new Date().toISOString()
         });
       }
@@ -803,6 +874,18 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
       // игроки её не видят вовсе. Сервер такие фишки игрокам не отдаёт, поле
       // нужно самому мастеру, чтобы отличить заготовку от готовой.
       hidden: Boolean(token.hidden),
+      // Свет, который фишка испускает сама: факел в руке, костёр под ногами.
+      // Ноль — не светит. Мастер гасит свет фишки тем же переключателем, что и
+      // видимость самой фишки.
+      light: normalizeTokenLight(token.light),
+      // Фишка, чьё имя игрокам не показывают: загадочный NPC, босс с именем,
+      // которое игроки узнать не должны. Само поле уходит всем, но имя мастеру
+      // и игрокам разное — см. tokenForViewer.
+      hideName: Boolean(token.hideName),
+      // Подписи под фишкой скрыты всем сразу: мастеру тоже. Это не тайна от
+      // игроков, а его способ убрать подписи с нагруженной карты, поэтому поле
+      // одинаково у всех и тайны здесь нет.
+      hideLabels: Boolean(token.hideLabels),
       color: typeof token.color === 'string' ? token.color : TOKEN_PALETTE[0],
       // Прочность. maxHp === null — фишка без здоровья: монетка, метка или
       // просто шарик. У монстра и персонажа она есть.
@@ -833,6 +916,19 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
   setTokenConditions(token, list) {
     token.conditions = normalizeConditions(list);
     return token;
+  }
+
+  /**
+   * Состояние, из-за которого фишкой нельзя пошевелить, или null.
+   *
+   * Проверка живёт здесь, а не в интерфейсе: игрок может прислать движение
+   * напрямую, минуя карту, и сервер обязан отказать. Возвращаем само состояние,
+   * чтобы отказ был понятен игроку, а не выглядел ошибкой.
+   * @param {object} token
+   * @returns {object|null}
+   */
+  moveBlocker(token) {
+    return conditionBlocksMove(token && token.conditions);
   }
 
   /**
@@ -881,6 +977,8 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
       tokens: this.tokens,
       // Порядок боя видят все: он и есть объявление для игроков.
       initiative: this.initiative,
+      // Режим боя видят все: по нему и ходят по клеткам.
+      combat: this.combat,
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory),
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory),
       adventure: this.adventure,
@@ -926,6 +1024,11 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
    * игроков показываем всем, включая их прочность: урон наносится открыто, и по
    * полоске видно, кто ещё держится на ногах.
    *
+   * Имя скрытой фишки игрокам тоже не достаётся. Замена на пустую строку, а не
+   * флаг «не показывать», сделана умышленно: флаг прячет подпись в интерфейсе,
+   * а само имя остаётся в снимке состояния и в каждом событии фишки, то есть
+   * мастер спрятал бы его от себя же.
+   *
    * Прячем на сервере, а не в интерфейсе: иначе число утекло бы в снимок
    * состояния, который игрок получает целиком, и в историю событий фишки.
    * @param {object} token
@@ -933,8 +1036,21 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
    * @returns {object}
    */
   tokenForViewer(token, isDm) {
-    if (isDm || !token || !token.maxHp || token.assignedPlayerId) return token;
-    return { ...token, maxHp: null, hp: null };
+    if (isDm || !token) return token;
+    const patch = {};
+    // Прочность прячем только у монстров: у фишки игрока она и так у всех.
+    if (token.maxHp && !token.assignedPlayerId) {
+      patch.maxHp = null;
+      patch.hp = null;
+    }
+    if (token.hideName) {
+      // Подпись и буква в кружке рисуются по имени, поэтому игрок получает
+      // пустую строку и флаг: по флагу интерфейс ставит «?» вместо буквы и
+      // не рисует подпись вовсе.
+      patch.name = '';
+      patch.nameHidden = true;
+    }
+    return Object.keys(patch).length ? { ...token, ...patch } : token;
   }
 
    /**
@@ -1006,7 +1122,24 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
    * @param {boolean} includeTokens
    * @returns {object[]}
    */
-  playerList(includeTokens = true, includeDmNotes = false) {
+  /**
+   * Список участников для рассылки и для снимка состояния.
+   *
+   * Параметры собраны в объект, потому что их три и все они про_bool: на
+   * позиционных флагах легко перепутать местами и молча отдать игрокам то,
+   * что задумано мастеру.
+   * @param {{includeTokens?: boolean, includeDmNotes?: boolean, includeHidden?: boolean}} [options]
+   * @returns {object[]}
+   */
+  playerList(options = {}) {
+    const {
+      includeTokens = true,
+      includeDmNotes = false,
+      // Скрытые фишки игрокам не показываются, а мастеру показываются: иначе
+      // у него в списке участников горела бы вечная отметка «вывести фишку»
+      // для игрока, которому фишка уже выведена, но ещё скрыта.
+      includeHidden = false
+    } = typeof options === 'boolean' ? { includeTokens: options } : options || {};
     const list = [];
     // Кто на какой фишке: раньше внутри цикла по игрокам искали фишку поиском,
     // то есть на каждой рассылке списка выполнялось «игроки × фишки». Словарь
@@ -1014,10 +1147,7 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
     const tokenIdByPlayer = new Map();
     if (includeTokens) {
       for (const token of this.tokens) {
-        // Скрытые фишки в списке участников не считаем: игрок увидел бы
-        // отметку «фишка на поле» и догадался бы о заготовке мастера.
-        // Мастеру всё равно: у него есть панель фишек целиком.
-        if (token.hidden) continue;
+        if (!includeHidden && token.hidden) continue;
         if (token.assignedPlayerId && !tokenIdByPlayer.has(token.assignedPlayerId)) {
           tokenIdByPlayer.set(token.assignedPlayerId, token.id);
         }
@@ -1077,7 +1207,7 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
       // отдельного экрана для них пока нет, а лишние данные на клиенте
       // только мешают.
       adventure: isDm ? this.adventure : null,
-      players: this.playerList(true, isDm),
+      players: this.playerList({ includeTokens: true, includeDmNotes: isDm, includeHidden: isDm }),
       sheets,
       maps: this.maps,
       activeMap: this.activeMap,
@@ -1092,6 +1222,9 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
           .map((token) => this.tokenForViewer(token, isDm)),
       // Порядок боя общий: мастер его объявляет, и игроки видят, кто ходит.
       initiative: this.initiative,
+      // Режим боя тоже общий: иначе один участник ходил бы по клеткам, а
+      // второй перетаскивал бы фишку свободно.
+      combat: this.combat,
       // Тайный бросок мастера хранится целиком: файл кампании и снимок для
       // мастера должны видеть число. Игроку достаётся бросок без результата —
       // иначе «слепой» бросок утечёт в состояние, которое игрок получает целиком.
@@ -1139,6 +1272,8 @@ module.exports = {
   newTokenId,
   normalizeSheet,
   normalizeAdventure,
+  normalizeDarkness,
+  normalizeTokenLight,
   proficiencyBonus,
   sanitizeText
 };

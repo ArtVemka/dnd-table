@@ -1,0 +1,1128 @@
+/* ==================================================================
+ * Панели стола.
+ * Фишки, вывод из листа, чат, кубики, порядок боя.
+ *
+ * Файл выделен из styles.css без перестановки правил: порядок в CSS значим
+ * для правил одинаковой специфичности. Части обязаны подключаться по
+ * порядку номеров в index.html.
+ * ================================================================== */
+
+/* --------------------------------------------------------------- Фишки */
+
+.token-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.token {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: auto;
+  user-select: none;
+  touch-action: none;
+}
+
+/* Прочность на самой фишке: полоса под кружком и число вида «7/12». */
+.token__hp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px;
+  background: var(--hp-plate);
+  border-radius: 6px;
+}
+
+.token__hp-track {
+  width: 34px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hp-track);
+  overflow: hidden;
+}
+
+.token__hp-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--success, #6fb45f);
+  transition: width var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.token--hurt .token__hp-fill {
+  background: var(--gold);
+}
+
+.token--down .token__hp-fill {
+  background: var(--danger);
+}
+
+/* Павший: кружок гаснет, но остаётся видимым — надо знать, где он лежит. */
+.token--down .token__circle {
+  filter: grayscale(0.85) brightness(0.55);
+}
+
+.token--down .token__hp-value {
+  color: var(--danger);
+}
+
+.token__hp-value {
+  font-family: var(--font-num);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.token__circle {
+  width: var(--cell, 46px);
+  height: var(--cell, 46px);
+  border-radius: 50%;
+  background: var(--token-color, var(--accent));
+  border: 2px solid rgba(12, 9, 6, 0.85);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.55);
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: calc(var(--cell, 46px) * 0.4);
+  line-height: 1;
+  color: #1a1209;}
+
+/*
+ * Карта сбрасывает line-height в ноль (чтобы под картинкой не оставалось
+ * пустой строки), поэтому подписи фишки нужен собственный line-height:
+ * иначе её высота равна только отступам и текст обрезается overflow: hidden.
+ */
+.token__label {
+  font-size: 11px;
+  line-height: 1.35;
+  background: var(--hp-plate);
+  padding: 1px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.token__owner {
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--gold);
+  background: var(--hp-plate);
+  padding: 0 5px;
+  border-radius: 6px;
+}
+
+.token--movable {
+  cursor: grab;
+}
+
+.token--movable .token__circle {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px rgba(217, 164, 65, 0.35), 0 3px 12px rgba(0, 0, 0, 0.6);
+}
+
+.token--mine .token__circle {
+  border-color: var(--ok);
+}
+
+.token--dragging {
+  cursor: grabbing;
+  z-index: 50;
+}
+
+.token--dragging .token__circle {
+  transform: scale(1.12);
+}
+
+/* ------------------------------------------- Эффекты состояний на фишке */
+
+/* Кружок в своей обёртке: рисунки состояний держатся по его краям, а подписи
+   под фишкой меняют её высоку, и «низ фишки» без обёртки гулял бы. */
+.token__body {
+  position: relative;
+  width: var(--cell, 46px);
+  height: var(--cell, 46px);
+  display: flex;
+}
+
+/* Рисунок лежит поверх кружка и ничего не принимает на себя: клик по фишке
+   должен по-прежнему попадать в саму фишку, а не в её состояние. */
+.token__fx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Опутан: лоза обвивает фишку снизу, как и просили на карте. Помимо дуги
+   снизу две перекрещенные стебли: одна дуга читалась бы как зелёное кольцо. */
+.token__fx--vines::before {
+  content: '';
+  position: absolute;
+  left: -14%;
+  right: -14%;
+  top: 34%;
+  bottom: -10%;
+  border: 2px solid color-mix(in srgb, var(--ok) 72%, var(--bg-deep));
+  border-top-color: transparent;
+  border-radius: 46% 46% 50% 50%;
+  background:
+    linear-gradient(68deg, transparent 47%, var(--ok) 48% 52%, transparent 53%),
+    linear-gradient(-68deg, transparent 47%, var(--ok) 48% 52%, transparent 53%);
+  opacity: 0.9;
+}
+
+/* Листья на лозе: пять капель по дуге снизу. Радиус задан в пикселях, а не в
+   процентах: в процентах он считается от своих сторон и капли слипались в
+   сплошное пятно на вытянутом элементе. */
+.token__fx--vines::after {
+  content: '';
+  position: absolute;
+  left: -14%;
+  right: -14%;
+  top: 34%;
+  bottom: -10%;
+  background:
+    radial-gradient(circle 2.6px at 4% 78%, var(--ok) 2.6px, transparent 2.7px),
+    radial-gradient(circle 2.6px at 26% 94%, var(--ok) 2.6px, transparent 2.7px),
+    radial-gradient(circle 2.6px at 50% 100%, var(--ok) 2.6px, transparent 2.7px),
+    radial-gradient(circle 2.6px at 74% 94%, var(--ok) 2.6px, transparent 2.7px),
+    radial-gradient(circle 2.6px at 96% 78%, var(--ok) 2.6px, transparent 2.7px);
+}
+
+/* Парализован: молнии по краям фишки. */
+.token__fx--bolt::before,
+.token__fx--bolt::after {
+  content: '';
+  position: absolute;
+  top: 6%;
+  height: 62%;
+  width: 16%;
+  background: var(--gold);
+  clip-path: polygon(60% 0, 100% 0, 62% 44%, 100% 44%, 18% 100%, 42% 52%, 0 52%);
+  opacity: 0.9;
+}
+
+.token__fx--bolt::before { left: 2%; }
+.token__fx--bolt::after { right: 2%; transform: scaleY(-1); }
+
+/* Окаменел: короста по краям и каменный приглушённый круг. */
+.token__fx--stone::before {
+  content: '';
+  position: absolute;
+  inset: -4%;
+  border-radius: 50%;
+  border: 3px dotted color-mix(in srgb, var(--muted) 82%, var(--bg-deep));
+  opacity: 0.9;
+}
+
+.token--cond-petrified .token__circle {
+  filter: grayscale(0.7) contrast(0.9) brightness(1.06);
+}
+
+/* Оглушён: звёзды над головой. */
+.token__fx--dizzy::before {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: -16%;
+  height: 16px;
+  background:
+    radial-gradient(circle 2.8px at 12% 70%, var(--gold) 2.8px, transparent 2.9px),
+    radial-gradient(circle 3.2px at 50% 14%, var(--gold) 3.2px, transparent 3.3px),
+    radial-gradient(circle 2.8px at 88% 70%, var(--gold) 2.8px, transparent 2.9px);
+  animation: fx-dizzy 2.6s linear infinite;
+  transform-origin: 50% 100%;
+}
+
+/* Слепой: повязка поперёк кружка. */
+.token__fx--blindfold::before {
+  content: '';
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  top: 40%;
+  height: 20%;
+  background: var(--hp-plate);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+}
+
+/* Глухой: вата в ушах, две заглушки по краям. */
+.token__fx--deafened::before,
+.token__fx--deafened::after {
+  content: '';
+  position: absolute;
+  top: 28%;
+  width: 7px;
+  height: 44%;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 82%, var(--bg-deep));
+}
+
+.token__fx--deafened::before { left: 4%; }
+.token__fx--deafened::after { right: 4%; }
+
+/* Ослеплён: искры вокруг головы. */
+.token__fx--dazzled::before {
+  content: '';
+  position: absolute;
+  inset: -8%;
+  border-radius: 50%;
+  border: 2px dashed color-mix(in srgb, var(--gold) 60%, transparent);
+  animation: fx-spin 7s linear infinite;
+}
+
+/* Испуган: фишка дрожит, а вокруг неё бледный холодок. */
+.token__fx--frightened::before {
+  content: '';
+  position: absolute;
+  inset: -6%;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--info) 42%, transparent);
+}
+
+.token--cond-frightened .token__body {
+  animation: fx-shiver 0.45s ease-in-out infinite;
+}
+
+/* Схвачен: две лапы держат фишку за бока. */
+.token__fx--grappled::before,
+.token__fx--grappled::after {
+  content: '';
+  position: absolute;
+  top: 34%;
+  height: 34%;
+  width: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 68%, var(--bg-deep));
+}
+
+.token__fx--grappled::before { left: 2%; transform: rotate(12deg); }
+.token__fx--grappled::after { right: 2%; transform: rotate(-12deg); }
+
+/* Недееспособен: тяжёлая цепь поперёк фишки. */
+.token__fx--chained::before {
+  content: '';
+  position: absolute;
+  left: -8%;
+  right: -8%;
+  top: 56%;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--muted);
+  box-shadow:
+    -2px 0 0 0 var(--bg-deep), 8px 0 0 0 var(--muted), 8px 0 0 2px var(--bg-deep),
+    18px 0 0 0 var(--muted), 18px 0 0 2px var(--bg-deep);
+}
+
+/* Невидим: круг мерцает, отмечая, что фишка есть, но её не видно. */
+.token__fx--veil::before {
+  content: '';
+  position: absolute;
+  inset: -6%;
+  border-radius: 50%;
+  border: 2px dashed color-mix(in srgb, var(--text-dim) 46%, transparent);
+  animation: fx-pulse 2.4s var(--ease) infinite;
+}
+
+/* Отравлен: пузыри поднимаются снизу вверх. */
+.token__fx--poison::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle 4px at 28% 68%, var(--ok) 4px, transparent 4.1px),
+    radial-gradient(circle 3px at 58% 88%, var(--ok) 3px, transparent 3.1px),
+    radial-gradient(circle 2.4px at 84% 58%, var(--ok) 2.4px, transparent 2.5px);
+  animation: fx-poison 2.8s var(--ease) infinite;
+  opacity: 0.9;
+}
+
+/* Сбит с ног: фишка лежит на боку. */
+.token--cond-prone .token__body {
+  transform: rotate(74deg) scale(0.92);
+}
+
+.token__fx--prone::before {
+  content: '';
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  bottom: -6%;
+  height: 10px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-deep) 70%, transparent);
+  filter: blur(1px);
+}
+
+/* Состояние, отнимающее скорость: фишка не едет, и курсор должен сказать об
+   этом раньше, чем игрок потратит попытку на перетаскивание. */
+.token--bound {
+  cursor: not-allowed;
+}
+
+.token--bound .token__circle {
+  filter: saturate(0.85);
+}
+
+@keyframes fx-dizzy {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fx-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fx-shiver {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  25% { transform: translate(-1px, 1px) rotate(-1.5deg); }
+  50% { transform: translate(1px, -1px) rotate(1.5deg); }
+  75% { transform: translate(-1px, -1px) rotate(-1deg); }
+}
+
+@keyframes fx-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes fx-poison {
+  0% { transform: translateY(6%); opacity: 0.2; }
+  50% { opacity: 0.95; }
+  100% { transform: translateY(-14%); opacity: 0.1; }
+}
+
+/* Фишка-заготовка: игроки её не видят, но мастер должен отличать её от
+   готовой, иначе начнёт битву с тем, чего никто из игроков не видит.
+   Пунктир и приглушённость видны издалека и не мешают двигать. */
+.token--hidden {
+  opacity: 0.55;
+}
+
+.token--hidden .token__circle {
+  border-style: dashed;
+  border-color: var(--text-dim);
+  box-shadow: none;
+  filter: grayscale(0.7);
+}
+
+.token--hidden .token__label {
+  opacity: 0.7;
+}
+
+/* ------------------------------------------- Панель поверхности карты */
+
+.surface-panel__types {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+/* Образец цвета рядом с названием: «дым» и «лёд» различаются на глаз, а по
+   словам пришлось бы запоминать. Цвет ставится из правил: это содержимое
+   карты, а не оформление окна. */
+.surface-chip {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.surface-chip:hover {
+  border-color: var(--accent);
+}
+
+.surface-chip.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+.surface-chip__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.surface-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.surface-panel__brush {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.token-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 210px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.token-menu__item {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.token-menu__item:hover {
+  background: var(--surface-3);
+}
+
+.token-menu__item--danger {
+  color: var(--danger-text);
+}
+
+.token-menu__section {
+  padding: 6px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.token-menu__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+.token-list,
+.token-list__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.token-list__section {
+  margin-bottom: 10px;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  padding: 5px 7px;
+  background: var(--surface-2);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.token-row__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--accent);
+}
+
+.token-row__name {
+  flex: 1;
+  min-width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-row__meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Фишка со скрытым от игроков именем: в списке мастер имя ещё видит, но
+   помечено, чтобы не забыть, что подпись под фишкой не показывается. */
+.token-row--nameless .token-row__name {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Поиск по фишкам и фильтры. Появляются, когда фишек больше трёх: искать
+   среди двух бессмысленно, а поле на виду только занимает место. */
+.token-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.token-search__input {
+  width: 100%;
+}
+
+.token-search__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.token-filter.is-on {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.token-list__empty {
+  padding: 2px 2px 6px;
+}
+
+.token-form {
+  display: flex;
+  gap: 6px;
+}
+
+.token-form .input {
+  flex: 1;
+}
+
+.token-form__hp {
+  max-width: 88px;
+  flex: none;
+  text-align: center;
+  font-family: var(--font-num);
+}
+
+/* Прочность фишки: полоса, число и кнопки урона. */
+.token-hp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.token-hp__track {
+  width: 44px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--hp-track-soft);
+  overflow: hidden;
+}
+
+.token-hp__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--success, #6fb45f);
+  transition: width var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+/* Половина или меньше: ранен. */
+.token-hp.is-low .token-hp__fill {
+  background: var(--gold);
+}
+
+/* Ноль: павший. */
+.token-hp.is-down .token-hp__fill {
+  background: var(--danger);
+}
+
+.token-hp__value {
+  width: 48px;
+  padding: 2px 4px;
+  font-family: var(--font-num);
+  font-size: 12px;
+  text-align: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+}
+
+.token-hp__btn {
+  font-family: var(--font-num);
+  font-size: 11px;
+  padding: 2px 5px;
+}
+
+/* Массовые переключатели скрытости: конец подготовки или откат одним нажатием. */
+.token-bulk {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+
+.token-row--hidden .token-row__name {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.token-row--hidden .token-row__dot {
+  opacity: 0.45;
+}
+
+/* ------------------------------------------------- Спавн фишек из листов */
+
+.token-spawn {
+  margin-bottom: 10px;
+}
+
+.token-spawn__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.token-spawn__row:last-child {
+  border-bottom: none;
+}
+
+.token-spawn__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.token-spawn__meta {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.token-spawn .panel__title--sub {
+  margin-top: 0;
+}
+
+/* --------------------------------------------------------------- Чат */
+
+.chat__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chat__search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  font-size: 12.5px;
+}
+
+/* Счётчик найденного: без него непонятно, сработал поиск или нет. */
+.chat__search-count {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex: none;
+}
+
+/* Найденное подсвечиваем, ненайденное приглушаем: лента остаётся читаемой,
+   но пролистывать её больше не нужно. Приглушение, а не скрытие, потому что
+   правило почти всегда находят в контексте разговора. */
+.chat__msg.is-hit {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.chat__msg.is-miss {
+  opacity: 0.35;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.chat__log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.chat__msg {
+  padding: 6px 9px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border-strong);
+}
+
+.chat__msg--dm {
+  border-left-color: var(--gold);
+}
+
+.chat__msg--roll {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.badge--roll {
+  background: rgba(200, 117, 80, 0.18);
+  border-color: rgba(200, 117, 80, 0.5);
+  color: var(--accent-hover);
+}
+
+.chat__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.chat__author {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.chat__time {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.chat__text {
+  font-size: 13px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.chat__form {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.chat__form .input {
+  flex: 1;
+}
+
+/* --------------------------------------------------------------- Кубики */
+
+.dice__quick {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.dice__quick-btn {
+  font-family: var(--font-title);
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  padding: 6px 2px;
+}
+
+.dice__formula {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-title);
+  font-size: 15px;
+}
+
+.dice__reroll {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.dice__hidden {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.dice__hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  min-height: 15px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.dice__hint.is-error {
+  color: var(--danger);
+}
+
+.dice__last-value.is-secret,
+.dice__row-die.is-secret {
+  color: var(--muted);
+}
+
+.dice__controls {
+  display: flex;
+  gap: 8px;
+}
+
+.dice__controls .select {
+  width: 110px;
+  font-family: var(--font-title);
+  font-size: 15px;
+  text-align: center;
+}
+
+.dice__last {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+.dice__last-value {
+  font-family: var(--font-title);
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--gold);
+  transition: transform 0.2s ease;
+}
+
+.dice__last-value.is-pop {
+  transform: scale(1.35);
+}
+
+.dice__history {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.dice__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 5px 8px;
+  background: var(--surface-2);
+  border-radius: 6px;
+}
+
+.dice__row-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dice__row-die {
+  font-family: var(--font-title);
+  color: var(--muted);
+}
+
+.dice__row-result {
+  font-weight: 700;
+  color: var(--gold);
+  min-width: 26px;
+  text-align: right;
+}
+
+.dice__row-time {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------- Порядок боя */
+
+.initiative__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.initiative__actions .btn {
+  flex: 1;
+  min-width: 78px;
+  font-size: 12.5px;
+  padding: 6px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.initiative__form {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.initiative__form .select {
+  flex: 1;
+  min-width: 0;
+}
+
+.initiative__form .input {
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.initiative__modifier {
+  width: 64px;
+  flex: none;
+  text-align: center;
+  font-family: var(--font-num);
+}
+
+.initiative__status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.initiative__round {
+  font-family: var(--font-title);
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+.initiative__current {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.initiative__hint {
+  color: var(--muted);
+}
+
+.initiative__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 2px;
+}
+
+.initiative__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.initiative__row:hover {
+  border-color: var(--border);
+}
+
+/* Чей ход: подсветка и золотая цифра. Игрок видит то же, что мастер. */
+.initiative__row.is-current {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.initiative__index {
+  font-family: var(--font-num);
+  font-size: 15px;
+  color: var(--muted);
+  min-width: 16px;
+  text-align: center;
+}
+
+.initiative__row.is-current .initiative__index {
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.initiative__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.initiative__total {
+  font-family: var(--font-num);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--gold);
+  min-width: 26px;
+  text-align: right;
+}
+
+.initiative__modifier {
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: var(--muted);
+  min-width: 26px;
+  text-align: right;
+}
+
+.initiative__row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.initiative__row-actions .btn {
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+.initiative__stepper {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.initiative__stepper .btn {
+  flex: 1;
+  font-size: 12.5px;
+}

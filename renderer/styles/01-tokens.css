@@ -1,0 +1,449 @@
+/* ==================================================================
+ * Токены оформления.
+ * Палитра и живой слой тем. Всё, чем красится остальное.
+ *
+ * Файл выделен из styles.css без перестановки правил: порядок в CSS значим
+ * для правил одинаковой специфичности. Части обязаны подключаться по
+ * порядку номеров в index.html.
+ * ================================================================== */
+
+/* ==========================================================================
+   D&D Стол — оформление
+   Тёмная «настольная» тема: пергамент, бронза, обожжённая глина.
+   ========================================================================== */
+
+/*
+ * Палитра «Стандарт» — та, что была в приложении до тем.
+ *
+ * Каждая тема переопределяет один и тот же набор переменных, поэтому
+ * переключение не трогает разметку: цвета берутся оттуда, где и раньше.
+ * Отдельно вынесены поверхности, рамки, акцент и служебные цвета — если
+ * добавить новую тему, достаточно описать здесь те же поля.
+ */
+
+:root,
+[data-theme='standart'] {
+  --bg: #14100c;
+  --bg-deep: #0c0906;
+  --surface: #1e1811;
+  --surface-2: #262019;
+  --surface-3: #322a20;
+  --border: #3b2f22;
+  --border-strong: #55412c;
+  --text: #f0e6d6;
+  --text-dim: #c9b9a2;
+  --muted: #9a8874;
+  --accent: #c87550;
+  --accent-hover: #d98a63;
+  --accent-soft: rgba(200, 117, 80, 0.15);
+  --gold: #d9a441;
+  --danger: #b8473a;
+  --ok: #6fae5a;
+  --sheen: rgba(255, 226, 190, 0.06);
+  --hairline: rgba(255, 226, 190, 0.09);
+  --ring: rgba(217, 164, 65, 0.4);
+  --wash: rgba(217, 164, 65, 0.07);
+  /* Холодный синий: роль игрока, связи, тренировочный стол. */
+  --info: #6f8fc9;
+}
+
+
+/* ==========================================================================
+ * Смысловые цвета.
+ *
+ * Опасные кнопки, бейджи ролей, полоска прочности, отметка «показана
+ * игрокам» и прочее раньше красились числами прямо в правилах, поэтому во всех
+ * пяти темах выглядели одинаково: тема меняла панели, а смысловые вещи
+ * оставались прежними. Здесь роли описаны один раз и выведены из палитры
+ * темы, поэтому каждая тема получает свои значения сама.
+ *
+ * Единственное, что выбирается руками, это --info: оттенок роли игрока
+ * содержателен и из акцента не выводится.
+ * ========================================================================== */
+
+:root {
+  /* --- Опасное и тревожное --------------------------------------------- */
+  /* Текст опасного на панели: на тёмном фоне чистый красный нечитаем, и
+   * поэтому светлеет до --text. */
+  --danger-text: color-mix(in srgb, var(--danger) 52%, var(--text));
+  --danger-bright: color-mix(in srgb, var(--danger) 68%, var(--text));
+  /* Заливка под наведением: тот же опасный, но затемнённый. */
+  --danger-hover: color-mix(in srgb, var(--danger) 86%, #000);
+  --danger-soft: color-mix(in srgb, var(--danger) 18%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger) 45%, transparent);
+
+  /* --- Успех, включено, «в сети» ---------------------------------------- */
+  --ok-text: color-mix(in srgb, var(--ok) 50%, var(--text));
+  --ok-soft: color-mix(in srgb, var(--ok) 16%, transparent);
+  --ok-border: color-mix(in srgb, var(--ok) 45%, transparent);
+
+  /* --- Роль игрока и служебное ------------------------------------------ */
+  --info-text: color-mix(in srgb, var(--info) 56%, var(--text));
+  --info-soft: color-mix(in srgb, var(--info) 16%, transparent);
+  --info-border: color-mix(in srgb, var(--info) 45%, transparent);
+
+  /* --- Прочность фишки -------------------------------------------------- */
+  /* Плашка под числами и полоска: обе считаются от фона и текста темы, а не
+   * белым по белому, из-за чего на светлой поверхности пропадали. */
+  --hp-plate: color-mix(in srgb, var(--bg-deep) 82%, transparent);
+  --hp-track: color-mix(in srgb, var(--text) 16%, transparent);
+  --hp-track-soft: color-mix(in srgb, var(--text) 12%, transparent);
+
+  /* --- Мелочи со смыслом ------------------------------------------------ */
+  /* Точка «не в сети» и незаполненная вкладка карты: обе должны быть тише
+   * фона, а не выделяться. */
+  --off: color-mix(in srgb, var(--muted) 62%, var(--bg));
+  --dot-idle: color-mix(in srgb, var(--border-strong) 82%, var(--bg));
+  /* Опыт: золотой, как и остальное золото интерфейса. */
+  --expertise: color-mix(in srgb, var(--gold) 78%, var(--text));
+  --expertise-soft: color-mix(in srgb, var(--gold) 18%, transparent);
+  /* Затемнение под модальным окном и под заблокированным полем. */
+  --scrim: color-mix(in srgb, var(--bg-deep) 74%, transparent);
+--disabled-bg: color-mix(in srgb, var(--bg-deep) 26%, transparent);
+  /* Лёгкая подсветка строки под курсором: от текста, а не белым, иначе на
+     светлой теме строки выбеливались бы. */
+  --hover-wash: color-mix(in srgb, var(--text) 3%, transparent);
+  /* Тень под нажатой кнопкой: затемнение, а не серый, иначе на тёмной теме
+     кнопка на мгновение светлела вместо того, чтобы утонуть. */
+  --shadow-press: rgba(0, 0, 0, 0.45);
+/* Стена на карте: тёплая и светлее фона, чтобы её было видно и в
+     неосвещённой части. */
+  --wall: color-mix(in srgb, var(--gold) 32%, #fff);
+  /* Кольцо фокуса с клавиатуры: одно на весь интерфейс, иначе в половине
+     полей его нет вовсе. */
+  --focus-ring: var(--ring);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+}
+
+/*
+ * Запасное кольцо фокуса.
+ *
+ * Раньше фокус был описан в четырёх местах и четырьмя способами: кнопка
+ * красила рамку, поле подчёркивало себя, разделитель вставлял тень внутрь, а у
+ * элементов без своего правила не было ничего вовсе. С клавиатуры по таким
+ * элементам не видно, где курсор.
+ *
+ * Правило стоит в самом начале, и специальности у него ниже, чем у частных:
+ * поэтому оно запасное. Кнопка или поле с собственным оформлением фокуса
+ * останутся как были, а всё остальное перестанет быть слепым.
+ */
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--radius-sm);
+}
+
+/* Лес: прохладная зелень, тёмная хвоя и светлый мох. */
+[data-theme='les'] {
+  --bg: #0d1410;
+  --bg-deep: #070b09;
+  --surface: #141d17;
+  --surface-2: #1b261e;
+  --surface-3: #243127;
+  --border: #2b3c30;
+  --border-strong: #3e5745;
+  --text: #e3ece0;
+  --text-dim: #bccbb8;
+  --muted: #8ba089;
+  --accent: #6fae5a;
+  --accent-hover: #86c46f;
+  --accent-soft: rgba(111, 174, 90, 0.16);
+  --gold: #c8b06a;
+  --danger: #c05545;
+  --ok: #7fbd68;
+  --sheen: rgba(210, 240, 200, 0.05);
+  --hairline: rgba(210, 240, 200, 0.08);
+  --ring: rgba(111, 174, 90, 0.4);
+  --wash: rgba(111, 174, 90, 0.07);
+  /* Холодный синий: роль игрока, связи, тренировочный стол. */
+  --info: #6f9bc9;
+}
+
+/* Магия: чернильный фиолетовый и светящаясь лоза. */
+[data-theme='magiya'] {
+  --bg: #100c18;
+  --bg-deep: #08060f;
+  --surface: #181329;
+  --surface-2: #201a36;
+  --surface-3: #2a2245;
+  --border: #362b57;
+  --border-strong: #4c3d76;
+  --text: #ece6f8;
+  --text-dim: #c6bade;
+  --muted: #9a8cb8;
+  --accent: #9b7ce8;
+  --accent-hover: #b096f2;
+  --accent-soft: rgba(155, 124, 232, 0.18);
+  --gold: #d9b44a;
+  --danger: #c0506a;
+  --ok: #63b6a8;
+  --sheen: rgba(220, 210, 255, 0.07);
+  --hairline: rgba(220, 210, 255, 0.1);
+  --ring: rgba(155, 124, 232, 0.5);
+  --wash: rgba(155, 124, 232, 0.08);
+  /* Холодный синий: роль игрока, связи, тренировочный стол. */
+  --info: #8790d8;
+}
+
+/* Океан: глубокая вода, холодный свет и пена. */
+[data-theme='okean'] {
+  --bg: #0a1418;
+  --bg-deep: #050c0f;
+  --surface: #101d22;
+  --surface-2: #17282e;
+  --surface-3: #1f343c;
+  --border: #27414a;
+  --border-strong: #3a5b66;
+  --text: #e0eef1;
+  --text-dim: #b3cdd4;
+  --muted: #83a6b0;
+  --accent: #4ea3c4;
+  --accent-hover: #6bbcd9;
+  --accent-soft: rgba(78, 163, 196, 0.16);
+  --gold: #cdb878;
+  --danger: #c9564f;
+  --ok: #5cb894;
+  --sheen: rgba(200, 240, 255, 0.07);
+  --hairline: rgba(200, 240, 255, 0.09);
+  --ring: rgba(78, 163, 196, 0.45);
+  --wash: rgba(78, 163, 196, 0.08);
+  /* Холодный синий: роль игрока, связи, тренировочный стол. */
+  --info: #4e93c4;
+}
+
+/* Трактир: тёплое дерево, охра и свечной свет. */
+[data-theme='traktir'] {
+  --bg: #171009;
+  --bg-deep: #0d0805;
+  --surface: #21170e;
+  --surface-2: #2c1f13;
+  --surface-3: #39291a;
+  --border: #4a3520;
+  --border-strong: #6b4c2c;
+  --text: #f3e6cd;
+  --text-dim: #d2bd97;
+  --muted: #a8906d;
+  --accent: #d08a3c;
+  --accent-hover: #e5a25a;
+  --accent-soft: rgba(208, 138, 60, 0.18);
+  --gold: #e0b552;
+  --danger: #bf4a3c;
+  --ok: #79ac4e;
+  --sheen: rgba(255, 226, 170, 0.06);
+  --hairline: rgba(255, 226, 170, 0.1);
+  --ring: rgba(224, 181, 82, 0.45);
+  --wash: rgba(224, 181, 82, 0.08);
+  /* Холодный синий: роль игрока, связи, тренировочный стол. */
+  --info: #6f8ab9;
+}
+
+:root {
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 10px 30px var(--shadow-press);
+  /* Основной шрифт: спокойный и разборчивый. Системный, чтобы не тащить
+     в игру второй файл и не зависеть от того, что шрифт загрузится. */
+  --font: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Заголовочный шрифт: тонкая антиква в духе надписи на старинной книге.
+     Лежит рядом с интерфейсом (renderer/fonts) и содержит кириллицу,
+     поэтому русские заголовки набираются той же гарнитурой. */
+  --font-title: "Cormorant", Constantia, "Palatino Linotype", Georgia, serif;
+  /* Числа: та же антиква, но цифры в ней старшего покроя — кубик и
+     характеристика выглядят как вписанные в лист от руки. */
+  --font-num: "Cormorant", Constantia, Georgia, serif;
+  /* Характер заголовков: тема меняет начертание и разрядку, а не
+     сам шрифт. Так все темы звучат по-разному, но читаются одинаково. */
+  --title-weight: 600;
+  --title-tracking: 0.11em;
+
+  /*
+   * Движение. Общие настройки для всех тем: тема может переопределить
+   * easing, но длительности и характер анимаций одинаковы везде, иначе
+   * приложение в разных темах ощущалось бы разным.
+   */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-back: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --dur-fast: 130ms;
+  --dur: 240ms;
+  --dur-slow: 460ms;
+
+  /* Блик по верхней кромке поверхности: «металл», а не плоская заливка. */
+  --sheen: rgba(255, 255, 255, 0.055);
+  --hairline: rgba(255, 255, 255, 0.08);
+  /* Кольцо фокуса и цвет свечения вокруг активных элементов. */
+  --ring: rgba(200, 117, 80, 0.35);
+  /* Подложка фона: своя в каждой теме, иначе на чужом фоне сидел бы
+     цвет стандартной темы. */
+  --wash: rgba(200, 117, 80, 0.09);
+}
+
+/*
+ * Живой слой оформления: рамки, анимации и шрифты, связанные с тематикой.
+ *
+ * Каждая тема задаёт один и тот же набор переменных, поэтому базовые стили
+ * панелей и заголовков не меняются. Здесь описаны только характерные черты:
+ *   --frame      ширина и начертание рамки
+ *   --glow       цвет мягкого свечения
+ *   --shadow     палитра тени под панелью
+ *   --radius     скругление (у леса и океана разное)
+ *   --title-glow что происходит с заголовком
+ * Затем идут блоки [data-theme='…'], где описано поведение: рамки с двойной
+ * обводкой, уголки, покачивание, мерцание, волны.
+ */
+
+:root,
+[data-theme='standart'] {
+  --frame: 1px solid;
+  --frame-inner: 0 0;
+  --corner: 0 0;
+  --glow: rgba(200, 117, 80, 0.35);
+  --panel-shadow: 0 10px 30px var(--shadow-press);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --title-glow: none;
+  --title-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  /* Основной шрифт: спокойный и разборчивый. Системный, чтобы не тащить
+     в игру второй файл и не зависеть от того, что шрифт загрузится. */
+  --font: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Заголовочный шрифт: тонкая антиква в духе надписи на старинной книге.
+     Лежит рядом с интерфейсом (renderer/fonts) и содержит кириллицу,
+     поэтому русские заголовки набираются той же гарнитурой. */
+  --font-title: "Cormorant", Constantia, "Palatino Linotype", Georgia, serif;
+  /* Числа: та же антиква, но цифры в ней старшего покроя — кубик и
+     характеристика выглядят как вписанные в лист от руки. */
+  --font-num: "Cormorant", Constantia, Georgia, serif;
+  /* Характер заголовков: тема меняет начертание и разрядку, а не
+     сам шрифт. Так все темы звучат по-разному, но читаются одинаково. */
+  --title-weight: 600;
+  --title-tracking: 0.11em;
+}
+
+/* Лес: старые книги и почва. Крупные мягкие пятна света, что медленно ползут,
+   рамка чуть неровная, заголовок чуть дышит, как листва на ветру. */
+[data-theme='les'] {
+  --frame: 1px solid;
+  --frame-inner: 0 0;
+  --corner: 10px;
+  --glow: rgba(111, 174, 90, 0.32);
+  --panel-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(111, 174, 90, 0.06);
+  --radius: 14px 6px 14px 6px;
+  --radius-sm: 9px 5px 9px 5px;
+  --title-glow: 0 0 14px rgba(111, 174, 90, 0.35);
+  --title-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
+  --title-weight: 600;
+  --title-tracking: 0.09em;
+  --atmosphere: les;
+}
+
+/* Магия: чернила и свет. Двойная обводка, уголки светятся, по фону ползут
+   тусклые искры, заголовок мерцает. */
+[data-theme='magiya'] {
+  --frame: 1px solid;
+  --frame-inner: 0 0 0 3px rgba(155, 124, 232, 0.12);
+  --corner: 14px;
+  --glow: rgba(155, 124, 232, 0.55);
+  --panel-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), 0 0 22px rgba(155, 124, 232, 0.12);
+  --radius: 6px;
+  --radius-sm: 4px;
+  --title-glow: 0 0 16px rgba(155, 124, 232, 0.65);
+  --title-shadow: 0 0 3px rgba(155, 124, 232, 0.5);
+  /* Магия: тонко и просторно, как рукопись. */
+  --title-weight: 500;
+  --title-tracking: 0.16em;
+  --atmosphere: magiya;
+}
+
+/* Океан: гладкая вода. Панели почти без углов, мягкий блик по верхней кромке,
+   фон дышит волной, заголовок плавно переливается. */
+[data-theme='okean'] {
+  --frame: 1px solid;
+  --frame-inner: 0 0;
+  --corner: 18px;
+  --glow: rgba(78, 163, 196, 0.4);
+  --panel-shadow: 0 12px 34px var(--shadow-press), inset 0 1px 0 rgba(120, 210, 240, 0.12);
+  --radius: 20px;
+  --radius-sm: 14px;
+  --title-glow: 0 0 14px rgba(78, 163, 196, 0.4);
+  --title-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+  /* Океан: светло и просторно. */
+  --title-weight: 500;
+  --title-tracking: 0.13em;
+  --atmosphere: okean;
+}
+
+/* Трактир: дерево и свечи. Рамка толще и теплее, углы срезаны, фон мерцает
+   неровным светом, будто пламя. */
+[data-theme='traktir'] {
+  --frame: 2px solid;
+  --frame-inner: 0 0 0 2px rgba(208, 138, 60, 0.14);
+  --corner: 4px;
+  --glow: rgba(208, 138, 60, 0.45);
+  --panel-shadow: 0 14px 30px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(224, 181, 82, 0.08);
+  --radius: 4px;
+  --radius-sm: 3px;
+  --title-glow: 0 0 12px rgba(224, 181, 82, 0.35);
+  --title-shadow: 0 2px 4px rgba(0, 0, 0, 0.75);
+  /* Трактир: плотно и весомо, как надпись на вывеске. */
+  --title-weight: 700;
+  --title-tracking: 0.07em;
+  --atmosphere: traktir;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+body {
+  background-image:
+    radial-gradient(circle at 15% 0%, var(--wash), transparent 45%),
+    radial-gradient(circle at 90% 100%, var(--wash), transparent 52%);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-title);
+  font-weight: var(--title-weight);
+  letter-spacing: var(--title-tracking);
+  margin: 0;
+}
+
+code {
+  font-family: Consolas, "Courier New", monospace;
+  background: var(--surface-3);
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 12.5px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.hint {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: rgba(217, 164, 65, 0.07);
+  border-left: 3px solid var(--gold);
+  border-radius: 6px;
+}

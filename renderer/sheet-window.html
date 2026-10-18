@@ -9,7 +9,17 @@
     <title>Лист персонажа</title>
     <script src="theme.js"></script>
     <link rel="stylesheet" href="fonts/fonts.css" />
-    <link rel="stylesheet" href="styles.css" />
+    <!-- Оформление разбито на восемь частей по порядку номеров: CSS зависит
+         от порядка правил одинаковой специфичности, и перестановка частей
+         молча изменила бы вид. Правится файл целиком, читается по части. -->
+    <link rel="stylesheet" href="styles/01-tokens.css" />
+    <link rel="stylesheet" href="styles/02-screens.css" />
+    <link rel="stylesheet" href="styles/03-controls.css" />
+    <link rel="stylesheet" href="styles/04-layout.css" />
+    <link rel="stylesheet" href="styles/05-map.css" />
+    <link rel="stylesheet" href="styles/06-panels.css" />
+    <link rel="stylesheet" href="styles/07-sheet.css" />
+    <link rel="stylesheet" href="styles/08-theme-layer.css" />
   </head>
   <body class="sheet-window">
     <div id="toasts" class="toasts"></div>

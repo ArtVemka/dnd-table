@@ -360,7 +360,7 @@
       sheets: {},
       maps: emptyMaps(),
       activeMap: null,
-      grid: { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
+      grid: { enabled: false, cell: DnD.GRID.defaultCell, columns: 0, feetPerCell: DnD.GRID.defaultFeetPerCell },
       tokens: [],
       /** Порядок боя. Тренировочный стол — тоже стол: порядок нужен и здесь. */
       initiative: { entries: [], turnId: null, round: 1 },
@@ -439,6 +439,24 @@
         : (slot.items.find((entry) => entry.id === slot.activeId) || slot.items[0]);
     };
 
+    /**
+     * Рассылает вкладку карт целиком.
+     *
+     * Отдельная функция, потому что смена карты, туман и освещение правятся
+     * одинаково: правится карта, а уходит снимок вкладки. Семь копий одного
+     * и того же блока разошлись бы при первом же новом поле карты.
+     * @param {string} type
+     */
+    const pushMap = (type) => {
+      const slot = state.maps[type];
+      emitTo('mapUpdated', {
+        type,
+        items: (slot.items || []).map((entry) => ({ ...entry })),
+        activeId: slot.activeId,
+        activeMap: state.activeMap
+      });
+    };
+
     const cloneInitiative = () => ({
       entries: state.initiative.entries.map((entry) => ({ ...entry })),
       turnId: state.initiative.turnId,
@@ -509,6 +527,8 @@
           id: newId('m'),
           url: payload.image.trim(),
           name: sanitizeText(payload.name, MAP_NAME_MAX).trim() || 'Карта',
+          // Поверхность пустая, но поле есть: мазок рисуется сразу же.
+          surface: { cells: {} },
           uploadedAt: new Date().toISOString()
         };
         slot.items.push(map);
@@ -604,6 +624,138 @@
         });
       },
 
+      /**
+       * Освещение на тренировочном столе.
+       *
+       * Смысл настоящий, а не заглушка: тренировочный стол нужен, чтобы
+       * проверить, что стены держат свет, не поднимая стола. Работает всё,
+       * кроме раздачи источников другим участникам, — их тут нет.
+       */
+      setMapDarkness(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        const value = Number(payload.darkness);
+        if (!Number.isFinite(value)) return;
+        item.darkness = Math.max(0, Math.min(1, value));
+        pushMap(payload.type);
+      },
+
+      addMapWall(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        const wall = DnD.normalizeWall({
+          id: payload.wallId || `local-${Date.now()}`,
+          x1: payload.x1,
+          y1: payload.y1,
+          x2: payload.x2,
+          y2: payload.y2
+        });
+        if (!wall) return;
+        item.walls = DnD.normalizeWalls([...(item.walls || []), wall]);
+        pushMap(payload.type);
+      },
+
+      deleteMapWall(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        item.walls = DnD.normalizeWalls(item.walls).filter((wall) => wall.id !== payload.wallId);
+        pushMap(payload.type);
+      },
+
+      clearMapWalls(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        item.walls = [];
+        pushMap(payload.type);
+      },
+
+      addMapLight(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        const light = DnD.normalizeLight({
+          id: payload.lightId || `local-${Date.now()}`,
+          x: payload.x,
+          y: payload.y,
+          radius: payload.radius,
+          color: payload.color
+        });
+        if (!light) return;
+        item.lights = DnD.normalizeLights([...(item.lights || []), light]);
+        pushMap(payload.type);
+      },
+
+      setMapLight(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        item.lights = DnD.normalizeLights(item.lights).map((light) => (
+          light.id === payload.lightId
+            ? DnD.normalizeLight({
+              id: light.id,
+              x: payload.x !== undefined ? payload.x : light.x,
+              y: payload.y !== undefined ? payload.y : light.y,
+              radius: payload.radius !== undefined ? payload.radius : light.radius,
+              color: payload.color !== undefined ? payload.color : light.color,
+              dim: payload.dim !== undefined ? payload.dim : light.dim,
+              hidden: payload.hidden !== undefined ? payload.hidden : light.hidden
+            })
+            : light
+        ));
+        pushMap(payload.type);
+      },
+
+      deleteMapLight(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        item.lights = DnD.normalizeLights(item.lights).filter((light) => light.id !== payload.lightId);
+        pushMap(payload.type);
+      },
+
+      setTokenLight(payload) {
+        const token = findToken(payload && payload.tokenId);
+        if (!token) return;
+        const radius = Number(payload.radius);
+        if (!Number.isFinite(radius) || radius < 0) return;
+        const preset = DnD.LIGHT_PRESETS.find((item) => item.radius === Math.round(radius));
+        token.light = {
+          radius: Math.round(radius),
+          color: typeof payload.color === 'string' ? payload.color : (preset ? preset.color : '#ffb347')
+        };
+        emitTo('tokenUpdated', { ...token });
+      },
+
+      /** Поверхность карты: мазок кладётся прямо в карту, как у настоящего стола. */
+      paintMapSurface(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item || !Array.isArray(payload.cells)) return;
+        item.surface = DnD.normalizeSurface(item.surface);
+        item.surface.cells = { ...item.surface.cells };
+        for (const entry of payload.cells.slice(0, 400)) {
+          if (!Array.isArray(entry) || entry.length !== 3) continue;
+          const col = Number(entry[0]);
+          const row = Number(entry[1]);
+          if (!Number.isInteger(col) || !Number.isInteger(row) || col < 0 || row < 0) continue;
+          const key = `${col},${row}`;
+          const kind = entry[2] === null ? '' : String(entry[2]);
+          if (kind && !DnD.SURFACE_IDS.has(kind)) continue;
+          if (kind) item.surface.cells[key] = kind;
+          else delete item.surface.cells[key];
+        }
+        pushMap(payload.type);
+      },
+
+      clearMapSurface(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        item.surface = { cells: {} };
+        pushMap(payload.type);
+      },
+
+      /** Режим боя в тренировочном столе: ход по клеткам включается на месте. */
+      setCombatMode(payload) {
+        state.combat = { enabled: Boolean(payload && payload.enabled) };
+        emitTo('combatMode', { ...state.combat });
+      },
+
       setActiveMap(payload) {
         const type = payload.type;
         if (!DnD.MAP_TYPES.includes(type)) {
@@ -656,7 +808,8 @@
           color: TOKEN_COLORS[state.tokens.length % TOKEN_COLORS.length],
           // Прочность необязательна: пустое поле у формы — метка без здоровья.
           maxHp: Number(payload.maxHp) > 0 ? Math.min(9999, Math.round(Number(payload.maxHp))) : null,
-          conditions: []
+          conditions: [],
+          hideLabels: false
         };
         token.hp = token.maxHp;
         state.tokens.push(token);
@@ -757,6 +910,25 @@
 
       setAllTokensHidden() {
         emitTo('errorMessage', { message: 'В тренировочном столе скрывать нечего — вы и есть мастер' });
+      },
+
+      /** Скрытие имени: здесь скрывать не от кого, поэтому только понятный отказ. */
+      setTokenNameHidden() {
+        emitTo('errorMessage', { message: 'В тренировочном столе скрывать нечего — вы и есть мастер' });
+      },
+
+      /**
+       * Подписи в тренировочном столе убрать можно: мастер один, и если подписи
+       * мешают на тестовой карте, он вправе их убрать.
+       */
+      setTokenLabelsHidden(payload) {
+        const token = findToken(payload.tokenId);
+        if (!token) {
+          emitTo('errorMessage', { message: 'Фишка не найдена' });
+          return;
+        }
+        token.hideLabels = !(payload.hidden === false);
+        emitTo('tokenUpdated', token);
       },
 
       moveToken(payload) {

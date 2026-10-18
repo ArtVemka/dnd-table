@@ -206,6 +206,19 @@ function assertAppNotRunning() {
  * совсем в другом месте. Копируем сами: так любая проблема видна сразу, а
  * счётчик перенесённых файлов попадает в отчёт сборки.
  */
+/**
+ * Копирует папку сборки в комплект для отправки.
+ *
+ * Файл пропускается, если он уже того же размера и той же давности: сборка
+ * меняет единицы файлов, а переписывание всех остальных заново каждый раз
+ * заставляло антивирус заново брать их в свои руки. Ровно та же причина была у
+ * падения упаковки с «used by another process»: файл перезаписывали за секунду
+ * до неё, и Windows отдавал его антивирусу, а не упаковщику.
+ *
+ * @param {string} src Откуда копируем.
+ * @param {string} dest Куда.
+ * @returns {number} Сколько файлов переписано.
+ */
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   let copied = 0;
@@ -214,12 +227,47 @@ function copyDir(src, dest) {
     const to = path.join(dest, entry.name);
     if (entry.isDirectory()) {
       copied += copyDir(from, to);
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() && !isSameFile(from, to)) {
       fs.copyFileSync(from, to);
       copied += 1;
     }
   }
   return copied;
+}
+
+/**
+ * Тот же файл или нет: размер совпадает, и запись не менялась.
+ *
+ * Время округляется до секунды: у copyFileSync и у исходника разная точность
+ * метки, и при сравнении «как есть» файл никогда не считался бы тем же самым.
+ * @param {string} from
+ * @param {string} to
+ * @returns {boolean}
+ */
+function isSameFile(from, to) {
+  try {
+    const source = fs.statSync(from);
+    const target = fs.statSync(to);
+    return source.size === target.size
+      && Math.floor(source.mtimeMs / 1000) === Math.floor(target.mtimeMs / 1000);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Сколько файлов в папке.
+ * @param {string} dir
+ * @returns {number}
+ */
+function countFiles(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const from = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += countFiles(from);
+    else if (entry.isFile()) total += 1;
+  }
+  return total;
 }
 
 function copyApp() {
@@ -232,13 +280,18 @@ function copyApp() {
   fs.mkdirSync(releaseApp, { recursive: true });
   // Копируем файлы поверх, НЕ удаляя папку: внутри лежит data с кампаниями,
   // картами и картинками фишек. Обновление сборки не должно их терять.
-  const copied = copyDir(distUnpacked, releaseApp);
-  if (!copied) {
+  //
+  // Переписанных файлов может оказаться ноль, и это нормально: комплект уже
+  // совпадает с последней сборкой. Пустой папкой сборка считается только по
+  // числу найденных в ней файлов, а не по числу скопированных.
+  const seen = countFiles(distUnpacked);
+  if (!seen) {
     throw new Error(
-      `Копирование ничего не перенесло из ${distUnpacked} — папка сборки пуста или недоступна.`
+      `Копировать нечего: в папке сборки ${distUnpacked} нет ни одного файла.`
     );
   }
-  return copied;
+  const copied = copyDir(distUnpacked, releaseApp);
+  return { copied, seen };
 }
 
 const DATA_NOTE = 'Сюда игра складывает кампании и все загруженные картинки.\r\n'
@@ -272,10 +325,11 @@ function sleepSync(ms) {
  *
  * Сразу после копирования сборки exe ещё держат Windows и антивирус (файл
  * только что перезаписан), и Compress-Archive падает с «used by another
- * process». Через несколько секунд файл освобождается, поэтому пробуем ещё раз,
- * а не заставляем человека запускать сборку повторно.
+ * process». Файл освобождается не через несколько секунд, а через десятки: на
+ * этой машине held-файл возвращался только через минуту. Поэтому ждём дольше и
+ * делаем больше попыток, а не заставляем человека запускать сборку повторно.
  */
-function compressArchive(attempts = 3, delayMs = 5000) {
+function compressArchive(attempts = 5, delayMs = 15000) {
   for (let attempt = 1; ; attempt += 1) {
     try {
       if (process.platform === 'win32') {
@@ -389,7 +443,7 @@ function main() {
   const campaignsDir = path.join(releaseApp, 'data', 'campaigns');
   const campaignsBefore = fs.existsSync(campaignsDir) ? fs.readdirSync(campaignsDir).length : 0;
 
-  const copiedFiles = copyApp();
+  const copied = copyApp();
   preparePortableBits();
   makeZip();
 
@@ -399,7 +453,7 @@ function main() {
 
   console.log('\nГотово к отправке\n');
   console.log(`  Папка:  ${releaseApp}`);
-  console.log(`  Файлов перенесено из сборки: ${copiedFiles}`);
+  console.log(`  Файлов в сборке: ${copied.seen}, перенесено заново: ${copied.copied}`);
   console.log(`  Игра:   ${path.join(releaseApp, exeName)}`);
   console.log(`  Архив:  ${zipPath} (${zipSize} МБ)`);
   console.log(`  Данные: ${path.join(releaseApp, 'data')} — поедут вместе с папкой`);

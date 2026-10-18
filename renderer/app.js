@@ -22,8 +22,19 @@
   const ADDRESSES_COLLAPSED_KEY = 'dnd-table.addressesCollapsed';
   const LEFT_COLLAPSED_KEY = 'dnd-table.leftPanelCollapsed';
   const RIGHT_COLLAPSED_KEY = 'dnd-table.rightPanelCollapsed';
-  /** Размеры клетки сетки, которые предлагаются в настройках (в пикселях). */
-  const CELL_CHOICES = [32, 46, 56, 72, 96];
+  /** Какая вкладка правой колонки была открыта в прошлый раз. */
+  const ACTIVE_TAB_KEY = 'dnd-table.activeTab';
+  /** Ширина правой колонки в пикселях: её тянут мышью, а результат переживает
+   *  перезапуск, иначе пришлось бы подстраивать её заново каждую партию. */
+  const RIGHT_WIDTH_KEY = 'dnd-table.rightWidth';
+  const RIGHT_WIDTH_MIN = 300;
+  const RIGHT_WIDTH_MAX = 760;
+  const RIGHT_HEIGHT_MIN = 150;
+  const RIGHT_HEIGHT_MAX = 720;
+  /** Где стоит панель вкладок: сбоку у карты или под ней. */
+  const RIGHT_PANEL_POS_KEY = 'dnd-table.rightPanelPos';
+  /** Высота панели, когда она стоит под картой. */
+  const RIGHT_HEIGHT_KEY = 'dnd-table.rightHeight';
 
 /**
  * Пределы истории на клиенте. Те же числа, что у сервера: так память у всех
@@ -49,7 +60,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       sheets: {},
       maps: normalizeMapSlots(null),
       activeMap: null,
-      grid: { enabled: false, cell: 46 },
+grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetPerCell, offsetX: 0, offsetY: 0 },
       tokens: [],
       diceHistory: [],
       chatHistory: []
@@ -86,6 +97,7 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
   let dicePanel = null;
   let tokenPanel = null;
 let initiativePanel = null;
+let surfacePanel = null;
 /**
  * Редактор листа на экране подготовки. Лист сохраняется в библиотеку сам, при
  * правке поля, поэтому сохранять его нужно помнить только между открытиями.
@@ -625,6 +637,7 @@ let chosenSheetId = null;
     socket.on('playersUpdate', (players) => {
       app.room.players = players || [];
       playersList.render(app.room.players, viewer());
+      playersList.renderSelfAvatar({ avatarUrl: ownAvatarOf('dm'), name: dmName() });
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
       // Список выбора в панели боя собран из игроков и фишек: новый участник
       // должен появиться в нём сразу.
@@ -667,6 +680,10 @@ let chosenSheetId = null;
       };
       app.room.activeMap = activeMap;
       mapView.render(app.room, viewer());
+      // Панель поверхности считает клетки по карте, а карта меняется и после
+      // мазка, и после чужой правки: без пересчёта счётчик и кнопка очистки
+      // говорили бы о пустой карте, на которой стоит лужа.
+      renderSurfacePanel();
     });
 
     socket.on('gridUpdated', (grid) => {
@@ -753,6 +770,13 @@ let chosenSheetId = null;
     socket.on('initiativeUpdated', (initiative) => {
       app.room.initiative = initiative || { entries: [], turnId: null, round: 1 };
       renderInitiativePanel();
+    });
+
+    // Режим боя приходит отдельным событием: мастер щёлкнул переключателем или
+    // бой начался сам после броска инициативы.
+    socket.on('combatMode', (combat) => {
+      app.room.combat = combat || { enabled: false };
+      renderAll();
     });
 
     socket.on('diceRollResult', (roll) => {
@@ -945,25 +969,48 @@ let chosenSheetId = null;
         onToggleGrid: (enabled) => emit('setGrid', {
           enabled,
           cell: app.room.grid.cell,
-          columns: app.room.grid.columns || 0
+          columns: app.room.grid.columns || 0,
+          feetPerCell: app.room.grid.feetPerCell || DnD.GRID.defaultFeetPerCell,
+          offsetX: app.room.grid.offsetX || 0,
+          offsetY: app.room.grid.offsetY || 0
         }),
-        onRenameToken: async (token) => {
-          const name = await modal({
-            title: 'Имя фишки',
-            input: { value: token.name, maxLength: DnD.LIMITS.maxNameLength },
-            confirmLabel: 'Сохранить'
-          });
-          if (name) emit('renameToken', { tokenId: token.id, name });
-        },
+        // Режим боя: ход по клеткам. Включает мастер, сервер проверяет.
+        onSetCombatMode: (enabled) => emit('setCombatMode', { enabled }),
+        onRenameToken: renameToken,
         onAssignToken: (tokenId, playerId) => emit('assignTokenToPlayer', { tokenId, playerId }),
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
         // Туман войны: карта уезжает на сервер целиком, маской на месте.
         onOpenMapFog: (type, mapId, x, y, radius) => emit('openMapFog', { type, mapId, x, y, radius }),
         onSetMapFog: (type, mapId, open) => emit('setMapFog', { type, mapId, open }),
+        // Освещение: правка только мастерская, сервер проверяет это сам.
+        onSetMapDarkness: (type, mapId, darkness) => emit('setMapDarkness', { type, mapId, darkness }),
+        onAddMapWall: (type, mapId, wall) => emit('addMapWall', {
+          type, mapId, wallId: wall.id, x1: wall.x1, y1: wall.y1, x2: wall.x2, y2: wall.y2
+        }),
+        onDeleteMapWall: (type, mapId, wallId) => emit('deleteMapWall', { type, mapId, wallId }),
+        onClearMapWalls: (type, mapId) => emit('clearMapWalls', { type, mapId }),
+        onAddMapLight: (type, mapId, light) => emit('addMapLight', {
+          type,
+          mapId,
+          lightId: light.id,
+          x: light.x,
+          y: light.y,
+          radius: light.radius,
+          color: light.color,
+          // Тусклость нового источника: без неё сервер поставил бы яркий свет,
+          // и только что поставленная заготовка стала бы видна всем сразу.
+          dim: Boolean(light.dim)
+        }),
+        onSetMapLight: (type, mapId, lightId, patch) => emit('setMapLight', { type, mapId, lightId, ...patch }),
+        onDeleteMapLight: (type, mapId, lightId) => emit('deleteMapLight', { type, mapId, lightId }),
+        // Поверхность карты: мазок уходит по отпусканию мыши, пачкой клеток.
+        onPaintSurface: (type, mapId, cells) => emit('paintMapSurface', { type, mapId, cells }),
         // Тот же спавн, что и в панели участников: одно действие на оба места.
         onSpawnFromSheet: spawnTokenFromSheet,
         // Скрытость решает только мастер, но сервер всё равно проверяет.
         onToggleTokenHidden: (tokenId, hidden) => emit('setTokenHidden', { tokenId, hidden }),
+        onToggleTokenNameHidden: (tokenId, hidden) => emit('setTokenNameHidden', { tokenId, hidden }),
+        onToggleTokenLabelsHidden: (tokenId, hidden) => emit('setTokenLabelsHidden', { tokenId, hidden }),
         onSetAllTokensHidden: (hidden) => emit('setAllTokensHidden', { hidden }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
@@ -987,6 +1034,10 @@ let chosenSheetId = null;
         // Своё имя меняется из своей же строки в списке: там, где видно,
         // что оно «Мастер», и хочется поменять.
         onRenameSelf: askMyName,
+        // Портрет мастера живёт здесь же, над списком: листа персонажа у него
+        // нет, а портрет нужен рядом с именем и у бросков в чате.
+        onAvatarPick: uploadAvatar,
+        onAvatarClear: () => emit('setAvatar', { image: null }),
         resolveUrl: assetUrl
       });
     }
@@ -1007,19 +1058,8 @@ let chosenSheetId = null;
         canRollHidden: () => app.role === 'dm'
       });
     }
-    /**
-   * Идентификатор карты, открытой в своей вкладке: фишка создаётся именно на
-   * ней, иначе на вкладке с несколькими картами она показывалась бы везде.
-   * @returns {string}
-   */
-  function activeMapId() {
-    const type = app.room.activeMap || 'world';
-    const slot = (app.room.maps || {})[type] || { items: [] };
-    const active = (slot.items || []).find((item) => item.id === slot.activeId) || slot.items[0];
-    return (active && active.id) || '';
-  }
 
-  if (!tokenPanel) {
+    if (!tokenPanel) {
       tokenPanel = new TokenPanel($('#tab-tokens'), {
         // Прочность необязательна: пустое поле — фишка-метка без здоровья.
         onCreate: (name, maxHp) => emit('createToken', {
@@ -1031,6 +1071,15 @@ let chosenSheetId = null;
         mapId: activeMapId()
       }),
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
+        // Свет фишки: факел в руке. Дальность в футах, как в правилах.
+        onSetTokenLight: (tokenId, radius, color) => emit('setTokenLight', { tokenId, radius, color }),
+        // Переименование, назначение игроку и вывод фишки из листа работают и
+        // здесь, а не только на карте: правый клик по строке списка ведёт себя
+        // так же, как правый клик по фишке. Без этих трёх обработчиков кнопки
+        // в списке молча ничего не делали — меню на карте их закрывало.
+        onRenameToken: renameToken,
+        onAssignToken: (tokenId, playerId) => emit('assignTokenToPlayer', { tokenId, playerId }),
+        onSpawnFromSheet: spawnTokenFromSheet,
         // Прочность ведёт мастер: игрок правит своё здоровье в листе, и две
         // правки одного числа за столом разошлись бы.
         onSetTokenHp: (tokenId, hp) => emit('setTokenHp', { tokenId, hp }),
@@ -1040,6 +1089,9 @@ let chosenSheetId = null;
         // Обработчики нужны и здесь, и в карте: правый клик по фишке и кнопки
         // в списке должны делать одно и то же.
         onToggleTokenHidden: (tokenId, hidden) => emit('setTokenHidden', { tokenId, hidden }),
+        onToggleTokenNameHidden: (tokenId, hidden) => emit('setTokenNameHidden', { tokenId, hidden }),
+        onToggleTokenLabelsHidden: (tokenId, hidden) => emit('setTokenLabelsHidden', { tokenId, hidden }),
+        onSetTokenLight: (tokenId, radius, color) => emit('setTokenLight', { tokenId, radius, color }),
         onSetAllTokensHidden: (hidden) => emit('setAllTokensHidden', { hidden }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
@@ -1062,7 +1114,6 @@ let chosenSheetId = null;
         // Спасбросок смерти считает сервер: клиент не решает, успех это или нет.
         onDeathSave: () => emit('rollDeathSave', {}),
         onResetDeathSaves: () => emit('resetDeathSaves', {}),
-        onPlayerChange: (playerId) => openPlayerSheet(playerId),
         onBack: () => closePlayerSheet(),
         onDetach: () => detachSheet(),
         onAvatarPick: uploadAvatar,
@@ -1084,6 +1135,48 @@ let chosenSheetId = null;
         onReset: () => emit('initiativeReset', {})
       });
     }
+    if (!surfacePanel) {
+      surfacePanel = new window.TableUI.SurfacePanel($('#tab-surface'), {
+        // Кисть включается на карте, а инструмент выбирается здесь: мазок идёт
+        // по клеткам, а что именно мазать — дело мастера.
+        onPick: (type) => {
+          mapView.setSurfaceTool(type);
+          renderSurfacePanel();
+        },
+        onBrush: (brush) => { mapView.surfaceBrush = brush; },
+        onErase: () => {
+          mapView.setSurfaceTool(mapView.surfaceTool === '' ? null : '');
+          renderSurfacePanel();
+        },
+        onClear: () => {
+          const type = mapView.viewedMap;
+          const mapId = mapView.currentMapId;
+          if (!type || !mapId) return toast('Откройте карту: поверхность живёт на ней', 'error');
+          emit('clearMapSurface', { type, mapId });
+        }
+      });
+    }
+  }
+
+  /**
+   * Перерисовывает панель поверхности.
+   *
+   * Панель и карта знают об инструменте оба: выбрали в панели — включилась кисть
+   * на карте, выключили кисть на карте — панель это видна.
+   */
+  function renderSurfacePanel() {
+    if (!surfacePanel) return;
+    // Рисует мастер: игроку вкладка не нужна, он поверхность только видит.
+    const button = document.querySelector('.tabs__btn[data-tab="surface"]');
+    if (button) button.hidden = app.role !== 'dm' || app.training;
+    if (app.role !== 'dm' || app.training) return;
+    const map = mapView.mapOf(mapView.viewedMap);
+    const painted = map && map.surface && map.surface.cells ? Object.keys(map.surface.cells).length : 0;
+    surfacePanel.render({
+      tool: mapView.surfaceTool,
+      brush: mapView.surfaceBrush,
+      painted
+    });
   }
 
   /**
@@ -1136,6 +1229,24 @@ let chosenSheetId = null;
   }
 
   /**
+   * Идентификатор карты, открытой в своей вкладке: фишка создаётся именно на
+   * ней, иначе на вкладке с несколькими картами она показывалась бы везде.
+   *
+   * Функция живёт здесь, рядом с вызывающей, а не внутри `if (!dicePanel)`.
+   * Там она была вложена в блок создания панели, а такой блок выполняется
+   * ровно один раз за жизнь окна: после первого рендера функции не
+   * существовало, и кнопка вывода фишки падала с ReferenceError, не выдав
+   * ни ошибки, ни сокета.
+   * @returns {string}
+   */
+  function activeMapId() {
+    const type = app.room.activeMap || 'world';
+    const slot = (app.room.maps || {})[type] || { items: [] };
+    const active = (slot.items || []).find((item) => item.id === slot.activeId) || slot.items[0];
+    return (active && active.id) || '';
+  }
+
+  /**
    * Выводит фишку игрока на текущую карту из его листа: с именем персонажа,
    * аватаром и сразу назначением.
    *
@@ -1152,15 +1263,38 @@ let chosenSheetId = null;
     });
   }
 
+  /**
+   * Переименование фишки одним окном.
+   *
+   * Вызывается из трёх мест: правый клик по фишке на карте, двойной клик по ней
+   * же и правая кнопка по строке в списке. Отдельная функция нужна, потому что
+   * окно одно, а мест три: свой экземпляр в каждом месте разошёлся бы с
+   * предыдущим при первой же правке подписи.
+   * @param {object} token
+   */
+  async function renameToken(token) {
+    if (!token) return;
+    const name = await modal({
+      title: 'Имя фишки',
+      input: { value: token.name, maxLength: DnD.LIMITS.maxNameLength },
+      confirmLabel: 'Сохранить'
+    });
+    if (name) emit('renameToken', { tokenId: token.id, name });
+  }
+
   function renderAll() {
     const ctx = viewer();
     playersList.render(app.room.players, ctx);
+    // Портрет мастера стоит над списком участников: лист у него чужой, а
+    // портрет нужен рядом с именем и у бросков в чате.
+    playersList.renderSelfAvatar({ avatarUrl: ownAvatarOf('dm'), name: dmName() });
     mapView.render(app.room, ctx);
     chatPanel.renderAll(app.room.chatHistory, app.chatQuery);
     dicePanel.renderAll(app.room.diceHistory);
     tokenPanel.render(app.room.tokens, app.room.players, ctx);
     renderInitiativePanel();
     renderAdventurePanel();
+    renderSurfacePanel();
     updateTableHeader();
     updateRoleUi();
     refreshSheetView(true);
@@ -1656,7 +1790,8 @@ let chosenSheetId = null;
    * ------------------------------------------------------------------ */
 
   let settingsGridInput = null;
-  let settingsCellSelect = null;
+  let settingsGridFields = null;
+  let settingsPanelPosition = null;
 
   /**
    * Окно настроек — одно и то же на главном экране и за столом.
@@ -1756,12 +1891,33 @@ let chosenSheetId = null;
 
     const tableBox = el('div', 'box');
     tableBox.appendChild(el('div', 'box__title', 'Стол'));
+
+    // Положение панели вкладок. На широком мониторе удобнее сбоку, на высоком
+    // под картой: выбирает мастер, и выбор переживает перезапуск.
+    const positionRow = el('div', 'settings__row');
+    const positionSelect = el('select', 'select settings__select');
+    positionSelect.dataset.setting = 'panelPosition';
+    for (const [value, label] of [['right', 'Справа от карты'], ['bottom', 'Снизу под картой']]) {
+      const option = el('option', null, label);
+      option.value = value;
+      if (value === rightPanelPosition()) option.selected = true;
+      positionSelect.appendChild(option);
+    }
+    positionSelect.addEventListener('change', () => {
+      applyPanelPosition(positionSelect.value);
+      if (settingsPanelPosition) settingsPanelPosition.value = positionSelect.value;
+    });
+    positionRow.appendChild(el('span', 'muted', 'Панель вкладок'));
+    positionRow.appendChild(positionSelect);
+    tableBox.appendChild(positionRow);
+    settingsPanelPosition = positionSelect;
+
     const isDm = app.role === 'dm' && app.connected;
     // В тренировочном столе ДМа нет, но сетку и размер клетки там проверяют
     // так же, поэтому настройки доступны и в нём.
     const canManageGrid = isDm || app.training;
 
-    const gridRow = el('div', 'settings__row');
+const gridRow = el('div', 'settings__row');
     const gridLabel = el('label', 'settings__check');
     const gridInput = el('input');
     gridInput.type = 'checkbox';
@@ -1771,56 +1927,130 @@ let chosenSheetId = null;
     gridLabel.appendChild(gridInput);
     gridLabel.appendChild(el('span', null, 'Сетка на карте'));
     gridRow.appendChild(gridLabel);
-
-    const cellSelect = el('select', 'select settings__select');
-    cellSelect.dataset.setting = 'cell';
-    const choices = CELL_CHOICES.includes(app.room.grid.cell)
-      ? CELL_CHOICES
-      : CELL_CHOICES.concat([app.room.grid.cell]).sort((a, b) => a - b);
-    for (const cell of choices) {
-      const option = el('option', null, `клетка ${cell} px`);
-      option.value = String(cell);
-      if (cell === app.room.grid.cell) option.selected = true;
-      cellSelect.appendChild(option);
-    }
-    cellSelect.disabled = !canManageGrid;
-    gridRow.appendChild(cellSelect);
+    const gridOnOff = el('span', 'muted', app.room.grid.enabled ? 'видна всем' : 'скрыта');
+    gridRow.appendChild(gridOnOff);
     tableBox.appendChild(gridRow);
 
     // Подгонка сетки под карту: мастер говорит, сколько клеток укладывается
     // по ширине, а размер клетки считается от настоящей ширины подложки.
     // Так сетка ровная на любой карте, и фишка всегда занимает ровно клетку.
+    //
+    // Шаг в половине клетки: картинка шириной 1600 пикселей на 37 клеток даёт
+    // 43.24 пикселя на клетку, и целое число клеток клало бы сетку с
+    // ошибкой в несколько пикселей на всю карту.
     const fitRow = el('div', 'settings__row');
     const fitLabel = el('label', 'settings__check');
     const fitInput = el('input', 'input settings__input settings__input--narrow');
     fitInput.type = 'number';
     fitInput.min = '0';
     fitInput.max = String(DnD.GRID.maxColumns);
-    fitInput.step = '1';
+    fitInput.step = String(DnD.GRID.minColumnsStep);
     fitInput.dataset.setting = 'columns';
     fitInput.value = String(app.room.grid.columns || 0);
     fitInput.disabled = !canManageGrid;
-    fitInput.title = '0 — размер клетки задаётся вручную. Например, 20 — двадцать клеток по ширине карты.';
+    fitInput.title = '0 — размер клетки задаётся вручную. Например, 37.5 — тридцать семь с половиной клеток по ширине карты.';
     fitLabel.appendChild(fitInput);
     fitLabel.appendChild(el('span', null, 'клеток по ширине карты (0 — вручную)'));
     fitRow.appendChild(fitLabel);
     tableBox.appendChild(fitRow);
 
+    // Ручной размер клетки в пикселях картинки. Число, а не список готовых:
+    // список из пяти вариантов не подгоняет сетку к конкретной карте.
+    const cellRow = el('div', 'settings__row');
+    const cellLabel = el('label', 'settings__check');
+    const cellInput = el('input', 'input settings__input settings__input--narrow');
+    cellInput.type = 'number';
+    cellInput.min = String(DnD.GRID.minCell);
+    cellInput.max = String(DnD.GRID.maxCell);
+    cellInput.step = '1';
+    cellInput.dataset.setting = 'cell';
+    cellInput.value = String(app.room.grid.cell || DnD.GRID.defaultCell);
+    cellInput.disabled = !canManageGrid;
+    cellInput.title = 'Размер клетки в пикселях картинки, если клеток по ширине не задано. Фишка занимает ровно клетку.';
+    cellLabel.appendChild(cellInput);
+    cellLabel.appendChild(el('span', null, 'размер клетки, px (вручную)'));
+    cellRow.appendChild(cellLabel);
+    tableBox.appendChild(cellRow);
+
+    // Сдвиг сетки: у готовой карты клетки начинаются не обязательно с угла
+    // файла. Два числа двигают нашу сетку туда же, где начинается её.
+    const shiftRow = el('div', 'settings__row');
+    const shiftLabel = el('label', 'settings__check');
+    const shiftX = el('input', 'input settings__input settings__input--narrow');
+    shiftX.type = 'number';
+    shiftX.min = String(-DnD.GRID.maxOffset);
+    shiftX.max = String(DnD.GRID.maxOffset);
+    shiftX.step = '1';
+    shiftX.dataset.setting = 'offsetX';
+    shiftX.value = String(app.room.grid.offsetX || 0);
+    shiftX.disabled = !canManageGrid;
+    shiftX.title = 'Сдвиг сетки вправо, в пикселях картинки.';
+    const shiftY = el('input', 'input settings__input settings__input--narrow');
+    shiftY.type = 'number';
+    shiftY.min = String(-DnD.GRID.maxOffset);
+    shiftY.max = String(DnD.GRID.maxOffset);
+    shiftY.step = '1';
+    shiftY.dataset.setting = 'offsetY';
+    shiftY.value = String(app.room.grid.offsetY || 0);
+    shiftY.disabled = !canManageGrid;
+    shiftY.title = 'Сдвиг сетки вниз, в пикселях картинки.';
+    shiftLabel.appendChild(shiftX);
+    shiftLabel.appendChild(el('span', null, 'сдвиг сетки, px'));
+    shiftLabel.appendChild(shiftY);
+    shiftRow.appendChild(shiftLabel);
+    tableBox.appendChild(shiftRow);
+
+    // Футов в клетке. По правилам 5e клетка пять футов, и в этой мере задана
+    // дальность света: «факел светит на 20 футов» — это четыре клетки, а не
+    // двадцать. На карте с другой мерой мастер ставит своё число.
+    const scaleRow = el('div', 'settings__row');
+    const scaleLabel = el('label', 'settings__check');
+    const scaleInput = el('input', 'input settings__input settings__input--narrow');
+    scaleInput.type = 'number';
+    scaleInput.min = String(DnD.GRID.minFeetPerCell);
+    scaleInput.max = String(DnD.GRID.maxFeetPerCell);
+    scaleInput.step = '1';
+    scaleInput.dataset.setting = 'feetPerCell';
+    scaleInput.value = String(app.room.grid.feetPerCell || DnD.GRID.defaultFeetPerCell);
+    scaleInput.disabled = !canManageGrid;
+    scaleInput.title = 'Сколько футов укладывается в клетку сетки. По правилам 5e — пять.';
+    scaleLabel.appendChild(scaleInput);
+    scaleLabel.appendChild(el('span', null, 'футов в клетке'));
+    scaleRow.appendChild(scaleLabel);
+    tableBox.appendChild(scaleRow);
+
     tableBox.appendChild(el('div', 'box__note', app.training
       ? 'Проверка без сети: сетка и размер клетки — только у вас, других участников здесь нет.'
       : (isDm
-        ? 'Клетка ровно по размеру фишки. Сетку и размер видят все участники стола.'
-        : 'Сетку на карте и размер клетки задаёт ДМ за столом.')));
+        ? 'Клетка ровно по размеру фишки. Число клеток можно задать с половиной, а сдвигом сетку кладут на клетки самой карты. Видят все участники стола.'
+        : 'Сетку на карте, размер клетки и масштаб задаёт ДМ за столом.')));
 
     const applyGrid = () => {
-      const columns = Math.max(0, Math.min(DnD.GRID.maxColumns, Number(fitInput.value) || 0));
-      emit('setGrid', { enabled: gridInput.checked, cell: Number(cellSelect.value), columns });
+      const columns = DnD.roundColumns(Math.min(
+        DnD.GRID.maxColumns,
+        Math.max(0, Number(fitInput.value) || 0)
+      ));
+      const feetPerCell = Math.max(
+        DnD.GRID.minFeetPerCell,
+        Math.min(DnD.GRID.maxFeetPerCell, Number(scaleInput.value) || DnD.GRID.defaultFeetPerCell)
+      );
+      emit('setGrid', {
+        enabled: gridInput.checked,
+        cell: Number(cellInput.value) || DnD.GRID.defaultCell,
+        columns,
+        feetPerCell,
+        offsetX: Number(shiftX.value) || 0,
+        offsetY: Number(shiftY.value) || 0
+      });
     };
     gridInput.addEventListener('change', applyGrid);
-    cellSelect.addEventListener('change', applyGrid);
     fitInput.addEventListener('change', applyGrid);
+    cellInput.addEventListener('change', applyGrid);
+    shiftX.addEventListener('change', applyGrid);
+    shiftY.addEventListener('change', applyGrid);
+    scaleInput.addEventListener('change', applyGrid);
     settingsGridInput = gridInput;
-    settingsCellSelect = cellSelect;
+    settingsGridFields = { columns: fitInput, cell: cellInput, offsetX: shiftX, offsetY: shiftY };
 
     box.appendChild(tableBox);
 
@@ -1849,7 +2079,8 @@ let chosenSheetId = null;
     close.type = 'button';
     const dismiss = () => {
       settingsGridInput = null;
-      settingsCellSelect = null;
+      settingsGridFields = null;
+      settingsPanelPosition = null;
       document.removeEventListener('keydown', onKey);
       overlay.remove();
     };
@@ -1870,9 +2101,21 @@ let chosenSheetId = null;
 
   /** Обновляет настройки сетки в открытом окне настроек (после ответа сервера). */
   function syncSettingsGrid() {
-    if (!settingsGridInput || !settingsCellSelect) return;
+    if (!settingsGridInput || !settingsGridFields) return;
     settingsGridInput.checked = Boolean(app.room.grid.enabled);
-    settingsCellSelect.value = String(app.room.grid.cell);
+    // Поля, пока мастер в них печатает, не трогаем: ответ сервера прилетел бы
+    // посреди набора и затирал бы половину написанного.
+    if (document.activeElement && document.activeElement.dataset) {
+      const editing = document.activeElement.dataset.setting;
+      for (const [key, field] of Object.entries(settingsGridFields)) {
+        if (key === editing) continue;
+        field.value = String(app.room.grid[key] ?? 0);
+      }
+      return;
+    }
+    for (const [key, field] of Object.entries(settingsGridFields)) {
+      field.value = String(app.room.grid[key] ?? 0);
+    }
   }
 
   function applyAddressesCollapsed() {
@@ -1912,6 +2155,26 @@ let chosenSheetId = null;
   }
 
   /**
+   * Где стоит панель вкладок.
+   *
+   * Выбор мастера, а не ширина окна: на широком мониторе панель удобнее сбоку,
+   * на высоком — под картой, и переключение должно быть мгновенным и без
+   * перезагрузки стола.
+   * @returns {'right'|'bottom'}
+   */
+  function rightPanelPosition() {
+    return localStorage.getItem(RIGHT_PANEL_POS_KEY) === 'bottom' ? 'bottom' : 'right';
+  }
+
+  function applyPanelPosition(position) {
+    const layout = $('.layout');
+    if (!layout) return;
+    layout.classList.toggle('is-right-bottom', position === 'bottom');
+    localStorage.setItem(RIGHT_PANEL_POS_KEY, position === 'bottom' ? 'bottom' : 'right');
+    applyPanels();
+  }
+
+  /**
    * Сворачивает боковые панели: слева — совсем, справа — до иконок вкладок.
    * Так стол занимает почти всё окно, а иконки остаются под рукой.
    * @param {'left'|'right'} side
@@ -1929,6 +2192,9 @@ let chosenSheetId = null;
     const rightCollapsed = panelCollapsed(RIGHT_COLLAPSED_KEY);
     layout.classList.toggle('is-left-collapsed', leftCollapsed);
     layout.classList.toggle('is-right-collapsed', rightCollapsed);
+    // Положение панели хранится рядом со сворачиванием, но выбирается отдельно:
+    // поменять сторону и не потерять свёрнутое состояние можно одним движением.
+    layout.classList.toggle('is-right-bottom', rightPanelPosition() === 'bottom');
 
     const left = $('#btn-panel-left');
     if (left) {
@@ -1946,6 +2212,102 @@ let chosenSheetId = null;
         : 'Свернуть панель до иконок';
       right.classList.toggle('is-on', !rightCollapsed);
     }
+  }
+
+  /**
+   * Разделитель правой колонки: тянуть мышью или двигать стрелками.
+   *
+   * Ширина живёт в CSS-переменной --right-user-width, потому что раскладка
+   * описана гридом с колонками и иначе пришлось бы считать треки вручную.
+   * Пока мастер ничего не тянул, переменную не задаём: иначе сохранённое нами
+   * значение перекрыло бы узкий вариант из медиазапроса, и на экране уже
+   * 1500 пикселей колонка оставалась бы широкой. Правый край панели привязан к
+   * правому краю окна, поэтому за мышью тянем влево.
+   */
+  function setupRightResizer() {
+    const resizer = $('#resizer-right');
+    const layout = $('.layout');
+    if (!resizer || !layout) return;
+
+    const applyWidth = (width) => {
+      const value = Math.round(Math.max(RIGHT_WIDTH_MIN, Math.min(RIGHT_WIDTH_MAX, width)));
+      layout.style.setProperty('--right-user-width', `${value}px`);
+      localStorage.setItem(RIGHT_WIDTH_KEY, String(value));
+    };
+
+    const applyHeight = (height) => {
+      const value = Math.round(Math.max(RIGHT_HEIGHT_MIN, Math.min(RIGHT_HEIGHT_MAX, height)));
+      layout.style.setProperty('--right-user-height', `${value}px`);
+      localStorage.setItem(RIGHT_HEIGHT_KEY, String(value));
+    };
+
+    resizer.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      document.body.classList.add('is-resizing');
+      const bottom = rightPanelPosition() === 'bottom';
+      // Внизу разделитель лежит, а не стоит: тянем по другой оси.
+      const move = (moveEvent) => (bottom
+        ? applyHeight(window.innerHeight - moveEvent.clientY)
+        : applyWidth(window.innerWidth - moveEvent.clientX));
+      const up = () => {
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        document.body.classList.remove('is-resizing');
+      };
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', up);
+      // Первое движение мыши может не совпасть с нажатием, поэтому размер
+      // пересчитываем сразу: иначе панель дёргалась бы на пиксель.
+      move(event);
+    });
+
+    // Стрелки с клавиатуры: тянуть мышью нельзя, а колонку под лист на узком
+    // экране всё равно надо расширить.
+    resizer.addEventListener('keydown', (event) => {
+      const keys = rightPanelPosition() === 'bottom'
+        ? ['ArrowUp', 'ArrowDown']
+        : ['ArrowLeft', 'ArrowRight'];
+      if (!keys.includes(event.key)) return;
+      event.preventDefault();
+      const step = event.shiftKey ? 40 : 12;
+      const panel = document.querySelector('.col--right');
+      if (!panel) return;
+      const box = panel.getBoundingClientRect();
+      if (rightPanelPosition() === 'bottom') {
+        // Стрелка вверх тянет разделитель вверх, то есть панель становится ниже.
+        applyHeight(event.key === 'ArrowUp' ? box.height + step : box.height - step);
+        return;
+      }
+      // Отсчитываем от текущей ширины колонки, а не от --right-user-width:
+      // его может не быть вовсе, пока мастер не тянул разделитель.
+      // Стрелка влево тянет разделитель влево, то есть колонка становится уже.
+      applyWidth(event.key === 'ArrowLeft' ? box.width - step : box.width + step);
+    });
+
+    const stored = storedRightWidth();
+    if (stored) applyWidth(stored);
+    const storedHeight = storedRightHeight();
+    if (storedHeight) applyHeight(storedHeight);
+  }
+
+  /**
+   * Высота нижней панели из прошлой сессии.
+   * @returns {number|null} null, если мастер её ещё не выбирал.
+   */
+  function storedRightHeight() {
+    const saved = Number.parseInt(localStorage.getItem(RIGHT_HEIGHT_KEY) || '', 10);
+    if (!Number.isFinite(saved)) return null;
+    return Math.max(RIGHT_HEIGHT_MIN, Math.min(RIGHT_HEIGHT_MAX, saved));
+  }
+
+  /**
+   * Ширина правой колонки из прошлой сессии.
+   * @returns {number|null} null, если мастер её ещё не выбирал.
+   */
+  function storedRightWidth() {
+    const saved = Number.parseInt(localStorage.getItem(RIGHT_WIDTH_KEY) || '', 10);
+    if (!Number.isFinite(saved)) return null;
+    return Math.max(RIGHT_WIDTH_MIN, Math.min(RIGHT_WIDTH_MAX, saved));
   }
 
   /**
@@ -2033,24 +2395,21 @@ let chosenSheetId = null;
 
     if (app.role === 'dm') {
       const targets = app.room.players.filter((player) => player.role !== 'dm');
-      // Игрок отключился и пропал из списка — возвращаемся к списку игроков.
+      // Игрок отключился и пропал из списка — возвращаемся к подсказке.
       if (app.viewedSheetPlayerId && !targets.some((player) => player.playerId === app.viewedSheetPlayerId)) {
         app.viewedSheetPlayerId = null;
         app.sheetShownFor = null;
       }
       sheetView.setReadOnly(true);
       // Портрет в листе мастера показываем, но править не даём: аватар
-      // меняет сам игрок. А вот свой мастер меняет — в списке игроков, где
-      // для него и живёт собственный блок портрета.
+      // меняет сам игрок. А свой мастер меняет в панели участников слева,
+      // где для него и живёт собственный блок портрета.
       sheetView.setAvatarEditable(false);
-      sheetView.setPlayerList(targets, app.viewedSheetPlayerId);
-      // Блок мастера пересоздаётся вместе со списком, поэтому портрет ставим
-      // после setPlayerList, а не до.
-      sheetView.setSelfAvatar(assetUrl(ownAvatarOf('dm')), dmName());
 
-      // ДМ сам решает, чей лист открыть: сначала он видит список игроков.
+      // Списка игроков в этой вкладке больше нет: он целиком живёт слева, где
+      // кнопка «Открыть лист» стоит рядом с именем и с «Вывести».
       if (!app.viewedSheetPlayerId) {
-        sheetView.setMode('list');
+        sheetView.setMode('pick');
         sheetView.setStatus(targets.length ? `Игроков за столом: ${targets.length}` : '');
         return;
       }
@@ -2140,16 +2499,70 @@ let chosenSheetId = null;
     refreshSheetView(true);
   }
 
-  function activateTab(name) {
+  function activateTab(name, options = {}) {
     for (const button of document.querySelectorAll('.tabs__btn')) {
       button.classList.toggle('is-active', button.dataset.tab === name);
     }
     for (const panel of document.querySelectorAll('.panel--tab')) {
       panel.classList.toggle('is-active', panel.id === `tab-${name}`);
     }
+    // При открытии стола вкладка восстанавливается из памяти, и записывать
+    // её обратно незачем: скрытая на тот момент вкладка справочника сбросила
+    // бы память на «Чат».
+    if (options.remember !== false) localStorage.setItem(ACTIVE_TAB_KEY, name);
     // Пока справочник был закрыт, его данные могли устареть. Догоняем один
     // раз — при открытии вкладки, а не на каждое событие фишки.
     if (name === 'adventure' && adventurePanelStale) renderAdventurePanel({ force: true });
+  }
+
+  /**
+   * Переключение вкладок с клавиатуры и память последней открытой.
+   *
+   * Цифры работают только когда фокус не в поле ввода: иначе «2» в поле броска
+   * переключала бы вкладку вместо того, чтобы попасть в формулу.
+   */
+  function setupTabHotkeys() {
+    document.addEventListener('keydown', (event) => {
+      const table = $('#screen-table');
+      if (!table || !table.classList.contains('is-active')) return;
+      const target = event.target;
+      const typing = target && (
+        target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT'
+        || target.isContentEditable
+      );
+
+      // Ctrl+F открывает поиск по чату. В полях ввода он не перехватывается:
+      // иначе нельзя было бы искать ничего, кроме чата.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && !typing) {
+        event.preventDefault();
+        if (panelCollapsed(RIGHT_COLLAPSED_KEY)) setPanelCollapsed('right', false);
+        activateTab('chat');
+        if (chatPanel && chatPanel.searchInput) {
+          chatPanel.searchInput.focus();
+          chatPanel.searchInput.select();
+        }
+        return;
+      }
+      if (typing || event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const index = Number(event.key) - 1;
+      if (!Number.isInteger(index) || index < 0 || index >= 9) return;
+      const buttons = [...document.querySelectorAll('.tabs__btn:not([hidden])')];
+      const button = buttons[index];
+      if (!button) return;
+      event.preventDefault();
+      if (panelCollapsed(RIGHT_COLLAPSED_KEY)) setPanelCollapsed('right', false);
+      activateTab(button.dataset.tab);
+    });
+  }
+
+  /** Возвращает ту вкладку, которая была открыта в прошлый раз. */
+  function restoreActiveTab() {
+    const saved = localStorage.getItem(ACTIVE_TAB_KEY);
+    const button = saved && document.querySelector(`.tabs__btn[data-tab="${saved}"]:not([hidden])`);
+    activateTab(button ? button.dataset.tab : 'chat', { remember: false });
   }
 
   /* ------------------------------------------------------------------ *
@@ -2173,8 +2586,8 @@ let chosenSheetId = null;
     }
     app.room = {
       players: [], sheets: {}, maps: normalizeMapSlots(null),
-      activeMap: null, grid: { enabled: false, cell: 46 },
-      tokens: [], initiative: { entries: [], turnId: null, round: 1 },
+      activeMap: null, grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetPerCell, offsetX: 0, offsetY: 0 },
+      tokens: [], initiative: { entries: [], turnId: null, round: 1 }, combat: { enabled: false },
       diceHistory: [], chatHistory: []
     };
     app.sheetShownFor = null;
@@ -2283,6 +2696,9 @@ let chosenSheetId = null;
       });
     }
     applyPanels();
+    setupRightResizer();
+    setupTabHotkeys();
+    restoreActiveTab();
 
     desktop.onCampaignSaved(({ meta, reason }) => {
       app.campaign = meta;

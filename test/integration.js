@@ -1177,6 +1177,75 @@ async function main() {
   emit(p1, 'setAvatar', { image: null });
   emit(p2, 'setAvatar', { image: null });
   await waitFor(() => listHas('p-test-0001').avatar === null && listHas(P2).avatar === null, 'аватары убраны');
+
+  /* --- скрытое имя фишки --- */
+  // Заводим фишку руками: так её имя точно известно и его нечего сравнивать с
+  // именем персонажа.
+  emit(dm, 'createToken', { name: 'Король Виверн', mapType: 'world' });
+  const nameless = await waitFor(
+    () => room.tokens.find((token) => token.name === 'Король Виверн'),
+    'фишка для скрытия имени'
+  );
+  // Новая фишка скрыта, а скрытую игрокам вообще не рассылают. Показываем:
+  // проверить скрытие имени на фишке, которой игрок и не видел бы, бессмысленно.
+  emit(dm, 'setTokenHidden', { tokenId: nameless.id, hidden: false });
+  await waitFor(() => room.tokens.find((token) => token.id === nameless.id).hidden === false, 'фишка показана');
+  p1.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenNameHidden', { tokenId: nameless.id, hidden: true });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === nameless.id).hideName === true,
+    'имя фишки скрыто'
+  );
+  check('мастер по-прежнему видит имя фишки со скрытым именем', () => {
+    assert.strictEqual(
+      room.tokenForViewer(room.tokens.find((token) => token.id === nameless.id), true).name,
+      'Король Виверн'
+    );
+  });
+  check('игроку имя фишки не достаётся: ни пустая строка не врёт, ни флага нет', () => {
+    const forPlayer = room.tokenForViewer(room.tokens.find((token) => token.id === nameless.id), false);
+    assert.strictEqual(forPlayer.name, '');
+    assert.strictEqual(forPlayer.nameHidden, true);
+    assert.ok(!JSON.stringify(room.snapshotFor({ playerId: P1, role: 'player' }))
+      .includes('Король Виверн'), 'имя утекло в снимок состояния игрока');
+  });
+  check('событие фишки игроку уходит без имени', () => {
+    const event = p1.log.tokenUpdated.find((item) => item && item.id === nameless.id);
+    assert.ok(event, 'игрок не получил событие фишки');
+    assert.strictEqual(event.name, '');
+    assert.strictEqual(event.nameHidden, true);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenNameHidden', { tokenId: nameless.id, hidden: false });
+  await waitFor(() => p1.log.errorMessage.find((item) => /только ДМ/i.test(item.message)), 'скрытие имени игроком');
+  check('игрок не может ни спрятать, ни вернуть имя фишки', () => {
+    assert.strictEqual(room.tokens.find((token) => token.id === nameless.id).hideName, true);
+  });
+
+  emit(dm, 'setTokenNameHidden', { tokenId: nameless.id, hidden: false });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === nameless.id).hideName === false,
+    'имя фишки снова видно'
+  );
+  check('вернули имя — игрок снова видит его целиком', () => {
+    const forPlayer = room.tokenForViewer(room.tokens.find((token) => token.id === nameless.id), false);
+    assert.strictEqual(forPlayer.name, 'Король Виверн');
+    assert.ok(!('nameHidden' in forPlayer));
+  });
+  check('скрытое имя не ломает прочность: у монстра её по-прежнему нет у игрока', () => {
+    const monster = room.tokens.find((token) => token.id === nameless.id);
+    monster.maxHp = 30;
+    monster.hp = 30;
+    const forPlayer = room.tokenForViewer(monster, false);
+    assert.strictEqual(forPlayer.maxHp, null);
+    assert.strictEqual(forPlayer.hp, null);
+    monster.maxHp = null;
+    monster.hp = null;
+  });
+  emit(dm, 'deleteToken', { tokenId: nameless.id });
+  await waitFor(() => !room.tokens.some((token) => token.id === nameless.id), 'уборка фишки со скрытым именем');
+
   // И убираем только те фишки, что завели сами: фишка первого игрока осталась
   // от проверок назначения выше, и её удаление сломало бы счётчики дальше.
   emit(dm, 'deleteToken', { tokenId: spawned.id });
@@ -1627,6 +1696,207 @@ async function main() {
     assert.strictEqual(saved.fogMask.length, FOG_COLUMNS * FOG_ROWS);
   });
 
+  /* ------------------------------------------------------ поверхность */
+
+  console.log('\nПоверхность карты');
+  const litMap = () => room.maps[fogType].items.find((item) => item.id === fogMap.id);
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'paintMapSurface', {
+    type: fogType, mapId: fogMap.id, cells: [[1, 1, 'fire']]
+  });
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пробовал рисовать поверхность');
+  check('поверхность рисует только мастер', () => {
+    assert.ok(p1.log.errorMessage.every((item) => /только ДМ/.test(item.message)));
+    assert.deepStrictEqual(litMap().surface.cells, {}, 'игрок нарисовал поверхность');
+  });
+
+  emit(dm, 'paintMapSurface', {
+    type: fogType,
+    mapId: fogMap.id,
+    cells: [[2, 3, 'acid'], [3, 3, 'acid'], [4, 3, 'выдуманное'], [-1, 0, 'fire']]
+  });
+  await waitFor(() => litMap().surface.cells['2,3'] === 'acid', 'поверхность нарисована');
+  check('сервер отбрасывает неизвестные типы поверхности и клетки вне карты', () => {
+    assert.strictEqual(litMap().surface.cells['3,3'], 'acid', 'вторая клетка не нарисована');
+    assert.ok(!('4,3' in litMap().surface.cells), 'несуществующий тип попал на карту');
+    assert.ok(!('-1,0' in litMap().surface.cells), 'клетка с отрицательной координатой принята');
+  });
+
+  const playerSurface = () => {
+    const snapshot = room.snapshotFor({ playerId: P1, role: 'player' });
+    const map = snapshot.maps[fogType].items.find((item) => item.id === fogMap.id);
+    return map.surface.cells;
+  };
+  check('поверхность видят игроки: по ней и судят, куда можно идти', () => {
+    assert.strictEqual(playerSurface()['2,3'], 'acid');
+  });
+
+  emit(dm, 'paintMapSurface', {
+    type: fogType, mapId: fogMap.id, cells: [[2, 3, null]]
+  });
+  await waitFor(() => !('2,3' in litMap().surface.cells), 'клетка стёрта');
+  check('ластик убирает клетку, а не красит её заново', () => {
+    assert.strictEqual(litMap().surface.cells['3,3'], 'acid');
+  });
+
+  const surfaceSaved = new RoomState({ state: room.serialize() });
+  check('поверхность переживает сохранение кампании', () => {
+    const saved = surfaceSaved.normalizeMapSlot(surfaceSaved.maps[fogType])
+      .items.find((item) => item.id === fogMap.id);
+    assert.strictEqual(saved.surface.cells['3,3'], 'acid');
+  });
+
+  emit(dm, 'clearMapSurface', { type: fogType, mapId: fogMap.id });
+  await waitFor(() => !Object.keys(litMap().surface.cells).length, 'поверхность очищена');
+  check('карту можно очистить от поверхности целиком', () => {
+    assert.deepStrictEqual(Object.keys(litMap().surface.cells), []);
+  });
+
+  /* ------------------------------------------------------ освещение */
+
+  console.log('\nОсвещение');
+
+  check('у новой карты нет ни темноты, ни стен, ни источников', () => {
+    const fresh = new RoomState().normalizeMapSlot({ url: '/files/a.png' }).items[0];
+    assert.strictEqual(fresh.darkness, 0, 'новая карта не дневная');
+    assert.deepStrictEqual(fresh.walls, [], 'у новой карты есть стены');
+    assert.deepStrictEqual(fresh.lights, [], 'у новой карты есть источники света');
+  });
+
+  emit(dm, 'setMapDarkness', { type: fogType, mapId: fogMap.id, darkness: 5 });
+  await waitFor(() => litMap().darkness === 1, 'темнота обрезана до единицы');
+  emit(dm, 'setMapDarkness', { type: fogType, mapId: fogMap.id, darkness: 0.8 });
+  await waitFor(() => litMap().darkness === 0.8, 'темнота вернулась к 0.8');
+  check('темнота обрезается до 0..1', () => {
+    assert.strictEqual(litMap().darkness, 0.8);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setMapDarkness', { type: fogType, mapId: fogMap.id, darkness: 0 });
+  emit(p1, 'addMapWall', { type: fogType, mapId: fogMap.id, x1: 0.1, y1: 0, x2: 0.1, y2: 1 });
+  emit(p1, 'addMapLight', { type: fogType, mapId: fogMap.id, x: 0.5, y: 0.5, radius: 20 });
+  emit(p1, 'setTokenLight', { tokenId: 't-no-such', radius: 20 });
+  await waitFor(() => p1.log.errorMessage.length >= 3, 'игрок пробовал править свет');
+  check('свет, стены и темноту правит только мастер', () => {
+    assert.ok(p1.log.errorMessage.every((item) => /только ДМ|не найдена/i.test(item.message)),
+      `ответы игроку: ${JSON.stringify(p1.log.errorMessage.map((item) => item.message))}`);
+    assert.strictEqual(litMap().darkness, 0.8, 'игрок изменил темноту');
+    assert.strictEqual(litMap().walls.length, 0, 'игрок добавил стену');
+    assert.strictEqual(litMap().lights.length, 0, 'игрок добавил источник света');
+  });
+
+  // Стена с идентификатором клиента: мастер рисует и сразу видит её на месте,
+  // и вторая копия с серверным id осталась бы висеть вечно.
+  const wallId = 'w-test-1';
+  emit(dm, 'addMapWall', {
+    type: fogType, mapId: fogMap.id, wallId, x1: 0.5, y1: 0, x2: 0.5, y2: 1
+  });
+  await waitFor(() => litMap().walls.length === 1, 'стена дошла до стола');
+  check('стена сохраняет идентификатор клиента', () => {
+    assert.strictEqual(litMap().walls[0].id, wallId);
+  });
+
+  emit(dm, 'addMapWall', { type: fogType, mapId: fogMap.id, x1: 0.2, y1: 0.2, x2: 0.2, y2: 0.2 });
+  await wait(60);
+  check('точку стеной считать нельзя: карта не засоряется', () => {
+    assert.strictEqual(litMap().walls.length, 1);
+  });
+
+  const lightId = 'l-test-1';
+  emit(dm, 'addMapLight', {
+    type: fogType, mapId: fogMap.id, lightId, x: 0.5, y: 0.5, radius: 20, color: '#ffb347'
+  });
+  await waitFor(() => litMap().lights.length === 1, 'источник света дошёл до стола');
+  check('источник света приходит ко всем участникам стола', () => {
+    const seen = p1.log.mapUpdated.slice(-1)[0];
+    const item = seen.items.find((entry) => entry.id === fogMap.id);
+    assert(item, 'карты нет в снимке вкладки');
+    assert.strictEqual(item.lights.length, 1, 'игрок не получил источник света');
+    assert.strictEqual(item.lights[0].radius, 20);
+    assert.strictEqual(item.lights[0].hidden, false);
+  });
+  emit(dm, 'addMapLight', {
+    type: fogType, mapId: fogMap.id, x: 0.4, y: 0.4, radius: -50, color: 'не цвет'
+  });
+  await waitFor(() => litMap().lights.length === 2, 'второй источник принят');
+  check('мусор в источнике света не попадает на стол', () => {
+    const second = litMap().lights[1];
+    assert.ok(second.radius >= 1, `дальность обрезана в ноль: ${second.radius}`);
+    assert.strictEqual(second.color, '#ffb347', `мусорный цвет дошёл до стола: ${second.color}`);
+  });
+
+  emit(dm, 'setMapLight', { type: fogType, mapId: fogMap.id, lightId, hidden: true });
+  await waitFor(() => litMap().lights[0].hidden === true, 'источник погашен');
+  check('погашенный источник остаётся на карте, но помечен', () => {
+    assert.strictEqual(litMap().lights.length, 2);
+    assert.strictEqual(litMap().lights[0].hidden, true);
+  });
+
+  emit(dm, 'deleteMapLight', { type: fogType, mapId: fogMap.id, lightId });
+  await waitFor(() => litMap().lights.length === 1, 'источник убран');
+  emit(dm, 'clearMapWalls', { type: fogType, mapId: fogMap.id });
+  await waitFor(() => litMap().walls.length === 0, 'стены снесены');
+  check('источник и стены снимаются поимённо', () => {
+    assert.strictEqual(litMap().lights.length, 1);
+    assert.strictEqual(litMap().walls.length, 0);
+  });
+
+  // Факел в руке: свет едет вместе с фишкой и виден игроку. Фишку заводим
+  // здесь своей: та, что проверяла спавн из листа, к этому моменту удалена.
+  emit(dm, 'createToken', { name: 'Факельщик', mapType: 'world' });
+  await waitFor(() => room.tokens.some((token) => token.name === 'Факельщик'), 'фишка для света создана');
+  const torchId = room.tokens.find((token) => token.name === 'Факельщик').id;
+  // Спрятанной фишки игрок не получает вовсе, и свет её тоже не увидит.
+  emit(dm, 'setTokenHidden', { tokenId: torchId, hidden: false });
+  await waitFor(() => room.tokens.find((token) => token.id === torchId).hidden === false, 'фишка показана');
+  emit(dm, 'setTokenLight', { tokenId: torchId, radius: 20, color: '#ffb347' });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === torchId).light.radius === 20,
+    'свет фишки принят'
+  );
+  check('свет фишки доходит до игрока вместе с ней', () => {
+    const event = p1.log.tokenUpdated.filter((item) => item && item.id === torchId).slice(-1)[0];
+    assert(event, 'игрок не получил обновление фишки');
+    assert.strictEqual(event.light.radius, 20);
+    assert.strictEqual(event.light.color, '#ffb347');
+  });
+  emit(dm, 'setTokenLight', { tokenId: torchId, radius: 0 });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === torchId).light.radius === 0,
+    'свет фишки погашен'
+  );
+  check('гасящий свет фишки убирает его совсем, а не оставляет по нулю', () => {
+    const token = room.tokens.find((item) => item.id === torchId);
+    assert.strictEqual(token.light.radius, 0);
+  });
+  emit(dm, 'deleteToken', { tokenId: torchId });
+  await waitFor(() => !room.tokens.some((token) => token.id === torchId), 'фишка со светом убрана');
+
+  // Масштаб карты проверяем последним делом в этом блоке и возвращаем ровно
+  // то, что было: ниже по файлу сетка сверяется со своим прежним значением,
+  // и подмена клетки сбила бы чужую проверку.
+  const gridBefore = { ...room.grid };
+  emit(dm, 'setGrid', { enabled: false, cell: 46, columns: 0, feetPerCell: 10 });
+  await waitFor(() => room.grid.feetPerCell === 10, 'футов в клетке доехало');
+  emit(dm, 'setGrid', { enabled: false, cell: 46, columns: 0, feetPerCell: 9999 });
+  await waitFor(() => room.grid.feetPerCell === 50, 'футов в клетке обрезано');
+  check('масштаб карты задаётся и обрезается сервером', () => {
+    assert.strictEqual(room.grid.feetPerCell, 50);
+  });
+  emit(dm, 'setGrid', gridBefore);
+  await waitFor(() => room.grid.feetPerCell === gridBefore.feetPerCell, 'масштаб возвращён');
+
+  const lightSaved = new RoomState({ state: room.serialize() });
+  check('стены, свет и темнота переживают сохранение кампании', () => {
+    const saved = lightSaved.normalizeMapSlot(lightSaved.maps[fogType])
+      .items.find((item) => item.id === fogMap.id);
+    assert.strictEqual(saved.darkness, 0.8, 'темнота пропала из кампании');
+    assert.strictEqual(saved.walls.length, 0);
+    assert.strictEqual(saved.lights.length, 1);
+    assert.strictEqual(saved.lights[0].x, 0.4);
+  });
+
   /* ------------------------------------------------- заметки мастера */
 
   console.log('\nЗаметки мастера');
@@ -1645,14 +1915,62 @@ async function main() {
   // Список участников не рассылается после заметки: она нужна только мастеру,
   // и он получает своё событие. Проверяем, что игрок увидит пустую заметку в
   // списке, если список у него запросят в следующий раз.
-  const dmListForPlayer = room.playerList(true, false);
-  const dmListForDm = room.playerList(true, true);
+  const dmListForPlayer = room.playerList({ includeTokens: true, includeDmNotes: false });
+  const dmListForDm = room.playerList({ includeTokens: true, includeDmNotes: true, includeHidden: true });
   check('список участников собирается отдельно для мастера и для игроков', () => {
     const playerSide = dmListForPlayer.find((item) => item.playerId === P1);
     const dmSide = dmListForDm.find((item) => item.playerId === P1);
     assert.strictEqual(playerSide.dmNote, '', `игроку отдан текст: ${playerSide.dmNote}`);
     assert.strictEqual(dmSide.dmNote, 'вербовщик, своего не знает');
   });
+
+  /*
+   * Фишка из листа появляется скрытой: мастер сначала расставляет партию и
+   * только потом открывает её. Скрытые фишки игрокам не показываются, иначе они
+   * догадались бы о заготовке, а мастеру показываются обязаны: иначе в его
+   * списке участников кнопка «Вывести» горела бы у игрока вечно, и повторное
+   * нажатие кончалось бы ошибкой «у игрока уже есть фишка».
+   *
+   * Игрок для проверки свой: к этому месту у P1 фишка уже есть, и искать её
+   * в списке значило бы поймать чужую.
+   */
+  const hiddenPlayerId = 'p-hidden-token';
+  room.addPlayer(hiddenPlayerId, 'Проверка фишки');
+  emit(dm, 'createTokenFromSheet', { playerId: hiddenPlayerId });
+  await waitFor(
+    () => room.tokens.some((token) => token.assignedPlayerId === hiddenPlayerId),
+    'фишка выведена из листа'
+  );
+  const hiddenToken = room.tokens.find((token) => token.assignedPlayerId === hiddenPlayerId);
+  check('скрытая фишка игроку не видна, а мастеру видна', () => {
+    assert.strictEqual(hiddenToken.hidden, true, 'фишка из листа должна быть скрыта');
+    const playerSide = room.playerList({ includeTokens: true, includeDmNotes: false })
+      .find((item) => item.playerId === hiddenPlayerId);
+    const dmSide = room.playerList({ includeTokens: true, includeDmNotes: true, includeHidden: true })
+      .find((item) => item.playerId === hiddenPlayerId);
+    assert.strictEqual(playerSide.tokenId, null, 'игрок узнал о скрытой фишке из списка участников');
+    assert.strictEqual(dmSide.tokenId, hiddenToken.id,
+      'мастер не видит выведенную фишку, и кнопка «Вывести» не исчезнет');
+  });
+  check('выведенную из листа фишку нельзя вывести повторно', () => {
+    // Отказ приходит тому, кто нажал, то есть мастеру.
+    dm.log.errorMessage.length = 0;
+    emit(dm, 'createTokenFromSheet', { playerId: hiddenPlayerId });
+  });
+  await waitFor(() => dm.log.errorMessage.length > 0, 'повторный вывод отклонён');
+  check('повторный вывод фишки из листа отклонён с понятным ответом', () => {
+    assert.ok(
+      dm.log.errorMessage.some((item) => /уже есть фишка/i.test(item.message)),
+      `ответ сервера: ${JSON.stringify(dm.log.errorMessage.map((item) => item.message))}`
+    );
+  });
+  emit(dm, 'deleteToken', { tokenId: hiddenToken.id });
+  await waitFor(
+    () => !room.tokens.some((token) => token.id === hiddenToken.id),
+    'выведенная фишка убрана'
+  );
+  room.players.delete(hiddenPlayerId);
+  room.sheets.delete(hiddenPlayerId);
 
   const playerSnapshotNote = room.snapshotFor({ playerId: P1, role: ROLE_PLAYER });
   const dmSnapshotNote = room.snapshotFor({ playerId: P1, role: ROLE_DM });
@@ -1740,8 +2058,87 @@ async function main() {
   check('состояний ровно столько, сколько есть в правилах', () => {
     assert.ok(windowlessConditionIds().length >= 13, 'список состояний потерялся');
   });
+
   emit(dm, 'deleteToken', { tokenId: condToken.id });
   await waitFor(() => !room.tokens.some((item) => item.id === condToken.id), 'уборка фишки состояний');
+
+  // Фишка под состояние назначена игроку: без этого проверка запрета была бы
+  // проверкой владения фишкой, а не самого состояния.
+  dm.log.tokenCreated.length = 0;
+  p2.log.tokenCreated.length = 0;
+  emit(dm, 'createToken', { name: 'Пленник', mapType: 'world' });
+  const bound = await waitFor(
+    () => dm.log.tokenCreated.find((item) => item.name === 'Пленник'),
+    'фишка под состояние'
+  );
+  emit(dm, 'setTokenHidden', { tokenId: bound.id, hidden: false });
+  emit(dm, 'assignTokenToPlayer', { tokenId: bound.id, playerId: P2 });
+  await waitFor(() => p2.log.tokenCreated.find((item) => item.id === bound.id), 'фишка дошла до игрока');
+  emit(dm, 'setTokenConditions', { tokenId: bound.id, conditions: ['restrained'] });
+  await waitFor(
+    () => (room.tokens.find((item) => item.id === bound.id) || {}).conditions.includes('restrained'),
+    'состояние «опутан» задано'
+  );
+
+  p2.log.errorMessage.length = 0;
+  p2.log.tokenMoved.length = 0;
+  emit(p2, 'moveToken', { tokenId: bound.id, x: 0.2, y: 0.2 });
+  await waitFor(() => p2.log.errorMessage.length > 0, 'отказ по состоянию');
+  check('опутанного игрок не двигает сам', () => {
+    const stored = room.tokens.find((item) => item.id === bound.id);
+    assert.strictEqual(stored.x, 0.5);
+    assert.strictEqual(stored.y, 0.5);
+    assert.strictEqual(p2.log.tokenMoved.length, 0, 'движение всё же ушло');
+    assert.ok(
+      p2.log.errorMessage.some((item) => /опутан/.test(item.message)),
+      p2.log.errorMessage.map((item) => item.message).join('; ')
+    );
+  });
+
+  emit(dm, 'moveToken', { tokenId: bound.id, x: 0.3, y: 0.7 });
+  await waitFor(() => room.tokens.find((item) => item.id === bound.id).x === 0.3, 'мастер двигает связанную фишку');
+  check('мастер связанную фишку двигает: перетащить соперника можно и нужно', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === bound.id).y, 0.7);
+  });
+
+  emit(dm, 'setTokenConditions', { tokenId: bound.id, conditions: [] });
+  await waitFor(
+    () => room.tokens.find((item) => item.id === bound.id).conditions.length === 0,
+    'состояние снято'
+  );
+  p2.log.errorMessage.length = 0;
+  p2.log.tokenMoved.length = 0;
+  emit(p2, 'moveToken', { tokenId: bound.id, x: 0.6, y: 0.6 });
+  await waitFor(() => p2.log.tokenMoved.length > 0, 'фишка снова едет');
+  check('состояние сняли — фишка снова едет', () => {
+    assert.strictEqual(p2.log.tokenMoved[0].x, 0.6);
+  });
+
+  dm.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenLabelsHidden', { tokenId: bound.id, hidden: true });
+  await waitFor(
+    () => dm.log.tokenUpdated.find((item) => item.id === bound.id && item.hideLabels),
+    'подписи скрыты'
+  );
+  check('подписи скрываются у всех сразу, а не как тайна от игроков', () => {
+    const forDm = room.snapshotFor({ playerId: 'dm', role: ROLE_DM }).tokens
+      .find((item) => item.id === bound.id);
+    const forPlayer = room.snapshotFor({ playerId: P2, role: 'player' }).tokens
+      .find((item) => item.id === bound.id);
+    assert.strictEqual(forDm.hideLabels, true, 'у мастера подписи остались');
+    assert.strictEqual(forPlayer.hideLabels, true, 'игрок подписи всё видит');
+  });
+  check('скрытые подписи переживают кампанию', () => {
+    const saved = new RoomState({ state: room.serialize() }).tokens
+      .find((item) => item.id === bound.id);
+    assert.strictEqual(saved.hideLabels, true);
+  });
+  p2.log.errorMessage.length = 0;
+  emit(p2, 'setTokenLabelsHidden', { tokenId: bound.id, hidden: false });
+  await waitFor(() => p2.log.errorMessage.some((item) => /только ДМ/.test(item.message)), 'игрок не решает подписи');
+
+  emit(dm, 'deleteToken', { tokenId: bound.id });
+  await waitFor(() => !room.tokens.some((item) => item.id === bound.id), 'уборка фишки состояний');
 
   /* ------------------------------------------------------ порядок боя */  /* ------------------------------------------------------ порядок боя */  /* ------------------------------------------------------ порядок боя */
 
@@ -1751,6 +2148,31 @@ async function main() {
   emit(dm, 'initiativeAdd', { kind: 'player', refId: P2, name: 'Борис', modifier: 1 });
   emit(dm, 'initiativeAdd', { kind: 'other', name: 'Гоблин', modifier: 2 });
   await waitFor(() => room.initiative.entries.length === 3, 'участники боя');
+
+  // Режим боя проверяем до броска инициативы: включение при броске само по себе
+  // отдельная проверка ниже.
+  const combatEvents = [];
+  const collectCombat = (state) => combatEvents.push(state);
+  dm.on('combatMode', collectCombat);
+  p2.on('combatMode', collectCombat);
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setCombatMode', { enabled: true });
+  await waitFor(() => p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)), 'игрок не включает бой');
+  emit(dm, 'setCombatMode', { enabled: true });
+  await waitFor(() => combatEvents.length >= 2, 'режим боя у участников');
+  check('режим боя включает мастер, и видят его все', () => {
+    assert.strictEqual(room.combat.enabled, true);
+    assert.strictEqual(combatEvents[combatEvents.length - 1].enabled, true);
+    assert.strictEqual(room.snapshotFor({ playerId: P1, role: 'player' }).combat.enabled, true);
+  });
+  const combatCount = combatEvents.length;
+  emit(dm, 'setCombatMode', { enabled: false });
+  await waitFor(() => combatEvents.length > combatCount, 'выключение режима боя');
+  check('режим боя выключается тем же переключателем', () => {
+    assert.strictEqual(room.combat.enabled, false);
+    assert.strictEqual(combatEvents[combatEvents.length - 1].enabled, false);
+  });
+
   check('мастер добавляет участников боя', () => {
     assert.strictEqual(room.initiative.entries.length, 3);
     assert.strictEqual(room.initiative.entries[0].name, 'Артём');
@@ -1783,6 +2205,10 @@ async function main() {
   p1.log.errorMessage.length = 0;
   emit(dm, 'initiativeRoll', {});
   await waitFor(() => initEvents.length >= 1, 'бросок инициативы игроку');
+  check('бросок инициативы сам включает режим боя', () => {
+    assert.strictEqual(room.combat.enabled, true, 'бой не включился после броска');
+    assert.ok(combatEvents.length > combatCount, 'участники не узнали о начале боя');
+  });
   check('бросок инициативы объявляет порядок всем, кроме игроков', () => {
     const announced = initEvents[initEvents.length - 1];
     assert.strictEqual(announced.entries.length, 3);

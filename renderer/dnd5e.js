@@ -67,13 +67,187 @@
    * Те же границы, что в server/state.js: иначе интерфейс предложил бы мастеру
    * клетку, которую сервер всё равно обрежет по своим пределам.
    */
-  const GRID = {
+  /**
+ * Состояния поверхности, которые мастер рисует по клеткам.
+ *
+ * Это не то же самое, что состояния фишки: кислота лежит на полу и жжёт всех,
+ * кто по ней прошёл, а «опутан» держит конкретного героя. Читается сервером и
+ * интерфейсом, поэтому список один.
+ *
+ * Цвет здесь — содержимое карты, а не оформление окна: им красится клетка на
+ * холсте, и менять его должна тема оформления не вместе с палитрой интерфейса.
+ */
+const SURFACE_TYPES = [
+    { id: 'fire', label: 'Огонь', short: 'огонь', color: '#e0702c' },
+    { id: 'acid', label: 'Кислота', short: 'кислота', color: '#a86ed8' },
+    { id: 'water', label: 'Вода', short: 'вода', color: '#3f8fd0' },
+    { id: 'ice', label: 'Лёд', short: 'лёд', color: '#9fd8e8' },
+    { id: 'poison', label: 'Яд', short: 'яд', color: '#7fb23f' },
+    { id: 'slick', label: 'Скользкость', short: 'скользко', color: '#c9b46a' },
+    { id: 'smoke', label: 'Дым', short: 'дым', color: '#8b8b93' },
+    { id: 'rubble', label: 'Руины', short: 'руины', color: '#8d7a63' }
+  ];
+
+  /** Типы поверхности: сервер отбрасывает всё, чего в списке нет. */
+  const SURFACE_IDS = new Set(SURFACE_TYPES.map((item) => item.id));
+
+  /**
+   * Приводит клетки поверхности к виду, который согласуют клиент и сервер.
+   *
+   * Приходит из файла кампании и из сообщений, поэтому здесь отсекаются
+   * несуществующие типы, дробные координаты и всё, что дальше полутора
+   * тысяч клеток: карта на 200x200 — это уже не поверхность, а ошибка.
+   * @param {unknown} raw
+   * @returns {{cells: Record<string, string>}}
+   */
+  function normalizeSurface(raw) {
+    const cells = {};
+    const source = raw && typeof raw === 'object' ? raw.cells : null;
+    if (!source || typeof source !== 'object') return { cells };
+    for (const [key, value] of Object.entries(source)) {
+      if (Object.keys(cells).length >= 1500) break;
+      const parts = String(key).split(',');
+      if (parts.length !== 2) continue;
+      const col = Number.parseInt(parts[0], 10);
+      const row = Number.parseInt(parts[1], 10);
+      if (!Number.isInteger(col) || !Number.isInteger(row)) continue;
+      if (col < 0 || row < 0) continue;
+      const type = String(value || '');
+      if (!SURFACE_IDS.has(type)) continue;
+      cells[`${col},${row}`] = type;
+    }
+    return { cells };
+  }
+
+const GRID = {
     minCell: 8,
     maxCell: 512,
     defaultCell: 46,
     minColumns: 2,
-    maxColumns: 200
+    maxColumns: 200,
+    // Сетку надо не только растянуть, но и положить на картинку. Число клеток
+    // по ширине берётся с половиной: картинка на 1600 пикселей при 37 клетках
+    // даёт 43.24 пикселя на клетку, и целое число клеток сетку клало бы на
+    // картинку с ошибкой в несколько пикселей на всю ширину.
+    minColumnsStep: 0.5,
+    // Сдвиг сетки в пикселях картинки: у готовой карты своя сетка начинается не
+    // обязательно с левого верхнего угла, и без сдвига наша сетка на полклетки
+    // отстаёт от неё.
+    maxOffset: 4096,
+    // Футов в клетке. Правила 5e держат клетку в пяти футах, и без этого
+    // числа дальность света («факел светит на 20 футов») переводить в клетки
+    // нечем. Мастер может поставить своё: на картах с другой мерой это иначе
+    // не выразить.
+    minFeetPerCell: 1,
+    maxFeetPerCell: 50,
+    defaultFeetPerCell: 5
   };
+
+  /**
+   * Округляет число клеток по ширине до половины клетки.
+   *
+   * Полклетки — предел разумного: точнее сетку поставить нечем, картинку мастер
+   * всё равно меряет на глаз по её клеткам.
+   * @param {unknown} value
+   * @returns {number}
+   */
+  function roundColumns(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    return Math.round(number / GRID.minColumnsStep) * GRID.minColumnsStep;
+  }
+
+  /**
+   * Приводит настройки сетки к виду, который согласуют клиент и сервер.
+   *
+   * Правила живут здесь, потому что их читают и снимок состояния, и сообщение
+   * о смене сетки, и кампания на диске. Своя копия в сервере разъехалась бы с
+   * интерфейсом при первом же изменении пределов.
+   * @param {unknown} raw
+   * @returns {{enabled: boolean, cell: number, columns: number, feetPerCell: number, offsetX: number, offsetY: number}}
+   */
+  function normalizeGrid(raw) {
+    const grid = raw && typeof raw === 'object' ? raw : {};
+    const clamp = (value, min, max, fallback) => {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return fallback;
+      return Math.min(max, Math.max(min, number));
+    };
+    const offsetX = Math.round(clamp(grid.offsetX, -GRID.maxOffset, GRID.maxOffset, 0));
+    const offsetY = Math.round(clamp(grid.offsetY, -GRID.maxOffset, GRID.maxOffset, 0));
+    return {
+      enabled: Boolean(grid.enabled),
+      // Пределы зажимаются, а не отбрасываются: мастер ввёл 900, и клетка в 900
+      // пикселей бесполезна, но клетка по крайнему пределу всё ещё осмысленна.
+      cell: Math.round(clamp(grid.cell, GRID.minCell, GRID.maxCell, GRID.defaultCell)),
+      columns: clamp(roundColumns(grid.columns), 0, GRID.maxColumns, 0),
+      feetPerCell: Math.round(clamp(
+        grid.feetPerCell,
+        GRID.minFeetPerCell,
+        GRID.maxFeetPerCell,
+        GRID.defaultFeetPerCell
+      )),
+      offsetX,
+      offsetY
+    };
+  }
+
+  /**
+   * Размер клетки в пикселях картинки.
+   *
+   * Если мастер задал число клеток по ширине, клетка считается от настоящей
+   * ширины подложки и не округляется: округление здесь ровно то, из-за чего
+   * сетка ложилась на картинку не до конца. Фишка рисуется тем же размером и
+   * занимает ровно одну клетку.
+   * @param {object} grid
+   * @param {number} naturalWidth ширина картинки в пикселях
+   * @returns {number}
+   */
+  function gridCellSize(grid, naturalWidth) {
+    const columns = Number(grid && grid.columns) || 0;
+    const width = Number(naturalWidth) || 0;
+    if (columns > 1 && width > 0) {
+      const fitted = width / columns;
+      return Math.min(GRID.maxCell, Math.max(GRID.minCell, fitted));
+    }
+    const manual = Number(grid && grid.cell) || GRID.defaultCell;
+    return Math.min(GRID.maxCell, Math.max(GRID.minCell, manual));
+  }
+
+  /**
+   * Источники света из правил 5e.
+   *
+   * Дальность в футах, а не в клетках: у правил своя мерка, и мастер должен
+   * видеть ровно то, что написано в книге. Пересчёт в клетки — уже забота
+   * сетки (см. GRID.feetPerCell).
+   *
+   * Цвет у каждого свой, и он виден в игре: факел и костёр жгут жёлтым,
+   * лунный свет холодный и синий, огонь на болоте зеленоватый. Пять оттенков
+   * на все случаи не хватило бы, поэтому у каждого источника есть готовая
+   * палитра, а мастер может подвинуть её, если захочет.
+   */
+  const LIGHT_PRESETS = [
+    { id: 'torch', label: 'Факел', radius: 20, color: '#ffab4d' },
+    { id: 'lantern', label: 'Фонарь', radius: 30, color: '#ffd27a' },
+    { id: 'campfire', label: 'Костёр', radius: 40, color: '#ff8b3d' },
+    { id: 'candle', label: 'Свеча', radius: 5, color: '#fff0c2' },
+    { id: 'hood', label: 'Фонарь в капюшоне', radius: 10, color: '#b9c8ff' },
+    { id: 'moon', label: 'Лунный свет', radius: 60, color: '#7d9cff' },
+    { id: 'stars', label: 'Свет звёзд', radius: 80, color: '#9fd0ff' },
+    { id: 'torchlight', label: 'Свет фонаря на клинке', radius: 25, color: '#ffc27a' },
+    { id: 'will-o-wisp', label: 'Болотный огонь', radius: 20, color: '#8ef0a8' },
+    { id: 'arcane', label: 'Волшебный свет', radius: 30, color: '#c49bff' },
+    { id: 'blood', label: 'Красный свет', radius: 20, color: '#ff6b6b' },
+    { id: 'daylight', label: 'Дневной свет', radius: 120, color: '#fff6e0' }
+  ];
+
+  /**
+   * Ночной тон: каким выглядит неосвещённая карта.
+   *
+   * Не чёрный: ночью темно, а не мёртво, и синеватый тон читается как ночь
+   * лучше, чем любая дымка.
+   */
+  const LIGHT_AMBIENT = '#080a18';
 
   /**
    * Холст для рисования карты. Размер холста складывается из клеток сетки,
@@ -212,6 +386,291 @@
     return typeof mask === 'string' && mask.indexOf(FOG.open) >= 0;
   }
 
+  /* ====================================================================== *
+   * Освещение: стены, источники света и то, что из них видно
+   * ====================================================================== */
+
+  /** Пределы на карту. Стен и источников на стол больше не становится. */
+  const LIGHT_LIMITS = {
+    maxWalls: 400,
+    maxLights: 80,
+    minRadius: 1,
+    maxRadius: 200,
+    /** Лучей по окружности источника: 64 дают круг, неотличимый от настоящего. */
+    rays: 64
+  };
+
+  /**
+   * Стена: отрезок, который держит свет.
+   *
+   * Координаты — доли от ширины и высоты карты, ровно как у фишек. Тогда стена
+   * не зависит от того, как мастер приблизил карту, и переживает смену экрана.
+   * Обе точки лежат на карте по разные стороны, иначе это не стена, а точка.
+   */
+  function normalizeWall(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const x1 = Number(raw.x1);
+    const y1 = Number(raw.y1);
+    const x2 = Number(raw.x2);
+    const y2 = Number(raw.y2);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return null;
+    const ax = Math.max(0, Math.min(1, x1));
+    const ay = Math.max(0, Math.min(1, y1));
+    const bx = Math.max(0, Math.min(1, x2));
+    const by = Math.max(0, Math.min(1, y2));
+    // Точка или почти точка свет не держит: стеной она считаться не должна.
+    if (Math.hypot(bx - ax, by - ay) < 0.004) return null;
+    return {
+      id: String(raw.id || '').slice(0, 40),
+      x1: ax,
+      y1: ay,
+      x2: bx,
+      y2: by
+    };
+  }
+
+  /**
+   * Стены карты из того, что пришло из кампании или с сервера.
+   *
+   * Чинится здесь же, а не на клиенте: битая стена из файла иначе портила бы
+   * расчёт света у всех участников стола сразу.
+   * @param {unknown} raw
+   * @returns {object[]}
+   */
+  function normalizeWalls(raw) {
+    if (!Array.isArray(raw)) return [];
+    const result = [];
+    for (const item of raw.slice(0, LIGHT_LIMITS.maxWalls)) {
+      const wall = normalizeWall(item);
+      if (wall) result.push(wall);
+    }
+    return result;
+  }
+
+  /**
+   * Источник света из того, что пришло из кампании или с сервера.
+   * @param {unknown} raw
+   * @returns {object|null}
+   */
+  function normalizeLight(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const x = Number(raw.x);
+    const y = Number(raw.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const radius = clampNumber(raw.radius, LIGHT_LIMITS.minRadius, LIGHT_LIMITS.maxRadius, 20);
+    const color = typeof raw.color === 'string' && /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : '#ffb347';
+    return {
+      id: String(raw.id || '').slice(0, 40),
+      x: Math.max(0, Math.min(1, x)),
+      y: Math.max(0, Math.min(1, y)),
+      radius: Math.round(radius),
+      color,
+      // Тусклый свет по правилам светит вдвое меньше яркого и темноту выедает
+      // не до конца: в нём видно силуэты, но не детали. Поэтому это не яркость,
+      // а вдвое меньший радиус вдобавок с приглушённым пятном.
+      dim: Boolean(raw.dim),
+      // Спрятанный источник мастер гасит на время, не удаляя: у костра за
+      // закрытой дверью свет нужен снова, как только дверь откроют.
+      hidden: Boolean(raw.hidden)
+    };
+  }
+
+  /**
+   * Источники света карты.
+   * @param {unknown} raw
+   * @returns {object[]}
+   */
+  function normalizeLights(raw) {
+    if (!Array.isArray(raw)) return [];
+    const result = [];
+    for (const item of raw.slice(0, LIGHT_LIMITS.maxLights)) {
+      const light = normalizeLight(item);
+      if (light) result.push(light);
+    }
+    return result;
+  }
+
+  /**
+   * Размер сетки карты в клетках.
+   *
+   * Стол знает только число клеток по ширине (`grid.columns`), а по высоте их
+   * столько, сколько выходит из пропорций картинки. Без пропорций свет считал
+   * бы круги ованами: на карте вдвое длиннее горизонтали круг растянулся бы.
+   * @param {object} grid
+   * @param {number} aspect Отношение ширины картинки к высоте.
+   * @returns {{columns: number, rows: number, feetPerCell: number}}
+   */
+  function lightGrid(grid, aspect) {
+    const safe = grid && typeof grid === 'object' ? grid : {};
+    const ratio = Number(aspect);
+    // Пропорции неизвестны: считаем карту квадратной по клеткам, а не
+    // полудлинной. Ошибка в два раза лучше, чем карта высотой в одну клетку.
+    const width = Number(safe.columns) > 0 ? Number(safe.columns) : GRID.maxColumns;
+    const usable = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+    return {
+      columns: Math.max(GRID.minColumns, Math.round(width)),
+      rows: Math.max(1, Math.round(width / usable)),
+      feetPerCell: clampNumber(
+        safe.feetPerCell,
+        GRID.minFeetPerCell,
+        GRID.maxFeetPerCell,
+        GRID.defaultFeetPerCell
+      )
+    };
+  }
+
+  /**
+   * Луч из источника: где он впервые упрётся в стену.
+   *
+   * Ищется пересечение луча с отрезком. Возвращает расстояние до стены в
+   * клетках либо `limit`, если луч ни во что не попал.
+   * @param {number} ox
+   * @param {number} oy
+   * @param {number} dx
+   * @param {number} dy
+   * @param {number} limit
+   * @param {object[]} walls В клетках.
+   * @returns {number}
+   */
+  function castRay(ox, oy, dx, dy, limit, walls) {
+    let best = limit;
+    for (const wall of walls) {
+      // Параметры луча: P = O + t*D, отрезка: P = A + u*(B-A).
+      const ex = wall.x2 - wall.x1;
+      const ey = wall.y2 - wall.y1;
+      const denominator = dx * ey - dy * ex;
+      // Параллельные: либо лежат на одной прямой, либо не пересекутся вовсе.
+      if (Math.abs(denominator) < 1e-9) continue;
+      const t = ((wall.x1 - ox) * ey - (wall.y1 - oy) * ex) / denominator;
+      const u = ((wall.x1 - ox) * dy - (wall.y1 - oy) * dx) / denominator;
+      if (t <= 1e-6 || u < 0 || u > 1) continue;
+      if (t < best) best = t;
+    }
+    return best;
+  }
+
+  /**
+   * Расстояние от точки до отрезка.
+   *
+   * Именно до отрезка, а не до ближайшего его конца: стена длиной в двадцать
+   * клеток может подходить вплотную к источнику посередине, и по концам вышло
+   * бы, что она далеко и тени не даёт.
+   * @param {number} px
+   * @param {number} py
+   * @param {number} x1
+   * @param {number} y1
+   * @param {number} x2
+   * @param {number} y2
+   * @returns {number}
+   */
+  function distanceToSegment(px, py, x1, y1, x2, y2) {
+    const ex = x2 - x1;
+    const ey = y2 - y1;
+    const lengthSquared = ex * ex + ey * ey;
+    if (lengthSquared < 1e-12) return Math.hypot(px - x1, py - y1);
+    const t = Math.max(0, Math.min(1, ((px - x1) * ex + (py - y1) * ey) / lengthSquared));
+    return Math.hypot(px - (x1 + ex * t), py - (y1 + ey * t));
+  }
+
+  /**
+   * Многоугольник, освещённый источником.
+   *
+   * Классический приём для света в играх: луч кидается на каждый угол стены и
+   * на каждую из двух соседних точек чуть вбок. Свет, прошедший мимо угла,
+   * даёт тонкий «щель» в тени за стеной, и край получается ровным, а не
+   * ступенчатым. Без крайних лучей углы выглядели бы обрезанными по прямой.
+   *
+   * Всё считается в клетках, а не в долях карты: клетки квадратные, и круг света
+   * получается круглым на любой карте.
+   * @param {object} light Источник в долях карты.
+   * @param {object[]} walls Стены в клетках.
+   * @param {{columns: number, rows: number, feetPerCell: number}} grid
+   * @returns {{points: Array<[number, number]>, radiusCells: number}}
+   */
+  function lightPolygon(light, walls, grid) {
+    const columns = Math.max(1, grid.columns);
+    const rows = Math.max(1, grid.rows);
+    // Тусклый свет по правилам светит вдвое меньше яркого, поэтому половина
+    // берётся здесь, вместе с остальными правилами света, а не в отрисовке:
+    // иначе тень от тусклого огня отличалась бы от тени яркого того же
+    // радиуса, а не стала бы ею вдвое короче.
+    const reach = light.dim ? Math.max(LIGHT_LIMITS.minRadius, light.radius / 2) : light.radius;
+    const radiusCells = Math.max(
+      LIGHT_LIMITS.minRadius,
+      reach / Math.max(0.001, grid.feetPerCell)
+    );
+    const ox = light.x * columns;
+    const oy = light.y * rows;
+    const segments = walls.filter((wall) => (
+      // За пределами досягаемости стена тени не даёт, и считать её незачем.
+      distanceToSegment(ox, oy, wall.x1, wall.y1, wall.x2, wall.y2) < radiusCells + 1
+    ));
+
+    // Круг без стен должен быть кругом, а для этого по окружности идёт много
+    // лучей, а не четыре по сторонам света. С четырьмя лучами многоугольник
+    // выходил ромбом, и пятно обрезалось им вместо круга: на карте без стен
+    // факел светил квадратом, повёрнутым на сорок пять градусов.
+    //
+    // Шестьдесят четыре луча дают правильный многоугольник: при растягивании
+    // на карту разница с кругом уже не видна, а лишних лучей считать незачем.
+    const angles = [];
+    for (let step = 0; step < LIGHT_LIMITS.rays; step += 1) {
+      angles.push((step / LIGHT_LIMITS.rays) * Math.PI * 2);
+    }
+    // Плюс по три луча на каждый угол стены: свет, прошедший мимо угла, даёт
+    // тонкую щель в тени за стеной, и край получается ровным, а не ступенчатым.
+    for (const wall of segments) {
+      for (const [px, py] of [[wall.x1, wall.y1], [wall.x2, wall.y2]]) {
+        const base = Math.atan2(py - oy, px - ox);
+        angles.push(base - 0.0006, base, base + 0.0006);
+      }
+    }
+    angles.sort((a, b) => a - b);
+
+    const points = [];
+    for (const angle of angles) {
+      const dx = Math.cos(angle);
+      const dy = Math.sin(angle);
+      const distance = castRay(ox, oy, dx, dy, radiusCells, segments);
+      points.push([ox + dx * distance, oy + dy * distance]);
+    }
+    return { points, radiusCells };
+  }
+
+  /**
+   * Стены в клетках: так же, как фишки лежат в долях карты, но свет считается
+   * в квадратной мере.
+   * @param {object[]} walls
+   * @param {{columns: number, rows: number}} grid
+   * @returns {object[]}
+   */
+  function wallsInCells(walls, grid) {
+    const columns = Math.max(1, grid.columns);
+    const rows = Math.max(1, grid.rows);
+    return (walls || []).map((wall) => ({
+      x1: wall.x1 * columns,
+      y1: wall.y1 * rows,
+      x2: wall.x2 * columns,
+      y2: wall.y2 * rows
+    }));
+  }
+
+  /**
+   * Насколько карта сейчас тёмная, с точки зрения мастера и игрока.
+   *
+   * Разница та же, что у тумана: мастер должен видеть, где темно, иначе он не
+   * отличит свою ошибку от замысла, а игроку нужен сплошной мрак.
+   * @param {number} darkness Доля темноты от 0 до 1.
+   * @param {boolean} isDm
+   * @returns {number}
+   */
+  function darknessAlpha(darkness, isDm) {
+    const value = clampNumber(darkness, 0, 1, 0);
+    if (value <= 0) return 0;
+    // Мастер видит темноту, но не тонет в ней: верхняя граница 235 против 255.
+    return Math.round(value * 255 * (isDm ? 0.92 : 1));
+  }
+
   /**
    * Ячейки заклинаний по уровням: девять ступеней, девятой нет у части классов.
    *
@@ -304,21 +763,72 @@
     return index < 0 ? null : row[index];
   }
 
+  /**
+   * Состояния фишки.
+   *
+   * У каждого состояния два поля, которых раньше не было:
+   *   effect — что рисуется под фишкой (лоза, камневая крошка, искры и так далее);
+   *   noMove — по правилам 5e такое состояние отнимает скорость целиком, то есть
+   *           игрок не может переставить свою фишку сам.
+   *
+   * Список читает и сервер, поэтому правило движения одно и то же у обоих:
+   * интерфейс не может разрешить то, что сервер всё равно отвергнет.
+   *
+   * Греющийся и схваченный скорость не отнимают: из положения «сбит с ног» можно
+   * встать, а схвативший тянет фишку сам и мастер водит её руками. Невидимость,
+   * слепота, глухота, испуг и отравление двигать не мешают вовсе.
+   */
   const CONDITIONS = [
-    { id: 'blinded', label: 'Слепой', short: 'Слепой' },
-    { id: 'deafened', label: 'Глухой', short: 'Глухой' },
-    { id: 'dazzled', label: 'Ослеплён', short: 'Ослеп' },
-    { id: 'frightened', label: 'Испуган', short: 'Испуг' },
-    { id: 'grappled', label: 'Схвачен', short: 'Схват' },
-    { id: 'incapacitated', label: 'Недееспособен', short: 'Недеесп.' },
-    { id: 'invisible', label: 'Невидим', short: 'Невид.' },
-    { id: 'paralyzed', label: 'Парализован', short: 'Парал.' },
-    { id: 'petrified', label: 'Окаменел', short: 'Окамен.' },
-    { id: 'poisoned', label: 'Отравлен', short: 'Отравл.' },
-    { id: 'prone', label: 'Сбит с ног', short: 'Лежит' },
-    { id: 'restrained', label: 'Опутан', short: 'Опут.' },
-    { id: 'stunned', label: 'Оглушён', short: 'Оглуш.' }
+    { id: 'blinded', label: 'Слепой', short: 'Слепой', effect: 'blindfold' },
+    { id: 'deafened', label: 'Глухой', short: 'Глухой', effect: 'deafened' },
+    { id: 'dazzled', label: 'Ослеплён', short: 'Ослеп', effect: 'dazzled' },
+    { id: 'frightened', label: 'Испуган', short: 'Испуг', effect: 'frightened' },
+    { id: 'grappled', label: 'Схвачен', short: 'Схват', effect: 'grappled' },
+    { id: 'incapacitated', label: 'Недееспособен', short: 'Недеесп.', effect: 'chained', noMove: true },
+    { id: 'invisible', label: 'Невидим', short: 'Невид.', effect: 'veil' },
+    { id: 'paralyzed', label: 'Парализован', short: 'Парал.', effect: 'bolt', noMove: true },
+    { id: 'petrified', label: 'Окаменел', short: 'Окамен.', effect: 'stone', noMove: true },
+    { id: 'poisoned', label: 'Отравлен', short: 'Отравл.', effect: 'poison' },
+    { id: 'prone', label: 'Сбит с ног', short: 'Лежит', effect: 'prone' },
+    { id: 'restrained', label: 'Опутан', short: 'Опут.', effect: 'vines', noMove: true },
+    { id: 'stunned', label: 'Оглушён', short: 'Оглуш.', effect: 'dizzy', noMove: true }
   ];
+
+  /** Состояния, из-за которых фишкой нельзя пошевелить. */
+  const MOVE_BLOCKING = new Set(CONDITIONS.filter((item) => item.noMove).map((item) => item.id));
+
+  /**
+   * Первое состояние, из-за которого фишка не двигается.
+   *
+   * Возвращаем само состояние, а не логический флаг: интерфейс и сервер показывают
+   * игроку его название («опутан»), иначе запрет выглядит как ошибка приложения.
+   * @param {unknown} list состояния фишки
+   * @returns {object|null}
+   */
+  function conditionBlocksMove(list) {
+    if (!Array.isArray(list)) return null;
+    for (const id of list) {
+      const found = CONDITIONS.find((item) => item.id === String(id || ''));
+      if (found && MOVE_BLOCKING.has(found.id)) return found;
+    }
+    return null;
+  }
+
+  /**
+   * Рисуемые эффекты состояний без повторов: несколько состояний могут дать один
+   * и тот же рисунок, а на фишке два одинаковых эффекта смотрелись бы как ошибка.
+   * @param {unknown} list состояния фишки
+   * @returns {string[]}
+   */
+  function conditionEffects(list) {
+    if (!Array.isArray(list)) return [];
+    const effects = new Set();
+    for (const id of list) {
+      const found = CONDITIONS.find((item) => item.id === String(id || ''));
+      if (found && found.effect) effects.add(found.effect);
+    }
+    return [...effects];
+  }
 
   const LIMITS = {
     maxNameLength: 40,
@@ -567,6 +1077,9 @@
     ABILITIES,
     ABILITY_LABELS,
     CONDITIONS,
+    MOVE_BLOCKING,
+    SURFACE_TYPES,
+    SURFACE_IDS,
     DICE_SIDES,
     FOG,
     FULL_CASTER_CLASSES,
@@ -574,26 +1087,45 @@
     SPELL_SLOT_LEVELS,
     GRID,
     HIT_DICE,
+    LIGHT_AMBIENT,
+    LIGHT_LIMITS,
+    LIGHT_PRESETS,
     LIMITS,
     MAP_LABELS,
     MAP_TYPES,
     SKETCH,
     SKILLS,
-    abilityModifier,
+abilityModifier,
       clampNumber,
-    computeDerived,
-    computeSpellSlots,
-    computeVitalState,
+      castRay,
+      computeDerived,
+      computeSpellSlots,
+      computeVitalState,
+      conditionBlocksMove,
+      conditionEffects,
     createEmptySheet,
+    darknessAlpha,
+    distanceToSegment,
     formatModifier,
     proficiencyBonus,
-    fogHasOpenArea,
+fogHasOpenArea,
+      gridCellSize,
+      lightGrid,
+    lightPolygon,
     newFogMask,
     normalizeFogMask,
-    openFogAt,
-    setFogWhole,
+normalizeLight,
+      normalizeLights,
+      normalizeWall,
+      normalizeWalls,
+      normalizeGrid,
+      normalizeSurface,
+openFogAt,
+      roundColumns,
+      setFogWhole,
     spellSlotMax,
-    spellSlotRow
+    spellSlotRow,
+    wallsInCells
   };
   // Отдаём себя и через module.exports: сервер требует этот файл ради списка
   // состояний, и в Node окна нет. В браузере module не объявлен, поэтому

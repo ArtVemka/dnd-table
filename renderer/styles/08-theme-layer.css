@@ -1,0 +1,1800 @@
+/* ==================================================================
+ * Тематический слой.
+ * Анимации по темам, атмосфера, переделки элементов, печать.
+ *
+ * Файл выделен из styles.css без перестановки правил: порядок в CSS значим
+ * для правил одинаковой специфичности. Части обязаны подключаться по
+ * порядку номеров в index.html.
+ * ================================================================== */
+
+/* ------------------------------------------------- Анимации по темам
+ *
+ * Анимируется только фон и свечение: transform и opacity не заставляют
+ * браузер перерисовывать вёрстку, поэтому карта с кучей фишек не просядет.
+ * Свечение темы подмешивается в рамку панели и заголовок, чтобы оформление
+ * читалось и без анимации — она только украшает.
+ */
+
+@keyframes theme-drift {
+  0%   { transform: translate3d(-2%, -1%, 0) scale(1.05); }
+  50%  { transform: translate3d(2%, 2%, 0) scale(1.12); }
+  100% { transform: translate3d(-2%, -1%, 0) scale(1.05); }
+}
+
+@keyframes theme-sway {
+  0%, 100% { letter-spacing: 0; }
+  50%      { letter-spacing: 0.02em; }
+}
+
+@keyframes theme-flicker {
+  0%, 100% { opacity: 0.5; }
+  38%      { opacity: 0.62; }
+  64%      { opacity: 0.46; }
+}
+
+@keyframes theme-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.7; }
+}
+
+@keyframes theme-shimmer {
+  0%, 100% { opacity: 0.45; transform: translateY(0); }
+  50%      { opacity: 0.85; transform: translateY(-1px); }
+}
+
+/* Подложка-атмосфера. Стоит под всем содержимым и ничего не перехватывает. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+/*
+ * Содержимое приложения поднимаем над атмосферой.
+ *
+ * Без этого подложка с полупрозрачными градиентами ложилась поверх панелей и
+ * гасила интерфейс: элемент с z-index 0 рисуется позже обычного содержимого.
+ */
+body > * {
+  position: relative;
+  z-index: 1;
+}
+
+/*
+ * Стандартная тема: стол при свечах. Раньше она была единственной без
+ * атмосферы, и на фоне остальных тем выглядела пусто. Теперь здесь тёплый
+ * свет от очага снизу и медленно плывущие угли — то же, что в «Трактире»,
+ * но суше и сдержаннее.
+ */
+[data-theme='standart'] body::before {
+  opacity: 1;
+  background:
+    radial-gradient(36% 28% at 50% 104%, rgba(217, 164, 65, 0.13), transparent 70%),
+    radial-gradient(22% 20% at 12% 8%, rgba(200, 117, 80, 0.1), transparent 72%),
+    radial-gradient(1.5px 1.5px at 22% 76%, rgba(255, 214, 150, 0.5), transparent 60%),
+    radial-gradient(1.2px 1.2px at 68% 84%, rgba(255, 214, 150, 0.42), transparent 60%),
+    radial-gradient(1.8px 1.8px at 86% 62%, rgba(255, 196, 120, 0.38), transparent 60%);
+  animation: theme-drift 40s ease-in-out infinite;
+}
+
+[data-theme='standart'] .panel__title,
+[data-theme='standart'] .home__title {
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+/* Лес: тёплые пятна солнца сквозь кроны. */
+[data-theme='les'] body::before {
+  opacity: 1;
+  background:
+    radial-gradient(28% 24% at 22% 18%, var(--ok-soft), transparent 70%),
+    radial-gradient(24% 22% at 78% 68%, rgba(143, 199, 118, 0.12), transparent 72%);
+  animation: theme-drift 34s ease-in-out infinite;
+}
+[data-theme='les'] .panel__title,
+[data-theme='les'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+  animation: theme-sway 9s ease-in-out infinite;
+}
+
+/* Магия: тусклые искры, медленно проступающие из темноты. */
+[data-theme='magiya'] body::before {
+  opacity: 1;
+  background:
+    radial-gradient(2px 2px at 18% 24%, rgba(214, 198, 255, 0.85), transparent 60%),
+    radial-gradient(2px 2px at 72% 16%, rgba(198, 180, 255, 0.7), transparent 60%),
+    radial-gradient(2.5px 2.5px at 46% 62%, rgba(190, 172, 255, 0.75), transparent 60%),
+    radial-gradient(2px 2px at 86% 78%, rgba(214, 198, 255, 0.6), transparent 60%),
+    radial-gradient(2px 2px at 30% 86%, rgba(198, 180, 255, 0.55), transparent 60%),
+    radial-gradient(1.5px 1.5px at 60% 40%, rgba(214, 198, 255, 0.5), transparent 60%),
+    radial-gradient(30% 28% at 50% 50%, rgba(155, 124, 232, 0.14), transparent 72%);
+  animation: theme-pulse 11s ease-in-out infinite;
+}
+
+[data-theme='magiya'] .panel__title,
+[data-theme='magiya'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+  animation: theme-pulse 5.5s ease-in-out infinite;
+}
+
+[data-theme='magiya'] .panel:hover::before,
+[data-theme='magiya'] .panel:hover::after {
+  opacity: 1;
+  box-shadow: 0 0 10px var(--glow);
+}
+
+/* Океан: ровная волна, проходящая по экрану. */
+[data-theme='okean'] body::before {
+  opacity: 1;
+  background:
+    linear-gradient(180deg, transparent 42%, rgba(78, 163, 196, 0.1) 50%, transparent 58%),
+    radial-gradient(40% 30% at 30% 20%, rgba(78, 163, 196, 0.1), transparent 70%);
+  animation: theme-drift 26s ease-in-out infinite;
+}
+
+[data-theme='okean'] .panel__title,
+[data-theme='okean'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+  animation: theme-shimmer 7s ease-in-out infinite;
+}
+
+/* Трактир: неровный свет свечей. Дрожание специально неровное — ровное
+ * pulsание читалось бы как лампочка в приборе, а не как огонь. */
+[data-theme='traktir'] body::before {
+  opacity: 1;
+  background:
+    radial-gradient(34% 26% at 50% 0%, rgba(224, 181, 82, 0.14), transparent 70%),
+    radial-gradient(26% 22% at 12% 88%, rgba(208, 138, 60, 0.1), transparent 72%);
+  animation: theme-flicker 6.5s ease-in-out infinite;
+}
+
+[data-theme='traktir'] .panel__title,
+[data-theme='traktir'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+  animation: theme-flicker 6.5s ease-in-out infinite;
+}
+
+/*
+ * Уважаем системную настройку «уменьшить движение»: оформление остаётся,
+ * исчезает только движение.
+ */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  [data-theme] .panel__title,
+  [data-theme] .home__title {
+    animation: none !important;
+  }
+}
+
+/* ------------------------------------------- Группы в справочнике */
+
+/*
+ * Справочник бывает длинным, а панель вкладок растянута на всю колонку
+ * (`flex: 1`). Без собственной прокрутки карточки выходили за её фон и рамку,
+ * и панель обрывалась на середине списка. Прокручиваем список внутри панели:
+ * рамка остаётся целой, а фон атмосферы виден ровно по её краям.
+ */
+#tab-adventure {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/*
+ * Одинаковые объекты схлопываются в группу: вместо двадцати одинаковых
+ * карточек одна с пометкой «×20». Подробности прячутся под «Показать»,
+ * чтобы список оставался обозримым.
+ */
+.adv-item.is-group {
+  border-color: var(--accent-soft);
+  background: linear-gradient(160deg, var(--surface-2), var(--surface));
+}
+
+.adv-group__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.adv-group__head .adv-item__title {
+  margin-bottom: 0;
+}
+
+.adv-group__count {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--bg);
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.adv-group__body {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.adv-group__list {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.adv-group__member {
+  padding: 1px 0;
+}
+
+/* Загрузка картинки сразу для всей группы. */
+.adv-item__file {
+  display: none;
+}
+
+.adv-item__row:has(.adv-item__file) {
+  cursor: pointer;
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+
+.adv-item__filelabel {
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: underline dotted;
+}
+
+.adv-item__row:has(.adv-item__file):hover .adv-item__filelabel {
+  color: var(--accent-hover);
+}
+
+/*
+ * Название предмета в справочнике кликабельно: открывает статью на dnd.su.
+ * Вид ссылки даётся только когда статья точно есть, иначе это был бы
+ * обманчивый клик в никуда.
+ */
+.adv-item__title--link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.adv-item__title--link:hover {
+  color: var(--accent-hover);
+  text-decoration-style: solid;
+}
+
+/* ==========================================================================
+   ЖИВОЙ СЛОЙ: движение, орнамент и микрополировка
+   --------------------------------------------------------------------------
+   Здесь собрано то, что делает интерфейс «настольным», а не просто
+   тёмным: мягкие тени и блики у поверхностей, огранка у цифр, и главное —
+   движение. Всё общее для тем, различается только цветом, который берётся
+   из переменных темы.
+
+   Движение однотипное во всех темах: элемент проявляется, поднимается и
+   успокаивается. Различается лишь характер фона (угли, искры, волна, огонь)
+   — он задаётся в блоках [data-theme='…'] ниже.
+
+   Правило: ничего не двигается по transform на карте и в панелях стола.
+   Там координаты считаются через getBoundingClientRect, и сдвинутая панель
+   сдвинула бы расчёт броска фишки. Поэтому для стола анимация только
+   меняет прозрачность, а подъём оставлен главному экрану.
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- Кадры */
+
+/* Проявление: снизу вверх, с лёгким увеличением. Для карточек главного. */
+@keyframes dnd-rise {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Проявление без сдвига: для панелей стола и всего, что стоит на месте. */
+@keyframes dnd-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Мягкое появление с затуханием — для строк списков. */
+@keyframes dnd-slide-in {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Всплеск: число броска, кнопка, только что нажатая. */
+@keyframes dnd-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+
+/* Вспышка вокруг кружка: кубик упал. */
+@keyframes dnd-flash {
+  0%   { box-shadow: 0 0 0 0 var(--accent-soft); }
+  100% { box-shadow: 0 0 0 16px transparent; }
+}
+
+/* Кольцо, расходящееся от броска. */
+@keyframes dnd-ring {
+  0%   { opacity: 0.85; transform: scale(0.6); }
+  100% { opacity: 0; transform: scale(1.9); }
+}
+
+/* Появление фишки: только прозрачность, transform трогать нельзя. */
+@keyframes dnd-token-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Всплывающая подсказка. */
+@keyframes dnd-toast-in {
+  from { opacity: 0; transform: translateX(28px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Модальное окно: расплылось из центра. */
+@keyframes dnd-modal-in {
+  from { opacity: 0; transform: scale(0.94) translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Затемнение под модальным окном. */
+@keyframes dnd-veil-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Медленный блеск по кромке — «свет проходит по металлу». */
+@keyframes dnd-sweep {
+  from { transform: translateX(-120%) skewX(-18deg); }
+  to   { transform: translateX(320%) skewX(-18deg); }
+}
+
+/* Дыхание свечения. */
+@keyframes dnd-breathe {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+/* Медленное вращение — только для декоративных элементов. */
+@keyframes dnd-turn {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ---------------------------------------------------------------- Экраны */
+
+/*
+ * Переход между экранами. Только прозрачность: сдвиг сдвинул бы содержимое
+ * стола, а с ним и раскладку, и расчёт координат фишек.
+ */
+.screen.is-active {
+  animation: dnd-fade var(--dur) var(--ease) both;
+}
+
+.screen--centered.is-active {
+  animation: dnd-fade var(--dur-slow) var(--ease) both;
+}
+
+/* ---------------------------------------------------------------- Панели */
+
+/*
+ * Панель стола чуть проявляется при появлении. Прозрачность вместо
+ * сдвига — по причине, названной выше.
+ */
+.screen--table.is-active .panel {
+  animation: dnd-fade var(--dur-slow) var(--ease) both;
+}
+
+/* Гравировка: тонкая светлая кромка сверху и тень снизу. Панель перестаёт
+   быть плоской заливкой и начинает выглядеть вырезанной из камня. */
+.panel {
+  background:
+    linear-gradient(180deg, var(--sheen), transparent 46px),
+    var(--surface);
+  box-shadow:
+    var(--frame-inner),
+    var(--panel-shadow),
+    inset 0 1px 0 var(--hairline),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+}
+
+.panel:hover {
+  border-color: var(--border-strong);
+}
+
+/* Заголовок панели: капитель и волосяная линия под ним. */
+.panel__title {
+  position: relative;
+  padding-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel__title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border-strong), transparent);
+}
+
+/* Углы панелей загораются мягче, чем раньше, и не мелькают. */
+.panel::before,
+.panel::after {
+  transition: opacity var(--dur) var(--ease);
+}
+
+/* ---------------------------------------------------------------- Кнопки */
+
+/*
+ * Кнопка: верхний блик, как у металлической накладки, и вдавленность при
+ * нажатии. Раньше кнопка была плоской заливкой.
+ */
+.btn {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--surface-3), var(--surface-2));
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 1px 2px rgba(0, 0, 0, 0.35);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 3px 10px var(--shadow-press),
+    0 0 14px var(--accent-soft);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 5px var(--shadow-press);
+}
+
+/* У кнопки своё оформление фокуса: мягкое свечение вокруг. Общее кольцо из
+   токенов у неё перебивается, и это осознанно — кнопок на экране десятки, и
+   сплошная обводка на каждой превращала бы интерфейс в частокол. */
+.btn:focus-visible {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 0 0 3px var(--accent-soft),
+    0 0 14px var(--accent-soft);
+}
+
+/* Акцентная кнопка: золото горит, а не просто заливает фон. */
+.btn--accent {
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 2px 8px var(--shadow-press),
+    0 0 18px var(--accent-soft);
+}
+
+.btn--accent:hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 14px var(--shadow-press),
+    0 0 26px var(--accent-soft);
+}
+
+.btn--accent:active:not(:disabled) {
+  box-shadow: inset 0 2px 6px var(--shadow-press);
+}
+
+/* Мелкие кнопки не подпрыгивают: иначе список фишек дрожал бы при наведении. */
+.btn--tiny:hover:not(:disabled) {
+  transform: none;
+}
+
+/* ---------------------------------------------------------------- Поля */
+
+.input,
+.textarea,
+.select,
+.field__input {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.28), transparent 60%), var(--bg-deep);
+  box-shadow: inset 0 1px 3px var(--shadow-press);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.input:focus,
+.textarea:focus,
+.select:focus,
+.field__input:focus {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.35),
+    0 0 0 3px var(--accent-soft),
+    0 0 16px var(--accent-soft);
+}
+
+::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------- Главный */
+
+/*
+ * Логотип: гранёная пластина с ромбом внутри. Сам квадрат не поворачиваем:
+ * в нём текст, а повёрнутый вместе с рамкой текст читался бы боком.
+ * Ромб сделан псевдоэлементом.
+ */
+.home__logo {
+  position: relative;
+  width: 78px;
+  height: 78px;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  letter-spacing: 0.5px;
+  color: var(--gold);
+  background: linear-gradient(160deg, var(--surface-3), var(--surface));
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 8px 22px rgba(0, 0, 0, 0.5),
+    0 0 26px var(--accent-soft);
+  transition: transform var(--dur-slow) var(--ease-back), box-shadow var(--dur-slow) var(--ease);
+}
+
+.home__logo::before {
+  /* Ромб — силуэт грани d20. */
+  content: '';
+  position: absolute;
+  inset: 13px;
+  border: 1px solid var(--gold);
+  opacity: 0.5;
+  transform: rotate(45deg);
+  border-radius: 3px;
+}
+
+.home__logo::after {
+  /* Внутренняя грань: та же фигура, меньше и тусклее. */
+  content: '';
+  position: absolute;
+  inset: 21px;
+  border: 1px solid var(--gold);
+  opacity: 0.28;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.home__brand:hover .home__logo {
+  transform: scale(1.05);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 10px 26px rgba(0, 0, 0, 0.55),
+    0 0 34px var(--accent-soft);
+}
+
+/* Медленный золотой отблеск по титулу. */
+@keyframes dnd-title-shine {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+
+/*
+ * Титул главного экрана.
+ *
+ * Собственное правило, а не тема: тени анимируют прозрачность, а у титула
+ * текст с градиентом, и на такой анимации он гаснет до нечитаемого. Свой
+ * отблеск двигает градиент, а буквы остаются светлыми.
+ *
+ * Селектор с двумя классами — чтобы перебить правило темы
+ * ([data-theme='…'] .home__title) по порядку, а не по specificity.
+ */
+.home__brand .home__title {
+  font-size: 46px;
+  letter-spacing: 2px;
+  background: linear-gradient(100deg, var(--text) 18%, var(--gold) 48%, var(--text) 78%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  text-shadow: 0 4px 20px rgba(0, 0, 0, 0.65);
+  animation: dnd-title-shine 11s ease-in-out infinite;
+}
+
+/* Карточки главного экрана появляются по очереди: так меню читается как
+   перечисление, а не как стена кнопок. */
+.home__group:nth-of-type(1) .card { animation-delay: 60ms; }
+.home__group:nth-of-type(2) .card { animation-delay: 140ms; }
+.home__group:nth-of-type(1) .card:nth-child(2) { animation-delay: 100ms; }
+.home__group:nth-of-type(2) .card:nth-child(2) { animation-delay: 180ms; }
+
+.card {
+  position: relative;
+  overflow: hidden;
+  animation: dnd-rise var(--dur-slow) var(--ease-out) both;
+  box-shadow:
+    var(--frame-inner),
+    inset 0 1px 0 var(--sheen),
+    0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.card::after {
+  /* Мягкий блик, пробегающий по карточке при наведении. */
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, var(--sheen), transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.card:hover::after {
+  opacity: 1;
+  animation: dnd-sweep 900ms var(--ease) infinite;
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow:
+    var(--frame-inner),
+    inset 0 1px 0 var(--sheen),
+    0 12px 26px var(--shadow-press),
+    0 0 22px var(--glow);
+}
+
+.card__icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-3);
+  box-shadow: inset 0 1px 0 var(--sheen);
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.card:hover .card__icon {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.card__title {
+  font-size: 18px;
+  letter-spacing: 0.3px;
+}
+
+/* ---------------------------------------------------------------- Чат */
+
+.chat__msg {
+  animation: dnd-slide-in var(--dur) var(--ease) both;
+  border-left: 2px solid transparent;
+  padding-left: 7px;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.chat__msg:hover {
+  background: var(--hover-wash);
+}
+
+/* Реплика мастера — золотой край: за столом видно, кто говорит. */
+.chat__msg--dm {
+  border-left-color: var(--gold);
+}
+
+.chat__msg--roll {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.chat__author {
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.chat__time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- Кубики */
+
+/* Результат броска: цифра выскакивает и оседает. */
+.dice__last {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--accent-soft), transparent);
+}
+
+.dice__last-value {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 18px var(--accent-soft);
+}
+
+.dice__last-value.is-pop {
+  animation: dnd-pop 420ms var(--ease-back);
+}
+
+.dice__last::after {
+  /* Кольцо, расходящееся в момент броска. */
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dice__last.is-rolling::after {
+  animation: dnd-ring 620ms var(--ease-out);
+}
+
+.dice__row {
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.dice__row:hover {
+  background: var(--surface-3);
+  transform: translateX(2px);
+}
+
+.dice__row-result {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- Тосты */
+
+.toasts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.toast {
+  animation: dnd-toast-in var(--dur) var(--ease-out) both;
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 8px 22px rgba(0, 0, 0, 0.5);
+  border-left: 3px solid var(--accent);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.toast--ok { border-left-color: var(--ok); }
+.toast--error { border-left-color: var(--danger); }
+
+/* ---------------------------------------------------------------- Модалки */
+
+.modal-overlay {
+  animation: dnd-veil-in var(--dur) var(--ease) both;
+  backdrop-filter: blur(3px);
+}
+
+.modal {
+  animation: dnd-modal-in var(--dur) var(--ease-back) both;
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
+.modal__title {
+  letter-spacing: 0.4px;
+}
+
+.dialog {
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 24px 60px rgba(0, 0, 0, 0.6);
+  animation: dnd-modal-in var(--dur) var(--ease-back) both;
+}
+
+/* ---------------------------------------------------------------- Фишки */
+
+/*
+ * Фишка появляется с прозрачностью: transform на ней трогать нельзя, по
+ * нему считаются координаты броска.
+ */
+.token {
+  animation: dnd-token-in var(--dur-slow) var(--ease) both;
+}
+
+.token__circle {
+  transition:
+    box-shadow var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    filter var(--dur-fast) var(--ease);
+}
+
+.token:hover .token__circle {
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.6),
+    0 0 16px var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.token--mine .token__circle {
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.55),
+    0 0 12px var(--accent-soft);
+}
+
+/* Скрытая фишка не должна выглядеть как готовая: приглушена и без свечения. */
+.token--hidden .token__circle {
+  box-shadow: none;
+  filter: grayscale(0.7) brightness(0.75);
+}
+
+.token--hidden:hover .token__circle {
+  box-shadow: 0 0 14px var(--accent-soft);
+}
+
+/* ---------------------------------------------------------------- Лист */
+
+/* Коробка в листе — «гравировка», а не рамка. */
+.box {
+  background: linear-gradient(180deg, var(--sheen), transparent 40px), var(--surface);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    0 4px 14px rgba(0, 0, 0, 0.3);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.box__title {
+  position: relative;
+  padding-bottom: 5px;
+}
+
+.box__title::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--gold), transparent 70%);
+  opacity: 0.5;
+}
+
+/* Карточка характеристики: тотем, а не ячейка таблицы. */
+.abil {
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 3px 10px rgba(0, 0, 0, 0.3);
+  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.abil:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 7px 16px var(--shadow-press),
+    0 0 14px var(--accent-soft);
+}
+
+.abil__name {
+  letter-spacing: 0.4px;
+}
+
+.abil__score,
+.abil__mod,
+.prof-row__value {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Отметка владения навыком: галочка загорается. */
+.prof-row__value.is-proficient {
+  text-shadow: 0 0 12px var(--accent-soft);
+}
+
+.prof-row__value.is-expertise {
+  text-shadow: 0 0 16px var(--gold);
+  color: var(--gold);
+}
+
+.prof-row {
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.prof-row:hover {
+  transform: translateX(2px);
+}
+
+/* ---------------------------------------------------------------- Участники */
+
+.player-row {
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.player-row:hover {
+  transform: translateX(2px);
+  background: var(--hover-wash);
+}
+
+.player-row__avatar {
+  transition: box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.player-row:hover .player-row__avatar {
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-soft);
+}
+
+/* Строка списка фишек: слева загорается полоска. */
+.token-row {
+  position: relative;
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.token-row:hover {
+  background: var(--hover-wash);
+  transform: translateX(2px);
+}
+
+.token-row__dot {
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+
+.token-row:hover .token-row__dot {
+  box-shadow: 0 0 10px currentColor;
+}
+
+/* ---------------------------------------------------------------- Вкладки */
+
+.tabs__btn {
+  position: relative;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.tabs__btn::after {
+  /* Подчёркивание активной вкладки вырастает из центра. */
+  content: '';
+  position: absolute;
+  left: 50%;
+  right: 50%;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: left var(--dur) var(--ease), right var(--dur) var(--ease);
+}
+
+.tabs__btn.is-active::after {
+  left: 22%;
+  right: 22%;
+}
+
+/* ---------------------------------------------------------------- Прочее */
+
+/*
+ * Фактура: мелкая сетка в режим наложения даёт ощущение зерна бумаги.
+ * Едва заметная — интерфейс должен оставаться читаемым, а не выглядеть
+ * испорченным. Поверх неё лежит атмосфера темы.
+ */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: repeating-conic-gradient(from 0deg at 50% 50%, #fff 0deg 90deg, #000 90deg 180deg);
+  background-size: 3px 3px;
+  mix-blend-mode: overlay;
+}
+
+
+.badge {
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+
+.badge--dm {
+  box-shadow: 0 0 10px var(--accent-soft);
+}
+
+/* Подсказка с золотой кромкой: заметна, но не кричит. */
+.hint {
+  border-left-color: var(--gold);
+  box-shadow: inset 0 1px 0 var(--sheen);
+}
+
+/* Панель приглашения: билет читается как пергамент. */
+.addr__url--ticket {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.addr__url--ticket:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 14px var(--accent-soft);
+}
+
+/* Полосы прокрутки: тонкие, под тему, с заметным большим пальцем. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+  background-clip: padding-box;
+}
+
+/* ------------------------------------------------------------ Уважение к настройке движения */
+
+/*
+ * Если в системе включено «уменьшить движение», интерфейс остаётся
+ * оформленным, но не двигается: анимации гасятся, переходы мгновенны.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .card:hover,
+  .btn:hover:not(:disabled),
+  .abil:hover,
+  .prof-row:hover,
+  .player-row:hover,
+  .token-row:hover,
+  .dice__row:hover {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------- Печать */
+
+/*
+ * Игроки держат лист рядом с кубиками: тёмный экран за столом не годится, а
+ * отдельная бумажка расходится с тем, что в приложении. Поэтому на печать
+ * уходит только сам лист, белым по белому, без шапки стола и панелей.
+ *
+ * Цвета заданы прямо здесь, а не взяты из темы: переменные темы ведут к
+ * тёмному фону, и на бумаге получился бы чёрный прямоугольник.
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #101010 !important;
+  }
+
+  /* Всё, кроме листа, на бумагу не попадает. */
+  body * {
+    visibility: hidden;
+  }
+
+  .sheet,
+  .sheet * {
+    visibility: visible;
+  }
+
+  .sheet {
+    position: absolute;
+    inset: 0;
+    width: auto !important;
+    max-height: none;
+    overflow: visible;
+    gap: 8px;
+  }
+
+  /* Кнопки и служебные подписи на бумаге бессмысленны. */
+  .sheet__head,
+  .avatar-pick__side {
+    display: none !important;
+  }
+
+  .sheet__col,
+  .box,
+  .abil,
+  .prof-row {
+    break-inside: avoid;
+    box-shadow: none;
+    border-color: #bbb !important;
+    background: #fff !important;
+  }
+
+  .box__title,
+  .sheet__title,
+  .field__label,
+  .abil__name {
+    color: #101010 !important;
+  }
+
+  /* Пустые поля и заглушки на бумаге не нужны: печатается то, что вписано. */
+  .avatar-pick__preview,
+  .avatar-pick {
+    display: none !important;
+  }
+
+  input, textarea {
+    border-color: transparent !important;
+    background: transparent !important;
+    color: #101010 !important;
+  }
+
+  .mini-grid__value,
+  .sheet__derived,
+  .abil__mod {
+    color: #101010 !important;
+  }
+}
+/* ------------------------------------------------- Спасброски смерти */
+
+.death-saves {
+  margin-top: 10px;
+  padding: 8px 9px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* Стабилизирован и мёртв: блок остаётся на месте, но цвет говорит сразу. */
+.death-saves.is-stable {
+  border-color: var(--border-strong);
+}
+
+.death-saves.is-dead {
+  border-color: var(--danger);
+}
+
+.death-saves__rows {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.death-saves__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.death-saves__label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.death-saves__value {
+  font-family: var(--font-num);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--gold);
+  min-width: 20px;
+  text-align: center;
+}
+
+.death-saves.is-dead .death-saves__value {
+  color: var(--danger);
+}
+
+.death-saves__state {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.death-saves__state:empty {
+  display: none;
+}
+
+.death-saves__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.death-saves__actions .btn {
+  flex: 1;
+  font-size: 12px;
+}
+/* ------------------------------------------------------- Состояния фишки */
+
+.token-conditions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.token-conditions__head {
+  appearance: none;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-conditions__head.is-empty {
+  border-style: dotted;
+  opacity: 0.6;
+}
+
+/* Включённые состояния показываем именами, а не значками: список должен
+   читаться без подсказки, иначе три буквы ничего не говорят. */
+.token-conditions:not(.is-open) .token-conditions__head {
+  border-style: solid;
+  color: var(--gold);
+  border-color: var(--border-strong);
+}
+
+.token-conditions__grid {
+  display: none;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: 230px;
+}
+
+.token-conditions.is-open .token-conditions__grid {
+  display: flex;
+}
+
+.token-conditions__chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.token-conditions__chip:hover {
+  color: var(--text);
+}
+
+.token-conditions__chip.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Подсказки состояний под фишкой на карте. */
+.token__conditions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  justify-content: center;
+  max-width: 140px;
+}
+
+.token__condition {
+  font-size: 9px;
+  line-height: 1.3;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--hp-plate);
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+/* Невидимая фишка видна только мастеру и полупрозрачно. */
+.token--invisible .token__circle {
+  opacity: 0.35;
+}
+
+.token--invisible .token__conditions {
+  opacity: 0.6;
+}
+/* --------------------------------------------- Заметка мастера об игроке */
+
+.dm-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.dm-note__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dm-note__title {
+  font-family: var(--font-title);
+  font-size: 14px;
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dm-note__area {
+  min-height: 92px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 8px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+}
+
+.dm-note__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Заметка есть: кнопка помечена, иначе мастер забывает про неё. */
+.btn.has-note {
+  color: var(--gold);
+  border-color: var(--border-strong);
+}
+
+/* Подсказка в строке участника видна только мастеру. */
+.player-row__note {
+  margin-top: 6px;
+  padding: 5px 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  border-left: 2px solid var(--gold);
+  background: var(--surface-2);
+  border-radius: 0 5px 5px 0;
+  overflow-wrap: anywhere;
+}
+/* ------------------------------------------------------ Ячейки заклинаний */
+
+.spell-slots {
+  margin-top: 10px;
+  padding: 8px 9px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.spell-slots__rows {
+  display: grid;
+  /* Девять ступеней в три колонки: список не вытягивает блок на всю
+     высоту листа, а на узкой колонке панели три ряда по три. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.spell-slots__row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 5px;
+}
+
+/* Ступень — римская цифра по правилам, в правилах их и пишут так. */
+.spell-slots__level {
+  font-family: var(--font-num);
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 14px;
+  text-align: center;
+}
+
+.spell-slots__used {
+  font-family: var(--font-num);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--gold);
+  min-width: 18px;
+  text-align: center;
+}
+
+.spell-slots__max {
+  width: 38px;
+  margin-left: auto;
+  padding: 1px 3px;
+  font-family: var(--font-num);
+  font-size: 13px;
+  text-align: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+
+.spell-slots__max:focus {
+  border-color: var(--accent);
+}
+
+.spell-slots__actions {
+  margin-top: 8px;
+  text-align: right;
+}
+
+.spell-slots__row.is-empty .spell-slots__used {
+  color: var(--muted);
+}
+/* --------------------------------------------------------- Сворачиваемые секции */
+
+/* Заголовок секции: треугольник, название и всё, что захочется положить
+   справа (счётчик, кнопка). В свёрнутом виде остаётся только он. */
+.section__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--font-title);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 4px 2px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.section__head:hover {
+  color: var(--text);
+}
+
+.section__head:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Заголовок секции светится, когда по нему едут клавишей: треугольник и сам
+   заголовок, а не только рамка, иначе при переносе взгляда на список легко
+   потерять, где остановился. */
+.section__head:focus-visible .section__caret {
+  color: var(--accent);
+}
+
+.section__caret {
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.18s ease;
+  flex: none;
+  color: var(--gold);
+}
+
+.section.is-collapsed .section__caret {
+  transform: rotate(-90deg);
+}
+
+.section__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.section__body[hidden] {
+  display: none;
+}
+
+/* --------------------------------------------------------- Туман войны */
+
+/* Холст лежит поверх карты, фишек и подсказок: закрытый участок не должен
+   просвечивать ни через что. Размер и позиция берутся у подложки карты.
+   Выше света: иначе пятно света высветило бы кусок карты, который мастер
+   считает закрытым. */
+.map-fog {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 7;
+}
+
+/* В режиме кисти указатель открывает карту, а не двигает фишку. */
+.map-surface.is-fogging {
+  cursor: crosshair;
+}
+
+.map-surface.is-drawing-wall,
+.map-surface.is-drawing-light {
+  cursor: crosshair;
+}
+
+/* ----------------------------------------------------------- Освещение */
+
+/* Слой темноты. Лежит над картой, сеткой и фишками (z-index 3), но под
+   туманом (z-index 4): иначе пятно света проткнуло бы закрытый участок и
+   игрок увидел бы монстра там, где мастер его ещё не открыл. */
+.map-light {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* Пятна света лежат поверх завесы и смешиваются с ней экранированием: так
+   цвет источника попадает на карту, а не остаётся внутри ночной завесы.
+   Завеса (z-index 4) -> пятна (5) -> стены (6) -> туман (7). */
+.map-glow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+  mix-blend-mode: screen;
+}
+
+/* Стены — подсказка мастеру, не часть освещения. Игроку она не достаётся:
+   стена выдала бы заранее задуманную тактику.
+   Слой лежит выше темноты (z-index 6): мастер должен видеть, где прошла
+   стена, и в неосвещённой части карты тоже.
+
+   Координаты отрезков заданы в тысячных долях карты и растягиваются на весь
+   блок, поэтому обводку приходится отвязывать от масштаба: иначе на широкой
+   карте стена превратилась бы в жирную полосу, а на узкой — в ниточку. */
+.map-walls {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
+  overflow: visible;
+}
+
+.map-walls line {
+  stroke: var(--wall);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 14 9;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.85));
+}
+
+/* Стена, которую мастер тянет прямо сейчас: сплошная и ярче, потому что по
+   ней же считается тень, которую сейчас видно за стеной. */
+.map-walls line.map-wall--draft {
+  stroke: var(--accent);
+  stroke-dasharray: none;
+  stroke-width: 3;
+}
+
+/* ------------------------------------------------- Панель освещения */
+
+/* Отдельная вкладка рядом с картами. Широкая: подписей много, а в строку
+   тулбара они не влезали и читались без них. */
+.map-lightbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.light-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.light-panel__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+}
+
+.light-panel__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.light-panel__label {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Число рядом с ползунком показывает результат без чтения шкалы: « темноту
+   ставишь на глаз» по положению бегунка не вывести. */
+.light-panel__value {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--gold);
+  min-width: 52px;
+}
+
+.light-panel__slider {
+  width: 140px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.light-panel__select {
+  max-width: 220px;
+}
+
+.light-panel__modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.light-panel__title {
+  font-family: var(--font-title);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.light-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.light-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.light-row.is-hidden {
+  opacity: 0.55;
+}
+
+.light-row__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.light-row__radius {
+  font-family: var(--font-num);
+  min-width: 96px;
+}
+
+/* Место источника на карте: без него в списке из пяти огней не понять, какой
+   из них погасить, а на самой карте источник не виден. */
+.light-row__place {
+  font-family: var(--font-num);
+  color: var(--muted);
+  flex: 1;
+}
+
+.light-row__state {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.select--tiny {
+  padding: 2px 6px;
+  font-size: 11px;
+  max-width: 140px;
+}
+
+.fog-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.fog-bar__brush {
+  width: 90px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+@media print {
+  /* Туман на бумаге не нужен: распечатка карты делается без стола. */
+  .map-fog,
+  .map-light,
+  .map-walls,
+  .fog-bar {
+    display: none !important;
+  }
+}

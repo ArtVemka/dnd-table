@@ -33,6 +33,7 @@ const {
   newMapId,
   newTokenId,
   normalizeSheet,
+  normalizeTokenLight,
   sanitizeText
 } = require('./state');
 const { findFreePort } = require('./net');
@@ -43,10 +44,36 @@ const dice = require('../renderer/dice.js');
 // Пустая маска тумана для новой карты: берём ту же модель, что и разбор
 // кисти, иначе у свежей карты окажется поле, которого нет у загруженной.
 const fogModel = require('../renderer/dnd5e.js');
+// Свет приводится к виду той же моделью, что и на клиенте: иначе мастер увидел
+// бы один круг света, а игроки другой, и разошлись бы они при первом же
+// движении фишки.
+const normalizeWall = fogModel.normalizeWall;
+const normalizeLight = fogModel.normalizeLight;
+const LIGHT_LIMITS = fogModel.LIGHT_LIMITS;
+// Сетка — тоже из общей модели: клетку и сдвиг рисует клиент по тем же
+// правилам, и любое расхождение сдвинуло бы сетку относительно фишек.
+const normalizeGrid = fogModel.normalizeGrid;
+const SURFACE_IDS = fogModel.SURFACE_IDS;
+const normalizeSurface = fogModel.normalizeSurface;
 
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
-/** Длина имени карты — та же, что при загрузке в состоянии стола. */
+/** Длина имени карты — та же, что при загрузке в состояние стола. */
 const MAP_NAME_MAX = 120;
+
+/**
+ * Менялась ли сетка по-настоящему.
+ *
+ * Без сравнения каждое движение ползунка пересылало бы всю сетку заново и
+ * перерисовывало карту у всех, даже когда мастер ничего не поменял.
+ * @param {object} before
+ * @param {object} after
+ * @returns {boolean}
+ */
+function sameGrid(before, after) {
+  if (!before || !after) return false;
+  return ['enabled', 'cell', 'columns', 'feetPerCell', 'offsetX', 'offsetY']
+    .every((key) => before[key] === after[key]);
+}
 
 /** @param {string} address */
 function isLoopbackAddress(address) {
@@ -149,11 +176,22 @@ async function createTableServer(options) {
    *
    * В списке есть заметки мастера, и отдать их игрокам нельзя: список уходит
    * на каждое изменение, и одна рассылка на всех утекла бы заметку сразу.
+   *
+   * Скрытые фишки знает только мастер: игрок увидел бы отметку «фишка на поле»
+   * и догадался бы о заготовке. А мастер наоборот обязан видеть, что фишка
+   * уже выведена, иначе кнопка «Вывести» горела бы у него вечно.
    * @param {boolean} [onlyOnline] Только те, кто сейчас за столом.
    */
   const broadcastPlayers = (onlyOnline = false) => {
-    io.to('table').except('dm-sockets').emit('playersUpdate', room.playerList(!onlyOnline, false));
-    io.to('dm-sockets').emit('playersUpdate', room.playerList(!onlyOnline, true));
+    io.to('table').except('dm-sockets').emit('playersUpdate', room.playerList({
+      includeTokens: !onlyOnline,
+      includeDmNotes: false
+    }));
+    io.to('dm-sockets').emit('playersUpdate', room.playerList({
+      includeTokens: !onlyOnline,
+      includeDmNotes: true,
+      includeHidden: true
+    }));
   };
 
   const broadcastMapUpdate = (type) => {
@@ -604,8 +642,15 @@ async function createTableServer(options) {
           name: sanitizeText(payload && payload.name, MAP_NAME_MAX) || 'Карта',
           // Туман есть у каждой карты с момента появления: иначе свежая карта
           // отличалась бы от загруженной из кампании, а мастер нарисовал бы
-          // туман поверх поля, которого в её форме нет.
+          // туман поверх поля, которого в её форме нет. Так же и освещение:
+          // карта без темноты, стен и источников — это ровно дневная карта.
           fogMask: fogModel.newFogMask(),
+          // Поверхность у новой карты пустая, но поле есть: иначе мастер
+          // рисовал бы в undefined и первая же мазок падала бы.
+          surface: { cells: {} },
+          walls: [],
+          lights: [],
+          darkness: 0,
           uploadedAt: new Date().toISOString()
         };
         slot.items.push(map);
@@ -658,16 +703,18 @@ async function createTableServer(options) {
       onLog(`ДМ удалил карту (${type}), осталось: ${slot.items.length}`);
     });
 
-    socket.on('setGrid', (payload) => {
+socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       const data = payload && typeof payload === 'object' ? payload : {};
-      const enabled = Boolean(data.enabled);
-      const cell = clampInt(data.cell, GRID.minCell, GRID.maxCell, room.grid.cell);
-      // columns — сколько клеток по ширине карты. По нему все участники стола
-      // одинаково считают размер клетки, поэтому разошться не могут.
-      const columns = clampInt(data.columns, 0, GRID.maxColumns, room.grid.columns || 0);
-      if (room.grid.enabled === enabled && room.grid.cell === cell && room.grid.columns === columns) return;
-      room.grid = { enabled, cell, columns };
+      // Правила сетки — из файла правил вместе с интерфейсом: клиент рисует
+      // клетку по этим же числам, иначе сетка у разных участников разъехалась бы.
+      const next = normalizeGrid({
+        ...room.grid,
+        ...data,
+        enabled: Boolean(data.enabled)
+      });
+      if (sameGrid(room.grid, next)) return;
+      room.grid = next;
       markDirty();
       // Сетка — дело мастера: её видят и двигают только он.
       io.emit('gridUpdated', room.grid);
@@ -715,7 +762,10 @@ async function createTableServer(options) {
           : null,
         // Поле состояний нужно уже у новой фишки: иначе её форма в интерфейсе
         // отличается от фишки, загруженной из кампании.
-        conditions: []
+        conditions: [],
+        // Свет у новой фишки тоже должен быть: иначе гасить его было бы нечем,
+        // а проверка «светит ли кто-нибудь» ломалась бы на самой первой фишке.
+        light: normalizeTokenLight(null)
       };
       token.hp = token.maxHp;
       room.tokens.push(token);
@@ -758,6 +808,217 @@ async function createTableServer(options) {
       room.setWholeMapFog(item, Boolean(payload && payload.open));
       markDirty();
       broadcastMapUpdate(type);
+    });
+
+    /**
+     * Поверхность по клеткам: кислота, огонь, вода и прочее.
+     *
+     * Мастер рисует кистью и отпускает мышь: уходит пачка клеток одним
+     * сообщением, иначе стол получал бы сотни сообщений за один мазок. Типы
+     * сверяются со списком правил, а клетки — с пределами, иначе в кампанию
+     * попало бы что угодно.
+     */
+    socket.on('paintMapSurface', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const cells = payload && payload.cells;
+      if (!Array.isArray(cells) || !cells.length) return;
+      const surface = { cells: { ...(item.surface && item.surface.cells) } };
+      let changed = 0;
+      for (const entry of cells.slice(0, 400)) {
+        if (!Array.isArray(entry) || entry.length !== 3) continue;
+        const col = Number(entry[0]);
+        const row = Number(entry[1]);
+        if (!Number.isInteger(col) || !Number.isInteger(row) || col < 0 || row < 0) continue;
+        const key = `${col},${row}`;
+        const kind = entry[2] === null ? '' : String(entry[2]);
+        if (kind && !SURFACE_IDS.has(kind)) continue;
+        if ((surface.cells[key] || '') === kind) continue;
+        changed += 1;
+        if (kind) surface.cells[key] = kind;
+        else delete surface.cells[key];
+      }
+      if (!changed) return;
+      const limited = normalizeSurface(surface);
+      if (!Object.keys(limited.cells).length && !Object.keys(item.surface.cells).length) return;
+      item.surface = limited;
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    /** Стирает поверхность с карты целиком. */
+    socket.on('clearMapSurface', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      if (!item.surface || !Object.keys(item.surface.cells).length) return;
+      item.surface = { cells: {} };
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    /* ------------------------------------------------------------------ *
+     * Освещение: темнота карты, стены и источники света
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Общая темнота карты.
+     *
+     * Правка только мастерская по той же причине, что и у тумана: темнота
+     * решает, что игрок видит. Ноль означает дневной свет и выключает слой
+     * вовсе, чтобы карта без освещения не выглядела пожелтевшей.
+     */
+    socket.on('setMapDarkness', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const darkness = Number(payload && payload.darkness);
+      if (!Number.isFinite(darkness)) return;
+      const value = Math.max(0, Math.min(1, darkness));
+      if (item.darkness === value) return;
+      item.darkness = value;
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    /**
+     * Стена: отрезок, который держит свет.
+     *
+     * Шлётся по окончанию протяжки, а не на каждом пикселе: мастер рисует
+     * стену движением мыши, и рассылка на каждое движение утащила бы всех
+     * участников стола. Правка только мастерская.
+     */
+    socket.on('addMapWall', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const wall = normalizeWall({
+        // Идентификатор даёт клиент: мастер рисует стену и сразу видит её на
+        // месте, а если сервер выдаст свой, через полсекунды на карте окажется
+        // вторая копия с другим id — и следующий правый клик удалил бы не ту.
+        id: (payload && payload.wallId) || newTokenId(),
+        x1: payload && payload.x1,
+        y1: payload && payload.y1,
+        x2: payload && payload.x2,
+        y2: payload && payload.y2
+      });
+      // Точка или полностью вырожденный отрезок стеной не считаются.
+      if (!wall || !wall.id) return;
+      if (item.walls.length >= LIGHT_LIMITS.maxWalls) {
+        return emitError(socket, `Стен больше ${LIGHT_LIMITS.maxWalls} быть не может`);
+      }
+      item.walls.push(wall);
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    socket.on('deleteMapWall', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const wallId = String((payload && payload.wallId) || '');
+      const before = item.walls.length;
+      item.walls = item.walls.filter((wall) => wall.id !== wallId);
+      if (item.walls.length === before) return;
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    /** Убрать все стены карты разом: перед боем это делают часто. */
+    socket.on('clearMapWalls', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      if (!item.walls.length) return;
+      item.walls = [];
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    socket.on('addMapLight', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const light = normalizeLight({
+        // Как и у стены, идентификатор даёт клиент: огонь должен появиться на
+        // карте сразу, без ожидания ответа, а второй экземпляр с другим id
+        // остался бы гореть навсегда.
+        id: (payload && payload.lightId) || newTokenId(),
+        x: payload && payload.x,
+        y: payload && payload.y,
+        radius: payload && payload.radius,
+        color: payload && payload.color,
+        dim: payload && payload.dim
+      });
+      if (!light || !light.id) return;
+      if (item.lights.length >= LIGHT_LIMITS.maxLights) {
+        return emitError(socket, `Источников света больше ${LIGHT_LIMITS.maxLights} быть не может`);
+      }
+      item.lights.push(light);
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    /** Правка источника: дальность, цвет или «погасить». */
+    socket.on('setMapLight', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const light = item.lights.find((entry) => entry.id === String(payload && payload.lightId));
+      if (!light) return emitError(socket, 'Источник света не найден');
+      const next = normalizeLight({
+        id: light.id,
+        x: payload && payload.x !== undefined ? payload.x : light.x,
+        y: payload && payload.y !== undefined ? payload.y : light.y,
+        radius: payload && payload.radius !== undefined ? payload.radius : light.radius,
+        color: payload && payload.color !== undefined ? payload.color : light.color,
+        // Тусклый свет по правилам светит вдвое меньше: это отдельный признак,
+        // а не яркость, иначе мастер не смог бы отличить слабый огонь от
+        // яркого того же радиуса.
+        dim: payload && payload.dim !== undefined ? payload.dim : light.dim,
+        hidden: payload && payload.hidden !== undefined ? payload.hidden : light.hidden
+      });
+      if (!next) return emitError(socket, 'Источник света задан неверно');
+      Object.assign(light, next);
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    socket.on('deleteMapLight', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const lightId = String((payload && payload.lightId) || '');
+      const before = item.lights.length;
+      item.lights = item.lights.filter((light) => light.id !== lightId);
+      if (item.lights.length === before) return;
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    /**
+     * Свет фишки: факел в руке персонажа или костёр под монстром.
+     *
+     * Дальность в футах, а не в клетках, потому что так написано в правилах и
+     * мастер не должен пересчитывать футы в клетки за столом. Правка и
+     * перемещение — только мастерские: иначе игрок мог бы осветить себе поле.
+     */
+    socket.on('setTokenLight', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      const radius = Number(payload && payload.radius);
+      if (!Number.isFinite(radius) || radius < 0) return emitError(socket, 'Дальность света задана неверно');
+      const color = payload && payload.color;
+      // Свет есть не у всякой фишки: кампания может прийти из версии без него,
+      // и без подстановки здесь сервер упал бы на первой же такой фишке.
+      token.light = normalizeTokenLight({
+        radius,
+        color: typeof color === 'string' ? color : (token.light && token.light.color)
+      });
+      markDirty();
+      emitToken('tokenUpdated', token);
     });
 
     /**
@@ -830,6 +1091,45 @@ async function createTableServer(options) {
       }
       if (!changed) return;
       onLog(`Фишки на столе ${hidden ? 'скрыты от игроков' : 'показаны игрокам'} (${changed})`);
+    });
+
+    /**
+     * Скрыть имя фишки от игроков.
+     *
+     * Фишка при этом остаётся видимой: скрывают не фишку, а подпись под ней.
+     * Так выводиют загадочного NPC, чьё имя игроки узнавать не должны.
+     * Правка только мастерская — по той же причине, что и скрытость самой
+     * фишки: решает тот, кто видит всё.
+     */
+    socket.on('setTokenNameHidden', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      const hidden = !(payload && payload.hidden === false);
+      if (Boolean(token.hideName) === hidden) return;
+      token.hideName = hidden;
+      markDirty();
+      emitToken('tokenUpdated', token);
+      onLog(`Имя фишки «${token.name}» ${hidden ? 'скрыто от игроков' : 'показано игрокам'}`);
+    });
+
+    /**
+     * Скрыть подписи под фишкой у всех сразу: имя, хозяина и состояния.
+     *
+     * В отличие от скрытого имени это не тайна: подписи убираются с нагруженной
+     * карты, где их слишком много, и убираются у всех, включая мастера.
+     * Фишка остаётся на месте и двигается как обычно.
+     */
+    socket.on('setTokenLabelsHidden', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      const hidden = !(payload && payload.hidden === false);
+      if (Boolean(token.hideLabels) === hidden) return;
+      token.hideLabels = hidden;
+      markDirty();
+      emitToken('tokenUpdated', token);
+      onLog(`Подписи фишки «${token.name}» ${hidden ? 'скрыты у всех' : 'показаны всем'}`);
     });
 
     socket.on('renameToken', (payload) => {
@@ -965,6 +1265,15 @@ async function createTableServer(options) {
       if (!isDm && token.assignedPlayerId !== socket.data.playerId) {
         return emitError(socket, 'Можно двигать только свою фишку');
       }
+      // Состояние, отнимающее скорость, запрещает движение самому игроку, но
+      // мастеру оставляет его: перетащить соперника, оглушить или поднять можно
+      // и нужно, иначе состояние превратилось бы в запрет на игру.
+      if (!isDm) {
+        const blocker = room.moveBlocker(token);
+        if (blocker) {
+          return emitError(socket, `Фишка «${blocker.label.toLowerCase()}»: двигать её нельзя, пока состояние не снято`);
+        }
+      }
       const x = clampNumber(payload && payload.x, 0, 1, token.x);
       const y = clampNumber(payload && payload.y, 0, 1, token.y);
       if (x === token.x && y === token.y) return;
@@ -1039,6 +1348,12 @@ async function createTableServer(options) {
         room.rollInitiative((min, max) => crypto.randomInt(min, max + 1), entry.id);
       } else {
         room.rollInitiative((min, max) => crypto.randomInt(min, max + 1));
+        // Бой начался: включаем режим боя, чтобы фишки пошли по клеткам. Именно
+        // тут, а не по кнопке: порядок боя и есть объявление начала боя.
+        if (room.combat && !room.combat.enabled) {
+          room.combat.enabled = true;
+          io.emit('combatMode', room.combat);
+        }
       }
       markDirty();
       emitInitiative();
@@ -1076,8 +1391,31 @@ async function createTableServer(options) {
     socket.on('initiativeReset', () => {
       if (!requireDm(socket)) return;
       room.resetInitiative();
+      // Бой кончился или откатился: режим боя выключается вместе с порядком,
+      // иначе фишки продолжали бы ходить по клеткам после конца боя.
+      if (room.combat && room.combat.enabled) {
+        room.combat.enabled = false;
+        io.emit('combatMode', room.combat);
+      }
       markDirty();
       emitInitiative();
+    });
+
+    /**
+     * Режим боя: фишки ходят по клеткам, а не свободно.
+     *
+     * Переключает мастер, но сервер проверяет: порядок боя и режим боя должны
+     * совпадать у всех, иначе один участник увидит ход по клеткам, а другой
+     * перетаскивание.
+     */
+    socket.on('setCombatMode', (payload) => {
+      if (!requireDm(socket)) return;
+      const enabled = Boolean(payload && payload.enabled);
+      if (room.combat.enabled === enabled) return;
+      room.combat.enabled = enabled;
+      markDirty();
+      io.emit('combatMode', room.combat);
+      onLog(enabled ? 'Режим боя включён: ход по клеткам' : 'Режим боя выключен');
     });
 
     /* ------------------------------------------------------------------ *

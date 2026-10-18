@@ -45,7 +45,17 @@ const REQUIRED_FILES = [
   'preload.js',
   'preload-sheet.js',
   'renderer/index.html',
-  'renderer/styles.css',
+  // Оформление разбито на восемь частей и подключается по порядку номеров.
+  // Если хоть одна не попала в пакет, страница откроется без оформления вовсе,
+  // и заметить это можно только глазами.
+  'renderer/styles/01-tokens.css',
+  'renderer/styles/02-screens.css',
+  'renderer/styles/03-controls.css',
+  'renderer/styles/04-layout.css',
+  'renderer/styles/05-map.css',
+  'renderer/styles/06-panels.css',
+  'renderer/styles/07-sheet.css',
+  'renderer/styles/08-theme-layer.css',
   'renderer/theme.js',
   // Разбор формул броска. Сервер берёт его отсюда же, и без него в поставке
   // падает и бросок кубика, и тренировочный стол.

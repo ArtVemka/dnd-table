@@ -31,7 +31,30 @@
         : `получено ${JSON.stringify(actual)}, ждали ${JSON.stringify(expected)}`);
     }
   };
+  // Сравнение структур: порядок ключей в разметке и в данных одинаковый, а
+  // сообщение об ошибке должно показывать, что именно разошлось.
+  assert.deepStrictEqual = (actual, expected, message) => {
+    const left = JSON.stringify(actual);
+    const right = JSON.stringify(expected);
+    if (left !== right) {
+      throw new Error(message ? `${message} (получено ${left}, ждали ${right})` : `получено ${left}, ждали ${right}`);
+    }
+  };
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  /** Кнопка по тексту внутри узла: искать по классу нельзя, у кнопок он общий. */
+  const byText = (root, text) => [...root.querySelectorAll('button')]
+    .find((node) => node.textContent.trim() === text);
+  /**
+   * Окно настроек стола.
+   *
+   * Именно последнее: тренировочный стол открывает своё, и по первому попаданию
+   * в список настроек настраивался бы не тот стол.
+   * @returns {Element}
+   */
+  const settingsOverlay = () => {
+    const overlays = document.querySelectorAll('.modal-overlay');
+    return overlays[overlays.length - 1];
+  };
   const waitFor = async (fn, label, timeout = 20000) => {
     const start = Date.now();
     for (;;) {
@@ -360,8 +383,8 @@
         window.print = original;
       }
       assert.strictEqual(printed, 1, 'кнопка печати не вызвала печать листа');
-      sheetView.setMode('list');
-      assert(print.hidden, 'печатать предложено из списка игроков, где листа нет');
+      sheetView.setMode('pick');
+      assert(print.hidden, 'печатать предложено там, где листа нет');
       sheetView.setMode('sheet');
       assert(!print.hidden, 'кнопка печати не вернулась в открытом листе');
     });
@@ -451,10 +474,10 @@
       assert(!rollView.rollRow.hidden, 'переключатель режима не вернулся');
     });
 
-    check('в списке игроков бросков нет: там ещё нечего проверять', () => {
-      rollView.setMode('list');
+    check('без открытого листа бросков нет: проверять нечего', () => {
+      rollView.setMode('pick');
       assert.strictEqual([...rollHost.querySelectorAll('.roll-check')].filter((node) => !node.hidden).length, 0,
-        'в списке игроков видны кубики проверки');
+        'без открытого листа видны кубики проверки');
       rollView.setMode('sheet');
     });
 
@@ -734,78 +757,74 @@
       assert(!sheetHost.querySelector('[data-field="characterName"]').disabled, 'поле не вернулось в редактируемое');
     });
 
-    check('список листов у ДМ подсказывает, как открыть чей-то лист', () => {
-      sheetView.setMode('list');
-      sheetView.setPlayerList([], null);
-      assert(sheetHost.querySelector('.sheet__players-empty').textContent.includes('В лобби сейчас никого нет'),
-        'нет подсказки про пустое лобби');
+    check('вкладка листа у ДМ отправляет к панели участников, а не дублирует список', () => {
+      sheetView.setMode('pick');
+      const pick = sheetHost.querySelector('.sheet__pick');
+      assert(pick, 'нет подсказки выбора игрока');
+      assert(!pick.hidden, 'подсказка скрыта в режиме выбора игрока');
+      assert(pick.textContent.includes('Участники'),
+        `подсказка не зовёт в панель участников: ${pick.textContent.slice(0, 80)}`);
       assert(sheetHost.querySelector('.sheet__grid').hidden, 'форма листа показана без выбранного игрока');
-      sheetView.setPlayerList([
-        { playerId: 'p-1', name: 'Артём', role: 'player', online: true },
-        { playerId: 'p-2', name: 'Борис', role: 'player', online: false }
-      ], 'p-1');
-      const rows = [...sheetHost.querySelectorAll('.sheet__players .player-row')];
-      assert(rows.length === 2, `строк в списке: ${rows.length}`);
-      assert(rows[0].classList.contains('is-selected'), 'выбранный игрок не подсвечен');
-      assert(rows[1].classList.contains('is-offline'), 'отключённый игрок не помечен');
+      assert(!sheetHost.querySelector('.sheet__players'), 'список игроков остался во вкладке листа');
+      sheetView.setMode('sheet', { canGoBack: true });
+      assert(pick.hidden, 'подсказка осталась поверх открытого листа');
+      assert(!sheetHost.querySelector('.sheet__grid').hidden, 'открытый лист не показан');
     });
-    check('в списке игроков листа портреты, а у кого нет — буква имени', () => {
-      const host = document.createElement('div');
-      const view = new window.SheetView(host, {
-        resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
-      });
-      view.setMode('list');
-      view.setSelfAvatar('avatar-dm.png', 'Мастер');
-      view.setPlayerList([
-        { playerId: 'p-1', name: 'Артём', role: 'player', online: true, avatar: '/files/arthur.png' },
-        { playerId: 'p-2', name: 'Борис', role: 'player', online: false }
-      ], null);
-      const [arthur, boris] = [...host.querySelectorAll('.sheet__players .player-row')];
-      assert.strictEqual(arthur.querySelector('img').getAttribute('src'), 'http://стол/files/arthur.png');
-      assert.strictEqual(boris.querySelector('.player-row__avatar').textContent, 'Б');
-      assert(!boris.querySelector('img'), 'у Бориса картинка без аватара');
-    });
-    check('у мастера в списке игроков есть блок его собственного портрета', () => {
+    check('у мастера портрет ставится в панели участников, а не во вкладке листа', () => {
       const host = document.createElement('div');
       const picked = [];
       let cleared = 0;
-      const view = new window.SheetView(host, {
+      const list = new window.TableUI.PlayersList(host, {
         onAvatarPick: (file) => picked.push(file),
-        onAvatarClear: () => { cleared += 1; }
+        onAvatarClear: () => { cleared += 1; },
+        resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
       });
-      view.setMode('list');
-      view.setPlayerList([{ playerId: 'p-1', name: 'Артём', role: 'player', online: true }], null);
+      list.render([{ playerId: 'dm', name: 'Мастер', role: 'dm', online: true, avatar: 'avatar-dm.png' }], {
+        role: 'dm',
+        playerId: 'dm'
+      });
+      // Блока портрета у игрока нет: блок только у мастера, и только когда
+      // интерфейс умеет его менять.
+      assert(host.querySelector('.players-self').hidden, 'блок портрета показан не у мастера');
 
-      const block = host.querySelector('.sheet__self');
-      assert(block, 'нет блока портрета мастера');
+      list.renderSelfAvatar({ avatarUrl: null, name: 'Мастер' });
+      const block = host.querySelector('.players-self');
+      assert(!block.hidden, 'мастеру не показан блок портрета');
       assert(block.textContent.includes('Ваш портрет'), 'нет заголовка блока');
-
-      // Приложение передаёт портрет сразу после списка игроков: блок живёт
-      // внутри списка и пересоздаётся вместе с ним.
-      view.setSelfAvatar(null, 'Мастер');
       const preview = block.querySelector('.avatar-pick__preview');
       assert.strictEqual(preview.textContent, 'М', `буква-заглушка мастера: ${preview.textContent}`);
-      const clear = block.querySelector('.avatar-pick__side .btn');
-      assert(clear.hidden, 'кнопка «Убрать» видна без аватара');
+      assert(!byText(block, 'Убрать'), 'кнопка «Убрать» видна без аватара');
 
-      view.setSelfAvatar('http://стол/files/dm.png', 'Мастер');
-      assert.strictEqual(preview.querySelector('img').getAttribute('src'), 'http://стол/files/dm.png',
+      list.renderSelfAvatar({ avatarUrl: 'http://стол/files/dm.png', name: 'Мастер' });
+      // Блок пересоздаётся целиком, поэтому кружок и кнопки ищем заново.
+      const blockAfter = host.querySelector('.players-self');
+      const previewAfter = blockAfter.querySelector('.avatar-pick__preview');
+      assert.strictEqual(previewAfter.querySelector('img').getAttribute('src'), 'http://стол/files/dm.png',
         'портрет мастера не показан');
-      assert(!clear.hidden, 'кнопка «Убрать» спрятана при наличии аватара');
+      const clear = byText(blockAfter, 'Убрать');
+      assert(clear, 'нет кнопки сброса портрета');
       clear.click();
       assert(cleared === 1, `сброс портрета мастера: ${cleared}`);
 
-      const button = block.querySelector('.avatar-pick__label');
-      assert.strictEqual(button.tagName, 'BUTTON', `кнопка выбора портрета мастера: ${button.tagName}`);
+      const pick = byText(blockAfter, 'Заменить');
+      assert(pick, 'нет кнопки замены портрета');
       let opened = 0;
-      view.selfAvatarInput.click = () => { opened += 1; };
-      button.click();
+      const input = blockAfter.querySelector('input[type=file]');
+      input.click = () => { opened += 1; };
+      pick.click();
       assert.strictEqual(opened, 1, `выбор файла не открылся (нажатий: ${opened})`);
 
       const file = new File([PNG_1PX], 'dm.png', { type: 'image/png' });
-      Object.defineProperty(view.selfAvatarInput, 'files', { value: [file] });
-      view.selfAvatarInput.dispatchEvent(new Event('change'));
+      Object.defineProperty(input, 'files', { value: [file] });
+      input.dispatchEvent(new Event('change'));
       assert(picked.length === 1 && picked[0].name === 'dm.png', `выбранные файлы: ${picked.length}`);
+
+      // Игроку блок не нужен: портрет он ставит в своём листе.
+      const playerHost = document.createElement('div');
+      const playerList = new window.TableUI.PlayersList(playerHost, { onAvatarPick: () => {} });
+      playerList.render([], { role: 'player', playerId: 'p-1' });
+      playerList.renderSelfAvatar({ avatarUrl: 'avatar.png', name: 'Игрок' });
+      assert(playerHost.querySelector('.players-self').hidden, 'игроку показали блок портрета мастера');
     });
     check('в листе есть блок аватарки: круг, загрузка и сброс', () => {
       const host = document.createElement('div');
@@ -870,26 +889,40 @@
       assert(!view.avatarInput.disabled, 'игрок не может выбрать файл');
       assert(!view.avatarLabel.disabled, 'игрок не может нажать кнопку аватара');
     });
-    check('лист открывается нажатием на имя игрока в списке', () => {
+    check('лист открывается из панели участников и оттуда же закрывается', () => {
       let requested = null;
-      const host = document.createElement('div');
-      const view = new window.SheetView(host, { onPlayerChange: (playerId) => { requested = playerId; } });
-      view.setMode('list');
-      view.setPlayerList([{ playerId: 'p-9', name: 'Борис', role: 'player', online: true }], null);
-      host.querySelector('.sheet__players .player-row').click();
+      // Отдельные узлы: список участников и лист строятся в одном контейнере
+      // только в настоящем окне, и build листа чистит узел целиком.
+      const listHost = document.createElement('div');
+      const sheetHostLocal = document.createElement('div');
+      const list = new window.TableUI.PlayersList(listHost, {
+        onOpenSheet: (playerId) => { requested = playerId; }
+      });
+      const view = new window.SheetView(sheetHostLocal, { onBack: () => view.setMode('pick') });
+      view.setMode('pick');
+      list.render([{ playerId: 'p-9', name: 'Борис', role: 'player', online: true, hasSheet: true }], {
+        role: 'dm',
+        playerId: 'dm'
+      });
+      const row = [...listHost.querySelectorAll('.player-row')]
+        .find((node) => node.textContent.includes('Борис'));
+      assert(row, 'игрока нет в панели участников');
+      const open = [...row.querySelectorAll('button')].find((node) => node.textContent === 'Открыть лист');
+      assert(open, 'у игрока в панели участников нет кнопки «Открыть лист»');
+      open.click();
       assert(requested === 'p-9', `открыт лист игрока: ${requested}`);
+
       view.setMode('sheet', { canGoBack: true });
-      assert(!host.querySelector('.sheet__grid').hidden, 'форма листа не показана');
-      assert(host.querySelector('.sheet__players').hidden, 'список игроков не скрылся');
-      const back = [...host.querySelectorAll('.sheet__head-tools button')]
+      assert(!sheetHostLocal.querySelector('.sheet__grid').hidden, 'форма листа не показана');
+      const back = [...sheetHostLocal.querySelectorAll('.sheet__head-tools button')]
         .find((node) => node.textContent.includes('К списку игроков'));
       assert(back && !back.hidden, 'нет кнопки возврата к списку');
     });
-    check('у игрока нет списка игроков и кнопки возврата, но есть вынос в отдельное окно', () => {
+    check('у игрока нет подсказки выбора игрока и кнопки возврата, но есть вынос в отдельное окно', () => {
       const host = document.createElement('div');
       const view = new window.SheetView(host, {});
       view.setMode('sheet');
-      assert(host.querySelector('.sheet__players').hidden, 'игроку показан список игроков');
+      assert(host.querySelector('.sheet__pick').hidden, 'игроку показана подсказка выбора игрока');
       const back = [...host.querySelectorAll('.sheet__head-tools button')]
         .find((node) => node.textContent.includes('К списку игроков'));
       assert(back && back.hidden, 'игроку показана кнопка «К списку игроков»');
@@ -910,14 +943,21 @@
      * позиции указателя, а ноль по умолчанию открыл бы угол карты.
      */
     class MapViewEvent {
-      constructor(rect) {
+      /**
+       * @param {DOMRect} rect размеры подложки карты.
+       * @param {number} [clientX] точка нажатия; по умолчанию — середина.
+       * @param {number} [clientY]
+       */
+      constructor(rect, clientX, clientY) {
         this.rect = rect;
+        this.x = clientX === undefined ? rect.left + rect.width / 2 : clientX;
+        this.y = clientY === undefined ? rect.top + rect.height / 2 : clientY;
       }
 
       payload() {
         return {
-          clientX: this.rect.left + this.rect.width / 2,
-          clientY: this.rect.top + this.rect.height / 2,
+          clientX: this.x,
+          clientY: this.y,
           buttons: 1,
           bubbles: true,
           cancelable: true
@@ -932,8 +972,11 @@
       { role: 'dm', playerId: 'dm' }
     );
     check('три вкладки карт присутствуют, включая холст ДМа', () => {
-      const labels = [...mapHost.querySelectorAll('.map-tab__label')].map((node) => node.textContent);
-      assert(labels.length === 3, `должно быть три вкладки, а есть ${labels.length}`);
+      // Вкладка «Свет» не карта и не считается: она показывает настройки той
+      // карты, что уже открыта, поэтому отбираем по наличию точки-метки.
+      const labels = [...mapHost.querySelectorAll('.map-tab:has(.map-tab__dot) .map-tab__label')]
+        .map((node) => node.textContent);
+      assert(labels.length === 3, `должно быть три вкладки карт, а есть ${labels.length}`);
       assert(labels[0].includes('Общая'), `первая вкладка: ${labels[0]}`);
       assert(labels[1].includes('локации'), `вторая вкладка: ${labels[1]}`);
       assert(labels[2].includes('Рисунок'), `третья вкладка: ${labels[2]}`);
@@ -1142,6 +1185,314 @@
       assert(parseFloat(style.lineHeight) > 10, `line-height подписи: ${style.lineHeight}`);
       const height = label.getBoundingClientRect().height;
       assert(height > 10, `высота подписи ${height}px — текст обрезан`);
+    });
+
+    check('у фишки со скрытым именем на карте нет ни подписи, ни имени хозяина', () => {
+      const nameless = MAP_STATE.tokens.map((token) => (token.id === 't1'
+        ? { ...token, hideName: true, nameHidden: true, name: '', assignedPlayerId: 'p-1' }
+        : token));
+      mapView.render({ ...MAP_STATE, tokens: nameless }, { role: 'dm', playerId: 'dm' });
+      const node = mapHost.querySelector('[data-token-id="t1"]');
+      assert(node, 'фишка не отрисовалась');
+      assert(!node.querySelector('.token__label'), 'подпись со скрытым именем осталась на карте');
+      assert(!node.querySelector('.token__owner'), 'имя хозяина осталось при скрытом имени фишки');
+      // Буквы в кружке тоже нет: брать её неоткуда, поэтому рисуется «?».
+      assert(node.querySelector('.token__initial').textContent === '?',
+        `в кружке: ${node.querySelector('.token__initial').textContent}`);
+      assert(!mapHost.textContent.includes('Гоблин'), 'имя фишки осталось на карте текстом');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+      assert(mapHost.querySelector('[data-token-id="t1"] .token__label'), 'подпись не вернулась');
+    });
+
+    check('подписи под фишкой убираются у всех сразу, а рисунок состояния остаётся', () => {
+      // Отличие от скрытого имени: там тайна от игроков и мастер подпись видит,
+      // здесь подписи просто не нужны никому, включая мастера.
+      const plain = MAP_STATE.tokens.map((token) => (token.id === 't2'
+        ? { ...token, hideLabels: true, conditions: ['restrained'] }
+        : token));
+      mapView.render({ ...MAP_STATE, tokens: plain }, { role: 'dm', playerId: 'dm' });
+      const node = mapHost.querySelector('[data-token-id="t2"]');
+      assert(node, 'фишка с убранными подписями не отрисовалась');
+      assert(!node.querySelector('.token__label'), 'подпись с именем осталась');
+      assert(!node.querySelector('.token__owner'), 'имя хозяина осталось');
+      assert(!node.querySelector('.token__conditions'), 'подписи состояний остались');
+      assert(node.querySelector('.token__label') === null, 'подпись не должна возвращаться');
+      // Состояние читается по рисунку на карте, а не по подписи: лоза остаётся.
+      assert(node.querySelector('.token__fx--vines'), 'лоза пропала вместе с подписями');
+      assert(!mapHost.textContent.includes('Мира'), 'имя фишки осталось на карте текстом');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+      assert(mapHost.querySelector('[data-token-id="t2"] .token__label'), 'подпись не вернулась');
+    });
+
+    check('состояния рисуются на карте, а не только пишутся подписями', () => {
+      const withState = MAP_STATE.tokens.map((token) => (token.id === 't1'
+        ? { ...token, conditions: ['restrained', 'prone'] }
+        : token));
+      mapView.render({ ...MAP_STATE, tokens: withState }, { role: 'dm', playerId: 'dm' });
+      const node = mapHost.querySelector('[data-token-id="t1"]');
+      assert(node.querySelector('.token__fx--vines'), 'у «опутан» нет лозы');
+      assert(node.querySelector('.token__fx--prone'), 'у «сбит с ног» нет рисунка');
+      assert(node.classList.contains('token--cond-restrained'), 'нет класса состояния');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('у каждого состояния из правил есть свой рисунок', () => {
+      const all = MAP_STATE.tokens.map((token) => (token.id === 't1'
+        ? { ...token, conditions: window.DnD5e.CONDITIONS.map((item) => item.id) }
+        : token));
+      mapView.render({ ...MAP_STATE, tokens: all }, { role: 'dm', playerId: 'dm' });
+      const node = mapHost.querySelector('[data-token-id="t1"]');
+      const drawn = new Set([...node.querySelectorAll('.token__fx')]
+        .map((fx) => [...fx.classList].find((name) => name.startsWith('token__fx--'))));
+      for (const item of window.DnD5e.CONDITIONS) {
+        assert(drawn.has(`token__fx--${item.effect}`), `состояние «${item.label}» ничего не рисует`);
+      }
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('игрок не двигает фишку, у которой отняли скорость', () => {
+      const bound = MAP_STATE.tokens.map((token) => (token.id === 't2'
+        ? { ...token, conditions: ['restrained'] }
+        : token));
+      mapView.render({ ...MAP_STATE, tokens: bound }, { role: 'player', playerId: 'p-1' });
+      const node = mapHost.querySelector('[data-token-id="t2"]');
+      assert(!node.classList.contains('token--movable'), 'фишка осталась перетаскиваемой');
+      assert(node.classList.contains('token--bound'), 'на фишке не видно, что она связана');
+      const notices = [];
+      mapView.handlers.onNotice = (message) => notices.push(message);
+      node.click();
+      delete mapView.handlers.onNotice;
+      assert(notices.length === 1, `игроку не объяснили отказ: ${notices.join('; ')}`);
+      assert(/опутан/i.test(notices[0]), `отказ без названия состояния: ${notices[0]}`);
+      mapView.render(MAP_STATE, { role: 'player', playerId: 'p-1' });
+    });
+
+    check('мастер связанную фишку двигает и без состояния на ней', () => {
+      const bound = MAP_STATE.tokens.map((token) => (token.id === 't1'
+        ? { ...token, conditions: ['restrained'] }
+        : token));
+      mapView.render({ ...MAP_STATE, tokens: bound }, { role: 'dm', playerId: 'dm' });
+      const node = mapHost.querySelector('[data-token-id="t1"]');
+      assert(node.classList.contains('token--movable'), 'мастер не может перетащить связанную фишку');
+      assert(!node.classList.contains('token--bound'), 'мастеру показали запрет, которого для него нет');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    /* ------------------------------------------------- ход по клеткам в бою */
+
+    const COMBAT_STATE = {
+      ...MAP_STATE,
+      grid: { enabled: true, cell: 46, columns: 0, feetPerCell: 5, offsetX: 0, offsetY: 0 },
+      combat: { enabled: true }
+    };
+
+    /**
+     * Состояние с картинкой 400x300.
+     *
+     * Клетки считаются от ширины подложки, а тестовая картинка в одну точку не
+     * даёт ни одной клетки: ход и кисть по ней не проверить. Размеры задаются
+     * прямо на картинке на время проверки: ждать загрузки нельзя, ожидания в
+     * этой части выполняются параллельно следующим проверкам.
+     * @param {object} state
+     * @returns {object}
+     */
+    const bigMapState = (state) => ({
+      ...state,
+      activeMap: 'world',
+      maps: {
+        ...state.maps,
+        world: { items: [{ id: 'm-world', url: MAP_PNG, name: 'world.png' }], activeId: 'm-world' }
+      }
+    });
+
+    /**
+     * Выполняет проверку с подменёнными размерами картинки и убирает подмену.
+     *
+     * Свойство ставится на саму картинку и потом удаляется: следующие проверки
+     * считают сетку по настоящей карте.
+     * @param {() => void} fn
+     */
+    const withRealMapSize = (fn) => {
+      Object.defineProperty(mapView.image, 'naturalWidth', { value: 400, configurable: true });
+      Object.defineProperty(mapView.image, 'naturalHeight', { value: 300, configurable: true });
+      // Размер подложки задаём руками: в проверочной песочнице у неё нет
+      // высоты, а без неё указатель не попадает ни в одну клетку.
+      mapView.surface.style.width = '800px';
+      mapView.surface.style.height = '600px';
+      try {
+        fn();
+      } finally {
+        delete mapView.image.naturalWidth;
+        delete mapView.image.naturalHeight;
+      }
+    };
+
+    check('расстояние по клеткам считается по правилам 5e', () => {
+      mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
+      const straight = mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 0 });
+      assert.strictEqual(straight.steps, 3, 'прямая в три клетки посчитана неверно');
+      assert.strictEqual(straight.cells, 3);
+      assert.strictEqual(straight.feet, 15, 'в три клетки по пять футов');
+      const diagonal = mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 3 });
+      assert.strictEqual(diagonal.steps, 3, 'по диагонали должно быть три шага');
+      // Диагональ стоит корень из двух: 3 × 1.41 = 4.24 клетки.
+      assert(Math.abs(diagonal.cells - 3 * Math.SQRT2) < 0.001, `диагональ: ${diagonal.cells}`);
+      const mixed = mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 1 });
+      assert.strictEqual(mixed.steps, 3);
+      assert(Math.abs(mixed.cells - (2 + Math.SQRT2)) < 0.001, `смешанный ход: ${mixed.cells}`);
+    });
+
+    check('подпись расстояния называет шаги, клетки и футы', () => {
+      const text = mapView.combatDistanceText(mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 0 }));
+      assert(/3 шага/.test(text), `подпись расстояния: ${text}`);
+      assert(/15 футов/.test(text), `в подписи нет футов: ${text}`);
+      assert(/клетк/.test(text), `в подписи нет клеток: ${text}`);
+      assert.strictEqual(mapView.combatDistanceText(mapView.combatMeasure({ col: 1, row: 1 }, { col: 1, row: 1 })), 'здесь же');
+    });
+
+    check('в бою фишку выбирают нажатием и она перестаёт таскаться', () => {
+      mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
+      const node = mapHost.querySelector('[data-token-id="t1"]');
+      assert(node.classList.contains('token--selectable'), 'фишка в бою не выбирается нажатием');
+      node.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 0, clientY: 0 }));
+      assert.strictEqual(mapView.combat.tokenId, 't1', 'фишка не выбралась');
+      // Фишки перерисовываются целиком, поэтому проверяем свежий узел.
+      const marked = mapHost.querySelector('[data-token-id="t1"]');
+      assert(marked.classList.contains('token--combat'), 'выбранная фишка не помечена');
+      // Повторное нажатие снимает выбор: иначе пришлось бы искать кнопку отмены.
+      marked.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 0, clientY: 0 }));
+      assert.strictEqual(mapView.combat.tokenId, null, 'выбор не снялся');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('наведение показывает клетку назначения, линию и расстояние', () => {
+      withRealMapSize(() => {
+        mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
+        mapView.selectCombatToken('t1');
+        const surface = mapView.surface;
+        const rect = surface.getBoundingClientRect();
+        assert(rect.width > 0, 'подложка карты без размера');
+        // Проверка обязана быть синхронной: ждать нельзя, все ожидания здесь
+        // выполняются параллельно следующим проверкам.
+        surface.dispatchEvent(new PointerEvent('pointermove', new MapViewEvent(
+          rect, rect.left + ((5.5 * 46) / 400) * rect.width, rect.top + rect.height / 2
+        ).payload()));
+        assert(!mapView.routeLabel.hidden, `подпись расстояния не показана: ${JSON.stringify({
+          enabled: mapView.combat.enabled,
+          token: mapView.combat.tokenId,
+          route: mapView.route,
+          rect: [rect.width, rect.height]
+        })}`);
+        assert(/\d+ шаг/.test(mapView.routeLabel.textContent), `подпись: ${mapView.routeLabel.textContent}`);
+        assert(!mapView.cellMark.hidden, 'клетка назначения не подсвечена');
+        assert(mapView.routeLine.getAttribute('stroke') !== 'transparent', 'линия маршрута не нарисована');
+        mapView.selectCombatToken(null);
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('нажатие по клетке в бою отправляет фишку в эту клетку одним ходом', () => {
+      withRealMapSize(() => {
+        mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
+        mapView.selectCombatToken('t1');
+        const rect = mapView.surface.getBoundingClientRect();
+        // Клетка номер 4: фишка t1 стоит в клетке 2, то есть ход в две клетки.
+        mapView.surface.dispatchEvent(new PointerEvent('pointerdown', new MapViewEvent(
+          rect, rect.left + ((4.5 * 46) / 400) * rect.width, rect.top + ((2.5 * 46) / 300) * rect.height
+        ).payload()));
+        assert(mapView.walkTimer, 'фишка не пошла по клеткам');
+        assert(mapView.dragState && mapView.dragState.walk, 'слой не защищён на время хода');
+        const node = mapView.tokenLayer.querySelector('[data-token-id="t1"]');
+        assert(node.classList.contains('token--walking'), 'фишка не помечена как идущая');
+        // Ход дожидается своей очереди: оставлять таймер нельзя, он перерисовал
+        // бы общую карту стола в следующих проверках.
+        clearInterval(mapView.walkTimer);
+        mapView.walkTimer = null;
+        mapView.dragState = null;
+        mapView.selectCombatToken(null);
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    /* --------------------------------------------------- поверхность карта */
+
+    const surfaceHost = document.createElement('div');
+    sandbox.appendChild(surfaceHost);
+    const surfaceCalls = [];
+    const surfacePanel = new window.TableUI.SurfacePanel(surfaceHost, {
+      onPick: (type) => surfaceCalls.push(['pick', type]),
+      onBrush: (brush) => surfaceCalls.push(['brush', brush]),
+      onErase: () => surfaceCalls.push(['erase']),
+      onClear: () => surfaceCalls.push(['clear'])
+    });
+    surfacePanel.render({ tool: null, brush: 1, painted: 0 });
+
+    check('в панели поверхности есть все состояния из правил', () => {
+      const chips = [...surfaceHost.querySelectorAll('.surface-chip')];
+      assert.strictEqual(chips.length, window.DnD5e.SURFACE_TYPES.length, `кнопок типов: ${chips.length}`);
+      const labels = chips.map((chip) => chip.textContent);
+      for (const item of window.DnD5e.SURFACE_TYPES) {
+        assert(labels.includes(item.label), `в панели нет «${item.label}»: ${labels.join(', ')}`);
+      }
+      // У каждого типа свой цвет: иначе «дым» и «лёд» пришлось бы различать
+      // только по словам.
+      const dots = chips.map((chip) => chip.querySelector('.surface-chip__dot').style.background);
+      assert.strictEqual(new Set(dots).size, dots.length, 'цвета поверхностей совпали');
+    });
+
+    check('выбор поверхности, ластик, ширина и очистка доходят до обработчиков', () => {
+      const chip = byText(surfaceHost, 'Огонь');
+      assert(chip, 'в панели нет кнопки «Огонь»');
+      chip.click();
+      assert.deepStrictEqual(surfaceCalls.pop(), ['pick', 'fire'], 'тип не отправлен');
+      surfacePanel.render({ tool: 'fire', brush: 1, painted: 4 });
+      const fire = byText(surfaceHost, 'Огонь');
+      assert(fire.classList.contains('is-on'), 'выбранный тип не подсвечен');
+      const brushInput = surfaceHost.querySelector('.surface-panel__brush input');
+      brushInput.value = '3';
+      brushInput.dispatchEvent(new Event('input', { bubbles: true }));
+      assert.deepStrictEqual(surfaceCalls.pop(), ['brush', 3], 'ширина кисти не отправлена');
+      byText(surfaceHost, 'Ластик').click();
+      assert.deepStrictEqual(surfaceCalls.pop(), ['erase'], 'ластик не отправлен');
+      surfacePanel.render({ tool: null, brush: 3, painted: 7 });
+      byText(surfaceHost, 'Очистить карту').click();
+      assert.deepStrictEqual(surfaceCalls.pop(), ['clear'], 'очистка карты не отправлена');
+      // Пустая карта очищать нечего, и кнопка гаснет сама.
+      surfacePanel.render({ tool: null, brush: 3, painted: 0 });
+      assert(surfaceHost.querySelector('.surface-panel__row .btn:last-child').disabled,
+        'очистка доступна на пустой карте');
+      assert.strictEqual(surfaceHost.querySelectorAll('.surface-panel__row .btn').length, 2,
+        'в строке не хватает кнопок');
+    });
+
+    check('поверхность рисуется по клеткам и уходит на сервер пачкой', () => {
+      const painted = [];
+      mapView.handlers.onPaintSurface = (type, mapId, cells) => painted.push({ type, mapId, cells });
+      withRealMapSize(() => {
+        mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
+        mapView.setSurfaceTool('acid');
+        const rect = mapView.surface.getBoundingClientRect();
+        const at = (col, row) => new PointerEvent('pointerdown', new MapViewEvent(
+          rect,
+          rect.left + ((col * 46) / 400) * rect.width,
+          rect.top + ((row * 46) / 300) * rect.height
+        ).payload());
+        mapView.surface.dispatchEvent(at(2.5, 1.5));
+        mapView.surface.dispatchEvent(at(3.5, 1.5));
+        mapView.surface.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        assert.strictEqual(painted.length, 1, `мазок ушёл ${painted.length} раз, а не одним пачкой`);
+        const kinds = new Set(painted[0].cells.map((entry) => entry[2]));
+        assert.deepStrictEqual([...kinds], ['acid'], `в мазке посторонние типы: ${[...kinds]}`);
+        const cols = painted[0].cells.map((entry) => entry[0]).sort();
+        assert.deepStrictEqual(cols, [2, 3], `кисть легла не в те клетки: ${cols}`);
+        const map = mapView.mapOf('world');
+        assert(Object.keys(map.surface.cells).length === painted[0].cells.length,
+          'на карте столько же клеток, сколько ушло на сервер');
+        assert(!mapView.surfaceCanvas.hidden, 'слой поверхности не показан');
+        mapView.setSurfaceTool(null);
+      });
+      delete mapView.handlers.onPaintSurface;
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
 
     check('прочность видна прямо на фишке на карте', () => {
@@ -2192,7 +2543,14 @@
       const block = tokensHost.querySelector('.token-spawn');
       assert(block, 'нет блока спавна');
       assert(!block.hidden, 'блок спавна скрыт у мастера');
-      assert(block.textContent.includes('Вывести из листа'), `нет заголовка: ${block.textContent}`);
+      // Заголовок стал заголовком сворачиваемой секции, а не подписью внутри
+      // блока: длинный список спавна мастеру нужен не всегда.
+      const spawnSection = block.closest('.section');
+      assert(spawnSection, 'блок спавна не внутри секции');
+      assert(
+        spawnSection.querySelector('.section__title').textContent.includes('Вывести из листа'),
+        `нет заголовка секции: ${spawnSection.textContent}`
+      );
       // Артёму фишка уже назначена, поэтому его в списке спавна нет.
       assert(!block.textContent.includes('Артём'), 'игрок с фишкой попал в список спавна');
       const rows = [...block.querySelectorAll('.token-spawn__row')];
@@ -2287,6 +2645,120 @@
       const form = tokensHost.querySelector('.token-form');
       assert(form && !form.hidden, 'форма создания фишки скрыта');
       assert(tokensHost.textContent.includes('сразу станет вашей'), 'нет подсказки, что фишка станет своей');
+    });
+
+    /* ------------------------------------- скрытие имени и поиск фишек */
+
+    const nameTokens = TOKENS.concat([
+      { id: 't7', name: 'Король Виверн', mapType: 'world', x: 0.2, y: 0.2, imageUrl: null, assignedPlayerId: null, color: '#c96f4a', hidden: false, hideName: true }
+    ]);
+    const nameHost = document.createElement('div');
+    sandbox.appendChild(nameHost);
+    const nameToggles = [];
+    const renamed = [];
+    const namePanel = new window.TableUI.TokenPanel(nameHost, {
+      onRenameToken: (token) => renamed.push(token.id),
+      onToggleTokenNameHidden: (tokenId, hidden) => nameToggles.push([tokenId, hidden])
+    });
+    namePanel.render(nameTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
+
+    check('у фишки есть переключатель имени и он говорит, скрыто оно или нет', () => {
+      const rows = [...nameHost.querySelectorAll('.token-row')];
+      const hiddenRow = rows.find((row) => row.classList.contains('token-row--nameless'));
+      assert(hiddenRow, 'строка фишки со скрытым именем не помечена');
+      assert(hiddenRow.textContent.includes('Имя скрыто'), `в строке своё имя: ${hiddenRow.textContent}`);
+      const namedRow = rows.find((row) => !row.classList.contains('token-row--nameless'));
+      const toggle = [...namedRow.querySelectorAll('button')]
+        .find((node) => node.textContent === 'С именем');
+      assert(toggle, 'нет переключателя имени у фишки с именем');
+      toggle.click();
+      assert(nameToggles.length === 1 && nameToggles[0][1] === true,
+        `обработчик получил: ${JSON.stringify(nameToggles)}`);
+    });
+    check('двойной клик по строке фишки переименовывает её', () => {
+      const row = [...nameHost.querySelectorAll('.token-row')]
+        .find((node) => node.textContent.includes('Мира'));
+      row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      assert(renamed.length === 1 && renamed[0] === 't2', `переименовывают: ${JSON.stringify(renamed)}`);
+    });
+    check('правый клик по строке открывает то же меню, что и на карте', () => {
+      const row = [...nameHost.querySelectorAll('.token-row')]
+        .find((node) => node.textContent.includes('Гоблин'));
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+      const menu = document.querySelector('.token-menu');
+      assert(menu, 'меню фишки не открылось');
+      const items = [...menu.querySelectorAll('.token-menu__item')].map((node) => node.textContent);
+      assert(items.some((text) => text.includes('Переименовать')), `нет переименования: ${items}`);
+      assert(items.some((text) => text.includes('Скрыть имя')), `нет скрытия имени: ${items}`);
+      assert(menu.querySelector('select'), 'в меню нет выбора игрока');
+      menu.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      namePanel.closeMenu();
+    });
+
+    check('поиск по фишкам оставляет совпадения и пишет, когда ничего не нашлось', () => {
+      const search = nameHost.querySelector('.token-search__input');
+      assert(search, 'нет поля поиска по фишкам');
+      try {
+        search.value = 'виверн';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        const visible = [...nameHost.querySelectorAll('.token-row')].filter((row) => !row.hidden);
+        assert(visible.length === 1 && visible[0].dataset.tokenId === 't7',
+          `показано: ${visible.map((row) => row.textContent).join(' | ')}`);
+        search.value = 'осьминог';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        assert(nameHost.querySelector('.token-list__empty').textContent.includes('Ничего не найдено'),
+          `нет подсказки о пустом поиске: "${nameHost.querySelector('.token-list__empty').textContent}"`);
+      } finally {
+        search.value = '';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      assert(nameHost.querySelectorAll('.token-row:not([hidden])').length === nameTokens.length,
+        'поиск не сбросился');
+    });
+    check('фильтр оставляет только скрытые фишки и только фишки без имени', () => {
+      const filters = [...nameHost.querySelectorAll('.token-filter')];
+      const byLabel = (label) => filters.find((node) => node.textContent === label);
+      byLabel('Без имени').click();
+      const nameless = [...nameHost.querySelectorAll('.token-row')].filter((row) => !row.hidden);
+      assert(nameless.length === 1 && nameless[0].textContent.includes('Имя скрыто'),
+        `фильтр «Без имени» показал: ${nameless.length}`);
+      byLabel('Все').click();
+      assert(nameHost.querySelectorAll('.token-row:not([hidden])').length === nameTokens.length,
+        'фильтр «Все» не вернул все фишки');
+    });
+    check('поиск и кнопки скрытия есть только у ДМ и только при нескольких фишках', () => {
+      namePanel.render(TOKENS.slice(0, 2), PLAYERS, { role: 'dm', playerId: 'dm' });
+      assert(nameHost.querySelector('.token-search').hidden, 'поиск показан ради двух фишек');
+      namePanel.render(nameTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
+      assert(!nameHost.querySelector('.token-search').hidden, 'поиск спрятан при полной столе');
+      namePanel.render(nameTokens, PLAYERS, { role: 'player', playerId: 'p-1' });
+      assert(nameHost.querySelector('.token-search').hidden, 'игрок видит поиск по чужим фишкам');
+      namePanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
+    });
+    check('секции панели фишек сворачиваются и помнят состояние', () => {
+      const heads = [...nameHost.querySelectorAll('.section__head')];
+      assert(heads.length >= 2, `секций: ${heads.length}`);
+      const all = heads.find((node) => node.textContent.includes('Все фишки'));
+      const body = all.nextElementSibling;
+      assert(body && body.classList.contains('section__body'), 'под заголовком не тело секции');
+      assert(!body.hidden, 'тело секции «Все фишки» свёрнуто по умолчанию');
+      all.click();
+      assert(body.hidden, 'секция не свернулась по клику');
+      assert(all.getAttribute('aria-expanded') === 'false', 'состояние не отражено в aria');
+      assert(localStorage.getItem('dnd-table.panel.tokensAll') === '1', 'состояние не записано');
+      all.click();
+      assert(!body.hidden, 'секция не развернулась обратно');
+      all.click();
+      // Свернутое состояние переживает пересборку панели: render() создаёт
+      // секции заново на каждом событии фишки.
+      namePanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
+      const restored = [...nameHost.querySelectorAll('.section__head')]
+        .find((node) => node.textContent.includes('Все фишки'));
+      assert(restored.nextElementSibling.hidden, 'после перерисовки секция снова раскрылась');
+      restored.click();
+      assert(!restored.nextElementSibling.hidden, 'секция не раскрылась обратно');
+      localStorage.removeItem('dnd-table.panel.tokensAll');
     });
 
     /* ------------------------------------------------ сквозной сценарий */
@@ -2783,6 +3255,25 @@
       assert(empty && empty.textContent.includes('Карта ещё не загружена ДМ'), 'нет заглушки карты');
       assert(!document.querySelector('#map-root .map-empty').hidden, 'заглушка скрыта');
     });
+    check('карта занимает середину, а не трек разделителя', () => {
+      // Порядок треков грида обязан совпадать с порядком детей: иначе карта
+      // уезжает в шестипиксельный трек разделителя и схлопывается в столбик
+      // кнопок. Проверяем геометрией, а не наличием элементов: сломанный
+      // порядок даёт все элементы на месте.
+      const width = (sel) => document.querySelector(sel).getBoundingClientRect().width;
+      const left = document.querySelector('.col--left').getBoundingClientRect();
+      const center = document.querySelector('.col--center').getBoundingClientRect();
+      const resizer = document.querySelector('#resizer-right').getBoundingClientRect();
+      const right = document.querySelector('.col--right').getBoundingClientRect();
+      assert(width('.col--center') > 300, `карта схлопнулась: ${width('.col--center')}px`);
+      assert(width('.col--right') > 300, `правая колонка схлопнулась: ${width('.col--right')}px`);
+      assert(
+        left.right <= center.left + 1
+        && center.right <= resizer.left + 1
+        && resizer.right <= right.left + 1,
+        `колонки стоят не по порядку: ${[left.right, center.left, center.right, resizer.left, resizer.right, right.left].map(Math.round).join(' → ')}`
+      );
+    });
     check('панели стола сворачиваются, а иконки вкладок остаются', () => {
       const layout = document.querySelector('.layout');
       const leftButton = document.querySelector('#btn-panel-left');
@@ -2817,18 +3308,73 @@
       assert(!layout.classList.contains('is-right-collapsed'), 'панель не развернулась по клику на иконку');
       assert(document.querySelector('#tab-dice').classList.contains('is-active'), 'вкладка кубиков не открылась');
     });
+    check('вкладки переключаются цифрами, а последняя запоминается', () => {
+      const press = (key, extra = {}) => document.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, ...extra })
+      );
+      press('3');
+      assert(document.querySelector('#tab-sheet').classList.contains('is-active'), `цифра 3 не открыла вкладку: ${[...document.querySelectorAll('.panel--tab.is-active')].map((node) => node.id)}`);
+      assert(localStorage.getItem('dnd-table.activeTab') === 'sheet', 'вкладка не записана в память');
+      press('9');
+      assert(document.querySelector('#tab-chat').classList.contains('is-active') === false, 'цифра вне диапазона что-то открыла');
+      // В поле ввода цифра должна оставаться цифрой: иначе «2» в формуле броска
+      // переключала бы вкладку вместо того, чтобы попасть в поле.
+      const input = document.querySelector('#tab-dice .input');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }));
+      assert(document.querySelector('#tab-sheet').classList.contains('is-active'), 'цифра в поле переключила вкладку');
+    });
+    check('Ctrl+F открывает поиск по чату', () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'f', ctrlKey: true, bubbles: true, cancelable: true
+      }));
+      assert(document.querySelector('#tab-chat').classList.contains('is-active'), 'Ctrl+F не открыл чат');
+      const search = document.querySelector('#tab-chat .chat__search-input');
+      assert(search && document.activeElement === search, `фокус не в поиске: ${document.activeElement && document.activeElement.className}`);
+    });
+    check('правую колонку можно перетянуть мышью и она помнит ширину', () => {
+      const layout = document.querySelector('.layout');
+      const resizer = document.querySelector('#resizer-right');
+      assert(resizer, 'нет разделителя правой колонки');
+      const rightWidth = () => Math.round(document.querySelector('.col--right').getBoundingClientRect().width);
+      const before = rightWidth();
+      resizer.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 1200 }));
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 1000 }));
+      const width = layout.style.getPropertyValue('--right-user-width');
+      assert(width.endsWith('px') && parseFloat(width) > 0, `ширина не задана: "${width}"`);
+      assert(rightWidth() > before, `колонка не выросла: ${before} → ${rightWidth()}`);
+      assert(localStorage.getItem('dnd-table.rightWidth') === String(Math.round(parseFloat(width))),
+        `ширина не записана: ${localStorage.getItem('dnd-table.rightWidth')} против ${width}`);
+      document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+      assert(!document.body.classList.contains('is-resizing'), 'курсор перетаскивания не снят');
+      // Ширина не должна съезжать при сворачивании панели: сворачивание меняет
+      // --right-col, а выбранная мастером ширина живёт в отдельной переменной.
+      document.querySelector('#btn-panel-right').click();
+      assert(rightWidth() === 54, `свёрнутая колонка не сузилась до иконок: ${rightWidth()}`);
+      document.querySelector('#btn-panel-right').click();
+      assert(rightWidth() === Math.round(parseFloat(width)), 'разворачивание вернуло не ту ширину');
+      // Стрелки с клавиатуры двигают разделитель без мыши.
+      const beforeArrow = rightWidth();
+      resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }));
+      const afterArrow = rightWidth();
+      assert(afterArrow < beforeArrow, `стрелка влево не сузила панель: ${beforeArrow} → ${afterArrow}`);
+      resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true, cancelable: true }));
+      assert(rightWidth() > afterArrow, 'стрелка вправо не расширила панель');
+      localStorage.removeItem('dnd-table.rightWidth');
+      layout.style.removeProperty('--right-user-width');
+    });
     check('ДМ виден в списке участников с ролью', () => {
       assert(document.querySelector('#players-root .badge--dm'), 'нет бейджа ДМ');
       assert(document.querySelector('#players-root').textContent.includes('Мастер'), 'нет имени ДМ');
     });
 
     document.querySelector('.tabs__btn[data-tab="sheet"]').click();
-    check('вкладка «Лист» у ДМ без игроков показывает список, а не пустой лист', () => {
+    check('вкладка «Лист» у ДМ без игрока зовёт в панель участников, а не показывает пустой лист', () => {
       assert(document.querySelector('#tab-sheet').classList.contains('is-active'), 'вкладка не активна');
-      assert(document.querySelector('#tab-sheet .sheet__players'), 'нет списка игроков');
+      const pick = document.querySelector('#tab-sheet .sheet__pick');
+      assert(pick && !pick.hidden, 'нет подсказки выбора игрока');
+      assert(pick.textContent.includes('Участники'),
+        `подсказка не зовёт в панель участников: ${pick.textContent.slice(0, 80)}`);
       assert(document.querySelector('#tab-sheet .sheet__grid').hidden, 'лист показан, хотя игрок ещё не выбран');
-      const empty = document.querySelector('#tab-sheet .sheet__players-empty');
-      assert(empty && empty.textContent.includes('В лобби сейчас никого нет'), `текст: ${empty && empty.textContent}`);
     });
 
     /* ------------------------- второй участник: подключение игрока по сети */
@@ -2888,6 +3434,70 @@
       assert(openButton, 'нет кнопки открытия листа');
     });
 
+    /*
+     * Кнопка вывода фишки.
+     *
+     * Долгое время проверялось только, что кнопка есть, и этого хватало: рядом
+     * с «Открыть лист» она стоит, нажимается и не выдаёт ошибки, а вот что по
+     * нажатию на столе появляется фишка, не проверялось нигде. Проверяем теперь
+     * само действие: клик по кнопке у живого стола с живым игроком.
+     */
+    const spawnButton = [...playerRow.querySelectorAll('button')]
+      .find((node) => node.textContent === 'Вывести');
+    check('у игрока без фишки есть кнопка вывода', () => {
+      assert(spawnButton, `в строке игрока нет кнопки «Вывести»: ${
+        [...playerRow.querySelectorAll('button')].map((node) => node.textContent).join(' | ')}`);
+    });
+    // Смотрим на тосты сразу после нажатия: сервер на отказ отвечает ошибкой,
+    // и без неё кнопка выглядит просто мёртвой. И считаем фишки ДО нажатия:
+    // в таблице уже есть фишка по имени «Мира», и сравнение с ней дало бы
+    // ложное «сработало».
+    const tokenRows = () => [...document.querySelectorAll('#tab-tokens .token-row')]
+      .map((row) => row.textContent.replace(/\s+/g, ' ').trim());
+    const tokensBefore = new Set(tokenRows());
+    spawnButton.click();
+
+    const spawned = await waitFor(
+      () => tokenRows().find((text) => !tokensBefore.has(text) && text.includes('Мира')),
+      'новая фишка из листа'
+    ).catch(() => null);
+
+    check('нажатие на «Вывести» создаёт фишку из листа', () => {
+      const toasts = [...document.querySelectorAll('#toasts .toast')].map((node) => node.textContent);
+      assert(spawned, `новая фишка не появилась. Строки фишек: ${JSON.stringify(tokenRows())}. `
+        + `Тосты: ${JSON.stringify(toasts)}`);
+      // Имя берётся из листа, а не из строки участника: у листа оно своё.
+      assert(spawned.includes('Мира'), `имя фишки: ${spawned}`);
+      assert(spawned.includes('Скрыта'), `выведенная фишка должна быть скрыта от игроков: ${spawned}`);
+    });
+    check('после вывода кнопка в строке игрока исчезает', async () => {
+      const row = [...document.querySelectorAll('#players-root .player-row')]
+        .find((node) => node.textContent.includes('Борис'));
+      assert(row, 'строка игрока пропала');
+      const still = [...row.querySelectorAll('button')]
+        .some((node) => node.textContent === 'Вывести');
+      assert(!still, 'кнопка «Вывести» осталась у игрока с фишкой');
+    });
+
+    // Убираем за собой: дальше идут проверки, где лишней фишки быть не должно.
+    const spawnedRow = [...document.querySelectorAll('#tab-tokens .token-row')]
+      .find((row) => spawned && row.textContent.includes('Мира') && !tokensBefore.has(row.textContent.replace(/\s+/g, ' ').trim()));
+    check('выведенную фишку можно убрать со стола', () => {
+      assert(spawnedRow, 'строка выведенной фишки не найдена');
+    });
+    if (spawnedRow) spawnedRow.querySelector('button.btn--danger').click();
+
+    // Дальше идёт блок про лист игрока, и он кликает по кнопке, найденной в
+    // строке участника. Если строка вдруг не нашлась, падать надо здесь и
+    // сказать почему, а не через двадцать строк на «querySelector of
+    // undefined», где причина уже не видна.
+    const borisRow = [...document.querySelectorAll('#players-root .player-row')]
+      .find((node) => node.textContent.includes('Борис'));
+    check('строка игрока на месте после вывода фишки', () => {
+      assert(borisRow, `строка «Борис» пропала: ${
+        [...document.querySelectorAll('#players-root .player-row')].map((n) => n.textContent).join(' | ')}`);
+    });
+
     const openSheetButton = [...playerRow.querySelectorAll('button')]
       .find((node) => node.textContent === 'Открыть лист');
     openSheetButton.click();
@@ -2900,7 +3510,7 @@
       const name = document.querySelector('#tab-sheet [data-field="characterName"]');
       assert(name.value === 'Мира', `имя в листе: ${name.value}`);
       assert(document.querySelector('#tab-sheet [data-field="charClass"]').value === 'Волшебница', 'класс');
-      assert(document.querySelector('#tab-sheet .sheet__players').hidden, 'список игроков остался поверх листа');
+      assert(document.querySelector('#tab-sheet .sheet__pick').hidden, 'подсказка выбора игрока осталась поверх листа');
     });
     check('лист открыт ДМ только для просмотра и пересчитан по 5e', () => {
       assert(document.querySelector('#tab-sheet').classList.contains('is-readonly'), 'лист не в режиме просмотра');
@@ -2918,17 +3528,20 @@
     check('из листа игрока можно вернуться к списку игроков', () => {
       assert(backButton && !backButton.hidden, 'нет кнопки возврата');
       backButton.click();
-      assert(!document.querySelector('#tab-sheet .sheet__players').hidden, 'список игроков не вернулся');
+      assert(!document.querySelector('#tab-sheet .sheet__pick').hidden, 'подсказка выбора игрока не вернулась');
       assert(document.querySelector('#tab-sheet .sheet__grid').hidden, 'лист остался открытым');
     });
-    check('во вкладке «Лист» ДМ видит игроков по именам', () => {
-      const rows = [...document.querySelectorAll('#tab-sheet .sheet__players .player-row')];
-      const row = rows.find((node) => node.textContent.includes('Борис'));
-      assert(row, `в списке листов нет игрока: ${rows.map((node) => node.textContent).join(' | ')}`);
-      assert(row.textContent.includes('в сети'), 'нет статуса игрока');
-      row.click();
+    check('список игроков с листами живёт в панели участников слева', () => {
+      const row = [...document.querySelectorAll('#players-root .player-row')]
+        .find((node) => node.textContent.includes('Борис'));
+      assert(row, 'игрока нет в панели участников');
+      assert(row.textContent.includes('в сети'), `нет статуса игрока в строке: ${row.textContent}`);
+      const open = [...row.querySelectorAll('button')]
+        .find((node) => node.textContent === 'Открыть лист');
+      assert(open, 'в панели участников нет кнопки «Открыть лист»');
+      open.click();
       assert(document.querySelector('#tab-sheet [data-field="characterName"]').value === 'Мира',
-        'лист не открылся по нажатию на имя');
+        'лист не открылся из панели участников');
       assert(!document.querySelector('#tab-sheet .sheet__grid').hidden, 'форма листа не показана');
     });
 
@@ -2980,6 +3593,93 @@
       const grid = document.querySelector('#map-root .map-grid');
       assert(grid && !grid.hidden, 'сетка не показана на карте у ДМ');
       assert(playerInbox.grid.enabled === true, 'игрок не получил состояние сетки');
+    });
+
+    check('положение панели вкладок выбирается и переносит её под карту', () => {
+      const select = settingsOverlay().querySelector('[data-setting="panelPosition"]');
+      assert(select, 'в настройках нет выбора положения панели');
+      const labels = [...select.options].map((option) => option.textContent);
+      assert(labels.some((text) => /Справа/.test(text)), `нет варианта «Справа»: ${labels.join(', ')}`);
+      assert(labels.some((text) => /Снизу/.test(text)), `нет варианта «Снизу»: ${labels.join(', ')}`);
+      const layout = document.querySelector('#screen-table .layout');
+      assert(!layout.classList.contains('is-right-bottom'), 'панель снизу до выбора уже стоит внизу');
+      select.value = 'bottom';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      assert(layout.classList.contains('is-right-bottom'), 'панель не уехала под карту');
+      assert(window.localStorage.getItem('dnd-table.rightPanelPos') === 'bottom', 'выбор не сохранился');
+      select.value = 'right';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      assert(!layout.classList.contains('is-right-bottom'), 'панель не вернулась вбок');
+    });
+
+    // Ожидания стоят между проверками, а не внутри них: check() вызывает
+    // функцию и не ждёт её, и ожидание внутри проверки просто не отработало бы.
+    const gridColumns = settingsOverlay().querySelector('[data-setting="columns"]');
+    check('сетку кладут на карту с половиной клетки', () => {
+      assert(gridColumns, 'нет поля «клеток по ширине карты»');
+      assert.strictEqual(gridColumns.step, '0.5', `шаг у числа клеток: ${gridColumns.step}`);
+    });
+    gridColumns.value = '43.5';
+    gridColumns.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => playerInbox.grid && playerInbox.grid.columns === 43.5, 'полклетки у игрока');
+    check('полклетка доезжает до всех участников', () => {
+      assert.strictEqual(playerInbox.grid.columns, 43.5, 'игрок получил другое число клеток');
+    });
+
+    const gridOffsetX = settingsOverlay().querySelector('[data-setting="offsetX"]');
+    const gridOffsetY = settingsOverlay().querySelector('[data-setting="offsetY"]');
+    check('у сетки есть сдвиг по обеим осям', () => {
+      assert(gridOffsetX && gridOffsetY, 'нет сдвига сетки');
+    });
+    gridOffsetX.value = '12';
+    gridOffsetY.value = '-7';
+    gridOffsetX.dispatchEvent(new Event('change', { bubbles: true }));
+    // Ждём и сокета мастера: окно настроек обновляется отдельным событием, и
+    // без этого ожидания правка ниже ушла бы со старым числом клеток.
+    await waitFor(() => gridOffsetX.value === '12' && gridOffsetY.value === '-7',
+      'окно настроек показало сдвиг');
+    await waitFor(() => playerInbox.grid && playerInbox.grid.offsetX === 12, 'сдвиг сетки у игрока');
+    check('сдвиг сетки кладёт её на клетки самой карты', () => {
+      assert.strictEqual(playerInbox.grid.offsetY, -7, 'вертикальный сдвиг не доехал');
+      const surface = document.querySelector('#map-root .map-surface');
+      assert.strictEqual(surface.style.getPropertyValue('--grid-shift-x'), '12px',
+        `сдвиг на карте: ${surface.style.getPropertyValue('--grid-shift-x')}`);
+    });
+
+    // Возврат делаем повторяющимся: ответ сервера приходит отдельным событием,
+    // и одна попытка успевает проиграть с той, что ушла раньше. Проверки ниже
+    // меряют сетку, и оставшийся сдвиг или полклетки сбили бы их все.
+    const gridFields = () => ({
+      columns: settingsOverlay().querySelector('[data-setting="columns"]'),
+      offsetX: settingsOverlay().querySelector('[data-setting="offsetX"]'),
+      offsetY: settingsOverlay().querySelector('[data-setting="offsetY"]')
+    });
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const fields = gridFields();
+      const dirty = [
+        [fields.columns, '0'],
+        [fields.offsetX, '0'],
+        [fields.offsetY, '0']
+      ].filter(([field, wanted]) => field.value !== wanted);
+      if (!dirty.length) break;
+      if (dirty.some(([field]) => field === fields.columns)) {
+        fields.columns.value = '0';
+        fields.columns.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      fields.offsetX.value = '0';
+      fields.offsetY.value = '0';
+      fields.offsetX.dispatchEvent(new Event('change', { bubbles: true }));
+      await wait(150);
+    }
+    check('после проверки точности сетки в окне не осталось её следов', () => {
+      const fields = gridFields();
+      assert.strictEqual(fields.columns.value, '0', `в окне число клеток: ${fields.columns.value}`);
+      assert.deepStrictEqual([fields.offsetX.value, fields.offsetY.value], ['0', '0'],
+        `в окне сдвиг: ${fields.offsetX.value}, ${fields.offsetY.value}`);
+      assert.strictEqual(
+        document.querySelector('#map-root .map-surface').style.getPropertyValue('--cell'), '46px',
+        'после возврата сетки клетка снова задаётся вручную'
+      );
     });
 
     const cellSelect = document.querySelector('.modal-overlay [data-setting="cell"]');
@@ -3062,6 +3762,331 @@
       const tabs = [...document.querySelectorAll('#map-root .map-tab')];
       assert(tabs[0].classList.contains('is-active'), 'вкладка общей карты не активна');
       assert(tabs[0].querySelector('.map-tab__dot').classList.contains('is-on'), 'нет отметки «показана игрокам»');
+    });
+
+    /* ------------------------------- освещение: темнота, свет и стены */
+
+    const lightHost = () => document.querySelector('#map-root');
+    const openLightTab = () => {
+      const tab = document.querySelector('#map-root .map-tab--light');
+      assert(tab && !tab.hidden, 'нет вкладки «Свет» у мастера с картой');
+      tab.click();
+      return tab;
+    };
+    check('настройки света вынесены в отдельную вкладку', () => {
+      const tab = document.querySelector('#map-root .map-tab--light');
+      assert(tab, 'у карты нет вкладки «Свет»');
+      assert(!tab.hidden, 'вкладка «Свет» спрятана у мастера с загруженной картой');
+      assert(!document.querySelector('#map-root .fog-bar--light'), 'панель света осталась в тулбаре карты');
+      openLightTab();
+      const panel = document.querySelector('#map-root .map-lightbar');
+      assert(panel && !panel.hidden, 'панель света не открылась на вкладке');
+      assert(document.querySelector('#map-root .map-toolbar').hidden,
+        'тулбар карты виден поверх вкладки света');
+    });
+    check('у игрока вкладки света нет', () => {
+      // Проверяем на отдельной карте в песочнице: окно мастера сейчас в роли
+      // мастера, и его вкладка света на месте так и должна быть.
+      mapView.render(MAP_STATE, { role: 'player', playerId: 'p-1' });
+      const tab = mapHost.querySelector('.map-tab--light');
+      assert(tab, 'вкладки света нет вовсе');
+      assert(tab.hidden, 'игрок видит вкладку света');
+      assert(!mapHost.querySelector('.fog-bar--light'), 'панель света осталась в тулбаре карты');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+    check('в панели света есть ползунки с подписями, инструменты и список', () => {
+      const panel = document.querySelector('#map-root .map-lightbar');
+      const labels = [...panel.querySelectorAll('.light-panel__label')].map((node) => node.textContent);
+      assert(labels.some((text) => text.includes('Темнота')), `нет ползунка темноты: ${labels}`);
+      assert(labels.some((text) => text.includes('Дальность')), `нет ползунка дальности: ${labels}`);
+      assert(labels.some((text) => text.includes('Источник')), `нет выбора источника: ${labels}`);
+      assert(panel.querySelector('[data-tool="light"]'), 'нет кнопки постановки света');
+      assert(panel.querySelector('[data-tool="wall"]'), 'нет кнопки рисования стен');
+      assert(panel.querySelector('.light-panel__title').textContent.includes('Источников'),
+        'нет заголовка списка источников');
+    });
+    check('карта без темноты не рисует слой света', () => {
+      const canvas = lightHost().querySelector('.map-light');
+      assert(canvas.hidden, 'слой света виден на дневной карте');
+    });
+    check('ползунок темноты затемняет карту и уходит на сервер', () => {
+      const slider = [...document.querySelectorAll('#map-root .map-lightbar input')]
+        .find((node) => node.getAttribute('aria-label') === 'Темнота карты');
+      slider.value = '70';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      const canvas = lightHost().querySelector('.map-light');
+      assert(!canvas.hidden, 'слой света не появился при темноте 70%');
+      assert(canvas.width > 0 && canvas.height > 0, `холст света пуст: ${canvas.width}x${canvas.height}`);
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const darknessApplied = await softWait(
+      () => {
+        const slider = [...document.querySelectorAll('#map-root .map-lightbar input')]
+          .find((node) => node.getAttribute('aria-label') === 'Темнота карты');
+        return slider && Math.round(Number(slider.value)) === 70;
+      },
+      'темнота доехала до стола'
+    );
+    check('сервер принял темноту карты', () => {
+      assert(darknessApplied, 'темнота не доехала до стола');
+    });
+    check('поставленный факел вырезает пятно света и попадает в список', () => {
+      const button = document.querySelector('#map-root [data-tool="light"]');
+      assert(button, 'нет кнопки постановки света');
+      button.click();
+      const surface = document.querySelector('#map-root .map-surface');
+      assert(surface.classList.contains('is-drawing-light'), 'режим постановки света не включился');
+      const box = surface.getBoundingClientRect();
+      surface.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0,
+        clientX: box.left + box.width * 0.5, clientY: box.top + box.height * 0.5
+      }));
+      const chips = [...document.querySelectorAll('#map-root .light-row')];
+      assert(chips.length >= 1, `источник света не появился в списке: ${chips.length}`);
+      assert(chips[0].textContent.includes('фт'), `в строке нет дальности: ${chips[0].textContent}`);
+    });
+    check('сам источник на карте не виден: видно только свет', () => {
+      // Точка на месте источника выдавала бы, где именно он стоит, и портила
+      // бы карту. Управлять источником можно из списка, а не подсветкой.
+      assert(!lightHost().querySelector('.map-light-source'), 'источник отмечен точкой на карте');
+      const overlay = lightHost().querySelector('.map-walls');
+      assert(overlay && !overlay.hidden, 'слой стен мастеру показан');
+      assert(!overlay.querySelector('circle'), 'в слое стен появились кружки источников');
+    });
+    check('стена рисуется протяжкой и держит свет', () => {
+      const wallButton = document.querySelector('#map-root [data-tool="wall"]');
+      assert(wallButton, 'нет кнопки рисования стен');
+      wallButton.click();
+      const surface = document.querySelector('#map-root .map-surface');
+      assert(surface.classList.contains('is-drawing-wall'), 'режим стен не включился');
+      const box = surface.getBoundingClientRect();
+      const at = (ratioX, ratioY) => ({
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 1,
+        clientX: box.left + box.width * ratioX,
+        clientY: box.top + box.height * ratioY
+      });
+      surface.dispatchEvent(new PointerEvent('pointerdown', at(0.5, 0.05)));
+      surface.dispatchEvent(new PointerEvent('pointermove', at(0.5, 0.95)));
+      const draft = surface.querySelector('.map-walls line.map-wall--draft');
+      assert(draft, 'черновик стены не нарисован');
+      surface.dispatchEvent(new PointerEvent('pointerup', at(0.5, 0.95)));
+      assert(!surface.querySelector('.map-walls line.map-wall--draft'), 'черновик стены остался после отпускания мыши');
+      assert(surface.querySelector('.map-walls line:not(.map-wall--draft)'), 'стена не осталась на карте');
+    });
+    const wallArrived = await softWait(
+      () => document.querySelectorAll('#map-root .map-walls line:not(.map-wall--draft)').length >= 1,
+      'стена доехала до стола'
+    );
+    check('стена сохранилась на сервере', () => {
+      assert(wallArrived, 'стена не доехала до стола и не вернулась на карту');
+    });
+    check('правый клик по стене убирает её', () => {
+      const surface = document.querySelector('#map-root .map-surface');
+      const box = surface.getBoundingClientRect();
+      surface.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true,
+        clientX: box.left + box.width * 0.5, clientY: box.top + box.height * 0.5
+      }));
+    });
+    const wallGone = await softWait(
+      () => document.querySelectorAll('#map-root .map-walls line').length === 0,
+      'стена убрана на сервере'
+    );
+    check('снос стены дошёл до стола', () => {
+      assert(wallGone, 'стена осталась на карте после удаления на сервере');
+    });
+    check('источник света пережил правку карты', () => {
+      const chips = [...document.querySelectorAll('#map-root .light-row')];
+      assert(chips.length >= 1, `источники света пропали: ${chips.length}`);
+    });
+    check('у игрока слоя темноты и стен не видно в интерфейсе', () => {
+      // Игрок получает ту же карту со светом и стенами, но рисует их не может:
+      // иначе он видел бы, где мастер поставил стену.
+      const lit = JSON.parse(JSON.stringify(MAP_STATE));
+      lit.maps.world.items[0].darkness = 0.8;
+      lit.maps.world.items[0].walls = [{ id: 'w1', x1: 0.5, y1: 0, x2: 0.5, y2: 1 }];
+      lit.maps.world.items[0].lights = [{ id: 'l1', x: 0.5, y: 0.5, radius: 20, color: '#ffb347' }];
+      mapView.render(lit, { role: 'player', playerId: 'p-1' });
+      const overlay = mapHost.querySelector('.map-walls');
+      assert(overlay.hidden, 'игрок видит стены на карте');
+      // А темноту он видит: иначе зачем она придумана.
+      assert(!mapHost.querySelector('.map-light').hidden, 'игрок не видит темноту на карте');
+      assert(!mapHost.querySelector('.map-lightbar') || mapHost.querySelector('.map-lightbar').hidden,
+        'игроку показана панель освещения');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+    check('погашенный источник перестаёт светить, но остаётся в списке', () => {
+      const chips = [...document.querySelectorAll('#map-root .light-row')];
+      const toggle = chips.map((chip) => [...chip.querySelectorAll('button')].map((node) => node.textContent));
+      const found = chips.flatMap((chip) => [...chip.querySelectorAll('button')])
+        .find((node) => node.textContent === 'Погасить');
+      assert(found, `у источника света нет кнопки «Погасить»: ${JSON.stringify(toggle)}`);
+      found.click();
+    });
+    const lightOff = await softWait(
+      () => Boolean([...document.querySelectorAll('#map-root .light-row button')]
+        .find((node) => node.textContent === 'Зажечь')),
+      'источник погашен'
+    );
+    check('погашение источника дошло до стола', () => {
+      assert(lightOff, 'источник не погасился');
+    });
+    check('бедный снимок темноты не оставляет карту чёрной', () => {
+      // Карта без темноты и без огня не рисует слой вовсе: иначе дневная карта
+      // выглядела бы пожелтевшей, а не дневной.
+      const canvas = lightHost().querySelector('.map-light');
+      assert(canvas.hidden || canvas.width > 0, 'слой света в негодном состоянии');
+    });
+    check('слой света лежит под туманом и над фишками', () => {
+      // Порядок слоёв решает две вещи сразу: фишка в темноте должна быть видна,
+      // а пятно света не должно высвечивать кусок карты, который мастер считает
+      // закрытым туманом.
+      const surface = document.querySelector('#map-root .map-surface');
+      const z = (selector) => Number(getComputedStyle(surface.querySelector(selector)).zIndex);
+      assert(z('.map-light') < z('.map-glow'), 'пятна оказались под ночной завесой');
+      assert(z('.map-glow') < z('.map-walls'), 'стены оказались под пятнами света');
+      assert(z('.map-walls') < z('.map-fog'), 'туман оказался под стенами');
+      assert(z('.map-fog') === 7, `туман должен быть верхним слоем: ${z('.map-fog')}`);
+      assert(getComputedStyle(surface.querySelector('.map-glow')).mixBlendMode === 'screen',
+        'пятна света не смешиваются с картой экранированием');
+    });
+    check('свет считается по клеткам, а не по пикселям картинки', () => {
+      // Дальность задана в футах, а правила держат клетку в пяти футах. Если бы
+      // свет считали в пикселях картинки, факел на двадцать футов светил бы на
+      // две сотни клеток ширины и выглядел бы точкой.
+      const polygon = window.DnD5e.lightPolygon(
+        { x: 0.5, y: 0.5, radius: 20 },
+        [],
+        { columns: 20, rows: 15, feetPerCell: 5 }
+      );
+      assert.strictEqual(polygon.radiusCells, 4, `радиус факела в клетках: ${polygon.radiusCells}`);
+      assert(polygon.radiusCells / 20 < 0.25,
+        `факел занял ${Math.round(polygon.radiusCells / 20 * 100)}% ширины карты вместо четверти`);
+      assert(polygon.points.length >= 48, `по окружности идёт мало лучей: ${polygon.points.length}`);
+      // С тем же расстоянием, но в десять футов на клетку, факел должен светить
+      // вдвое дальше: масштаб карты действительно влияет на свет.
+      const scaled = window.DnD5e.lightPolygon(
+        { x: 0.5, y: 0.5, radius: 20 },
+        [],
+        { columns: 20, rows: 15, feetPerCell: 10 }
+      );
+      assert.strictEqual(scaled.radiusCells, 2, `при десяти футах в клетке: ${scaled.radiusCells}`);
+    });
+    check('стена задерживает свет, а без неё круг остаётся круглым', () => {
+      const grid = { columns: 20, rows: 15, feetPerCell: 5 };
+      const walls = window.DnD5e.wallsInCells(
+        [{ id: 'w', x1: 0.45, y1: 0.2, x2: 0.45, y2: 0.8 }],
+        grid
+      );
+      const shadowed = window.DnD5e.lightPolygon({ x: 0.5, y: 0.5, radius: 20 }, walls, grid);
+      const left = shadowed.points.map((point) => point[0]);
+      const right = shadowed.points.map((point) => point[0]);
+      // Стена стоит в девятой клетке от источника (20-я минус 9-я): за ней света
+      // быть не должно, а в сторону, где стены нет, — полный радиус.
+      assert(Math.abs(Math.min(...left) - 9) < 0.5,
+        `свет прошёл сквозь стену: ${Math.min(...left)} вместо 9`);
+      assert(Math.abs(Math.max(...right) - 14) < 0.5,
+        `свет не дошёл до полного радиуса: ${Math.max(...right)} вместо 14`);
+    });
+    check('без стен свет это круг, а не ромб', () => {
+      // Четыре луча по сторонам света давали ромб, и пятно обрезалось им:
+      // факел на карте без стен светил квадратом, повёрнутым на 45 градусов.
+      const grid = { columns: 20, rows: 15, feetPerCell: 5 };
+      const polygon = window.DnD5e.lightPolygon({ x: 0.5, y: 0.5, radius: 20 }, [], grid);
+      assert(polygon.points.length >= 48,
+        `по окружности должно идти много лучей, а их ${polygon.points.length}`);
+      const radii = polygon.points.map(([x, y]) => Math.hypot(x - 10, y - 7.5));
+      const spread = Math.max(...radii) - Math.min(...radii);
+      assert(spread < 0.01, `контур не круглый, разброс радиуса ${spread.toFixed(3)} клетки`);
+      // Угловые точки ромба стояли бы на диагонали заметно ближе центра.
+      // Точка по диагонали должна лежать так же далеко, как и по осям: у ромба
+      // она срезалась и не доходила до края.
+      const diagonal = polygon.points
+        .map(([x, y]) => ({ d: Math.hypot(x - 10, y - 7.5), a: Math.atan2(y - 7.5, x - 10) }))
+        .filter((item) => Math.abs(Math.abs(item.a) - Math.PI / 4) < 0.05)
+        .map((item) => item.d);
+      assert(diagonal.length > 0, 'в многоугольнике нет точек по диагонали');
+      assert(Math.min(...diagonal) > polygon.radiusCells * 0.95,
+        `контур срезан по диагонали: ${Math.min(...diagonal).toFixed(2)} из ${polygon.radiusCells}`);
+    });
+    check('тусклый свет по правилам светит вдвое меньше', () => {
+      const grid = { columns: 20, rows: 15, feetPerCell: 5 };
+      const bright = window.DnD5e.lightPolygon({ x: 0.5, y: 0.5, radius: 20 }, [], grid);
+      const dim = window.DnD5e.lightPolygon({ x: 0.5, y: 0.5, radius: 20, dim: true }, [], grid);
+      assert.strictEqual(dim.radiusCells, bright.radiusCells / 2,
+        `радиус тусклого: ${dim.radiusCells} вместо ${bright.radiusCells / 2}`);
+    });
+    check('цвет источника попадает на карту, а не остаётся в ночном тоне', () => {
+      // Раньше пятна вырезались из темноты вычитанием, и цвет источника никуда
+      // не попадал: лунный свет выглядел как факел. Теперь пятна рисуются
+      // отдельным слоем своим цветом, поэтому в буфере ищется именно он.
+      const sample = (color) => {
+        const state = JSON.parse(JSON.stringify(MAP_STATE));
+        state.maps.world.items[0].darkness = 0.9;
+        state.maps.world.items[0].lights = [{ id: 'c', x: 0.5, y: 0.5, radius: 60, color }];
+        mapView.render(state, { role: 'dm', playerId: 'dm' });
+        const glow = mapView.glowSourceContext;
+        const data = glow.getImageData(0, 0, glow.canvas.width, glow.canvas.height).data;
+        // Ищем самый тёплый и самый холодный пиксель: у одного источника цвет
+        // один, и сравнивать надо с ним, а не с серединой буфера.
+        let warm = -999;
+        let cold = -999;
+        for (let i = 0; i < data.length; i += 4) {
+          warm = Math.max(warm, data[i] - data[i + 2]);
+          cold = Math.max(cold, data[i + 2] - data[i]);
+        }
+        return { warm, cold, size: glow.canvas.width * glow.canvas.height };
+      };
+      const torch = sample('#ffab4d');
+      assert(torch.size > 0, `буфер пятен пуст: ${torch.size} пикселей`);
+      assert(torch.warm > 40, `тёплый источник не тёплый: тепло ${torch.warm}`);
+      assert(torch.cold <= 1, `тёплый источник оказался холодным: холод ${torch.cold}`);
+      const moon = sample('#7d9cff');
+      assert(moon.cold > 40, `холодный источник не холодный: холод ${moon.cold}`);
+      assert(moon.warm <= 1, `холодный источник оказался тёплым: тепло ${moon.warm}`);
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+    check('тусклость источника переживает поездку до сервера и обратно', () => {
+      const parsed = window.DnD5e.normalizeLights([
+        { id: 'a', x: 0.5, y: 0.5, radius: 20, dim: true },
+        { id: 'b', x: 0.5, y: 0.5, radius: 20 }
+      ]);
+      assert.strictEqual(parsed[0].dim, true, 'тусклость потерялась');
+      assert.strictEqual(parsed[1].dim, false, 'яркий источник стал тусклым');
+    });
+    check('свет пересчитывается только когда что-то изменилось', () => {
+      // Каждое движение мыши при протяжке стены перерисовывало все
+      // многоугольники заново, и тяжёлая карта подтормаживала.
+      const state = JSON.parse(JSON.stringify(MAP_STATE));
+      state.maps.world.items[0].darkness = 0.8;
+      state.maps.world.items[0].lights = [{ id: 'k', x: 0.4, y: 0.4, radius: 20, color: '#ffab4d' }];
+      const map = state.maps.world.items[0];
+      mapView.render(state, { role: 'dm', playerId: 'dm' });
+
+      let builds = 0;
+      const original = mapView.renderLightBuffers.bind(mapView);
+      mapView.renderLightBuffers = (...args) => { builds += 1; return original(...args); };
+      // Первый повтор обязан быть кэшем: карта только что отрисовалась.
+      mapView.paintLight(map);
+      assert.strictEqual(builds, 0, `повтор построил буферы заново: ${builds}`);
+      mapView.paintLight(map);
+      assert.strictEqual(builds, 0, 'третий повтор тоже перестраивает');
+
+      // А вот с новой стеной буферы обязаны перестроиться.
+      const withWall = { ...map, walls: [{ id: 'w', x1: 0.5, y1: 0, x2: 0.5, y2: 1 }] };
+      mapView.paintLight(withWall);
+      assert.strictEqual(builds, 1, 'новая стена не перестроила свет');
+
+      // Свет сдвинутого источника тоже требует пересчёта.
+      const moved = { ...map, lights: [{ id: 'k', x: 0.6, y: 0.6, radius: 20, color: '#ffab4d' }] };
+      mapView.paintLight(moved);
+      assert.strictEqual(builds, 2, 'сдвинутый источник не перестроил свет');
+
+      mapView.renderLightBuffers = original;
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
     check('карту стола можно приблизить, не меняя размер фишек и клетки', () => {
       const surface = document.querySelector('#map-root .map-surface');

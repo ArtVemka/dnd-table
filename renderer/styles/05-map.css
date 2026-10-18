@@ -1,0 +1,505 @@
+/* ==================================================================
+ * Карта.
+ * Подложка, вкладки карт, сетка, приближение, фишки на карте.
+ *
+ * Файл выделен из styles.css без перестановки правил: порядок в CSS значим
+ * для правил одинаковой специфичности. Части обязаны подключаться по
+ * порядку номеров в index.html.
+ * ================================================================== */
+
+/* --------------------------------------------------------------- Карта */
+
+.mapview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+  position: relative;
+}
+
+.map-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.map-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.map-tab:hover {
+  border-color: var(--accent);
+}
+
+.map-tab.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
+.map-tab.is-empty .map-tab__label {
+  opacity: 0.55;
+}
+
+.map-tab__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot-idle);
+}
+
+.map-tab__dot.is-on {
+  background: var(--ok);
+  box-shadow: 0 0 7px rgba(111, 174, 90, 0.9);
+}
+
+.map-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.map-toolbar__name {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Пометка, что панель карты в тренировочном столе — не ДМ-овская. */
+.map-toolbar__note {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--info-text);
+  white-space: nowrap;
+}
+
+/* Список карт вкладки: во вкладке их может быть много. */
+.map-toolbar__list {
+  width: auto;
+  min-width: 150px;
+  max-width: 260px;
+}
+
+.map-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-deep);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.map-surface {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  line-height: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--border-strong), 0 12px 34px rgba(0, 0, 0, 0.6);
+  cursor: grab;
+  /* Размер клетки сетки = размер фишки. Значение приходит из состояния стола. */
+  --cell: 46px;
+  /* Сдвиг сетки в пикселях картинки: сетка готовой карты начинается не с
+     левого верхнего угла файла, и без сдвига наша на неё не ложится. */
+  --grid-shift-x: 0px;
+  --grid-shift-y: 0px;
+}
+
+.map-stage.is-panning,
+.map-stage.is-panning .map-surface {
+  cursor: grabbing;
+}
+
+/* Приближение карты: своё у каждого участника. */
+.map-zoom {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  background: rgba(12, 9, 6, 0.88);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+}
+
+.map-zoom__btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.map-zoom__btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.map-zoom__btn--reset {
+  font-size: 13px;
+}
+
+.map-zoom__value {
+  min-width: 40px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.map-zoom.is-zoomed .map-zoom__value {
+  color: var(--gold);
+}
+
+.map-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/*
+ * Сетка карты. Клетка ровно по размеру фишки (--cell), поэтому фишка,
+ * поставленная в клетку, занимает её целиком. Позиция фона сдвигает сетку
+ * на столько пикселей, сколько мастер задал: угол картинки и угол её клеток
+ * совпадают не всегда.
+ */
+.map-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  background-image:
+    repeating-linear-gradient(to right, rgba(20, 12, 6, 0.55) 0 1px, transparent 1px var(--cell, 46px)),
+    repeating-linear-gradient(to bottom, rgba(20, 12, 6, 0.55) 0 1px, transparent 1px var(--cell, 46px));
+  background-position:
+    calc(-1 * var(--grid-shift-x, 0px)) calc(-1 * var(--grid-shift-y, 0px));
+}
+
+/* Поверхность карты: кислота, огонь, вода. Пол под фишками, поэтому слой
+   полупрозрачный и лежит между сеткой и токенами. Имя у холста своё: класс
+   `.map-surface` занят самой подложкой карты. */
+.map-surface-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ------------------------------------- Режим боя: ход фишки по клеткам */
+
+/* Линия маршрута лежит поверх фишек и под туманом: видно, куда идёт фишка,
+   но закрытый участок она не выдаёт. Координаты заданы в тысячных долях
+   карты, поэтому подпись и линия едут вместе с приближением. */
+.map-route {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.map-route line {
+  vector-effect: non-scaling-stroke;
+}
+
+/* Клетка назначения: рамка ровно в размер клетки сетки. */
+.map-cell {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--accent-hover);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  box-shadow: 0 0 12px var(--glow);
+}
+
+.map-cell[hidden] {
+  display: none;
+}
+
+/* Расстояние в середине маршрута: шаги, клетки и футы в одной подписи. */
+.map-route__label {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--hp-plate);
+  border: 1px solid var(--accent-border, var(--border-strong));
+  color: var(--text);
+  font-family: var(--font-num);
+  font-size: 13px;
+  white-space: nowrap;
+  line-height: 1.4;
+  box-shadow: var(--title-shadow);
+}
+
+.map-route__label[hidden] {
+  display: none;
+}
+
+/* Фишка, выбранная для хода, и фишка, которая идёт по клеткам. */
+.token--selectable {
+  cursor: pointer;
+}
+
+.token--combat .token__circle {
+  border-color: var(--accent-hover);
+  box-shadow: 0 0 0 2px var(--accent), 0 3px 12px rgba(0, 0, 0, 0.6);
+}
+
+.token--combat .token__label {
+  color: var(--accent-hover);
+}
+
+.token--walking {
+  z-index: 60;
+  transition: left 70ms linear, top 70ms linear;
+}
+
+/* --------------------------------------------------------------- Холст */
+
+.sketch-editor {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+}
+
+.sketch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+}
+
+.sketch__tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sketch__group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 8px;
+  border-right: 1px solid var(--border);
+}
+
+.sketch__field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sketch__label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sketch__color {
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-3);
+  cursor: pointer;
+}
+
+.sketch__swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.sketch__swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.sketch__swatch:hover {
+  transform: scale(1.12);
+}
+
+.sketch__size {
+  width: 90px;
+  accent-color: var(--accent);
+}
+
+.sketch__value {
+  min-width: 20px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.sketch__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sketch__check input {
+  accent-color: var(--accent);
+}
+
+.sketch__target {
+  width: auto;
+  min-width: 150px;
+}
+
+.sketch__exit {
+  margin-left: auto;
+}
+
+.sketch__stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.sketch__board {
+  position: relative;
+  transform-origin: center center;
+  background: #f3ecdd;
+  box-shadow: 0 0 0 1px var(--border-strong), 0 12px 34px rgba(0, 0, 0, 0.6);
+  flex-shrink: 0;
+}
+
+.sketch__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sketch__canvas--draw {
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.sketch__canvas--draw.is-eraser {
+  cursor: cell;
+}
+
+/*
+ * Сетка холста — это только разметка для рисования, а не сетка стола: она
+ * заметно тусклее и тоньше игровой, чтобы их не путали.
+ */
+.sketch__grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(to right, rgba(85, 105, 135, 0.22) 0 var(--sketch-line, 1px), transparent var(--sketch-line, 1px) var(--sketch-cell, 46px)),
+    repeating-linear-gradient(to bottom, rgba(85, 105, 135, 0.22) 0 var(--sketch-line, 1px), transparent var(--sketch-line, 1px) var(--sketch-cell, 46px));
+}
+
+.sketch__hint {
+  font-size: 11.5px;
+  flex-shrink: 0;
+}
+
+.map-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/*
+ * Водяной знак гранёного куба. Он же герб игры, и по нему видно, что стол
+ * пуст и ждёт карту. Рисуется контурами, а не заливкой, и держит цвет темы.
+ *
+ * Дыхание идёт по stroke-opacity, а не по opacity: иначе анимация заменяла
+ * собственную прозрачность знака и он горел в полную силу.
+ */
+.map-empty__mark {
+  width: clamp(120px, 22%, 190px);
+  height: auto;
+  fill: none;
+  stroke: var(--gold);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  opacity: 0.22;
+  animation: dnd-mark-breathe 7s ease-in-out infinite;
+}
+
+@keyframes dnd-mark-breathe {
+  0%, 100% { stroke-opacity: 0.5; }
+  50%      { stroke-opacity: 1; }
+}
+
+.map-empty__icon {
+  font-size: 42px;
+  opacity: 0.5;
+}
+
+.map-badge {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(12, 9, 6, 0.88);
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  pointer-events: none;
+}

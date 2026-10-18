@@ -63,9 +63,16 @@ check('дробные числа округляются, а не копятся'
 
 check('стиль печати убирает интерфейс и оставляет белый лист', () => {
   // Стили подключены ссылкой, и прочесть их из renderer нельзя: чтение файла
-  // запрещено политикой безопасности. Поэтому проверка живёт здесь, где файл
-  // открывается обычным fs.
-  const css = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'styles.css'), 'utf8');
+  // запрещено политикой безопасности. Поэтому проверка живёт здесь, где файлы
+  // открываются обычным fs.
+  //
+  // Оформление разбито на восемь частей, и блок печати живёт в тематическом
+  // слое. Читаем все части и склеиваем: проверка должна видеть оформление целиком,
+  // а не ту часть, где сегодня случайно оказался нужный блок.
+  const dir = path.join(__dirname, '..', 'renderer', 'styles');
+  const parts = fs.readdirSync(dir).filter((name) => name.endsWith('.css')).sort();
+  assert(parts.length > 0, 'в renderer/styles нет ни одной части оформления');
+  const css = parts.map((name) => fs.readFileSync(path.join(dir, name), 'utf8')).join('\n');
   const index = css.indexOf('@media print');
   assert(index >= 0, 'в стилях нет блока для печати');
   const block = css.slice(index);

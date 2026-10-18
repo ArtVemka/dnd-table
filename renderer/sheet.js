@@ -47,40 +47,11 @@
     return clean ? clean.slice(0, 1).toUpperCase() : '?';
   }
 
-  /**
-   * Кружок с портретом, а без картинки — с буквой имени.
-   *
-   * Своя копия, а не общая с table.js: sheet.js грузится раньше table.js, а в
-   * отдельном окне листа table.js вообще не подключён. Так же разделены и
-   * initials() — дешёвый код, который нужен обоим файлам.
-   * @param {string} src готовая ссылка на картинку либо пустая строка
-   * @param {string} name имя для буквы-заглушки
-   * @returns {HTMLElement}
-   */
-  function avatarCircle(src, name) {
-    const node = el('div', 'player-row__avatar');
-    if (!src) {
-      node.textContent = initials(name);
-      return node;
-    }
-    const img = document.createElement('img');
-    img.className = 'player-row__avatar-img';
-    img.alt = '';
-    img.src = src;
-    img.addEventListener('error', () => {
-      img.remove();
-      node.textContent = initials(name);
-      node.classList.remove('has-image');
-    });
-    node.appendChild(img);
-    node.classList.add('has-image');
-    return node;
-  }
 
   class SheetView {
     /**
      * @param {HTMLElement} root контейнер панели
-     * @param {{onChange?: (sheet: object) => void, onPlayerChange?: (playerId: string) => void, onBack?: () => void, onDetach?: () => void, onAvatarPick?: (file: File) => void, onAvatarClear?: () => void}} handlers
+     * @param {{onChange?: (sheet: object) => void, onBack?: () => void, onDetach?: () => void, onAvatarPick?: (file: File) => void, onAvatarClear?: () => void}} handlers
      */
     constructor(root, handlers = {}) {
       this.root = root;
@@ -141,10 +112,16 @@
       head.appendChild(headTools);
       this.root.appendChild(head);
 
-      // --- Список игроков (ДМ): лист открывается по нажатию на имя ---
-      this.listNode = el('div', 'sheet__players');
-      this.listNode.hidden = true;
-      this.root.appendChild(this.listNode);
+      // --- Подсказка мастеру: игрок выбирается в панели участников слева ---
+      // Списка игроков в этой вкладке больше нет: он целиком живёт слева, где
+      // у каждого есть кнопка «Открыть лист», а здесь остаётся сам лист.
+      this.pickNode = el('div', 'sheet__pick');
+      this.pickNode.hidden = true;
+      this.pickNode.appendChild(el('div', 'sheet__pick-title', 'Чей лист открыть?'));
+      this.pickNode.appendChild(el('div', 'muted',
+        'Выберите игрока в панели «Участники» слева и нажмите «Открыть лист». '
+        + 'Список игроков переехал туда целиком, чтобы не искать игрока в двух местах.'));
+      this.root.appendChild(this.pickNode);
 
       const grid = el('div', 'sheet__grid');
       this.gridNode = grid;
@@ -917,62 +894,11 @@ if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
       if (this.avatarClear) this.avatarClear.hidden = !this.avatarUrl;
     }
 
-    /**
-     * Портрет самого мастера в списке игроков. Отдельный кружок от того, что в
-     * листе: лист у мастера скрыт, и его блок аватарки в этот момент не в дереве.
-     * @param {string|null} url
-     * @param {string} name
-     */
-    setSelfAvatar(url, name = '') {
-      this.selfAvatarUrl = url || null;
-      this.selfAvatarName = name;
-      this.paintAvatar(this.selfAvatarNode, this.selfAvatarUrl, name);
-      if (this.selfAvatarClear) this.selfAvatarClear.hidden = !this.selfAvatarUrl;
-    }
-
-    /**
-     * Кнопки загрузки и сброса портрета самого мастера.
-     *
-     * Свои, а не переиспользованные из блока листа: тот лежит в скрытой сетке и
-     * пересоздаётся вместе с ней, а мастеру блок нужен в списке игроков.
-     * @returns {HTMLElement}
-     */
-    buildSelfAvatarSide() {
-      const side = el('div', 'avatar-pick__side');
-
-      this.selfAvatarInput = document.createElement('input');
-      this.selfAvatarInput.type = 'file';
-      this.selfAvatarInput.accept = 'image/png,image/jpeg,image/webp';
-      this.selfAvatarInput.className = 'avatar-pick__file';
-      this.selfAvatarInput.addEventListener('change', () => {
-        const file = this.selfAvatarInput.files && this.selfAvatarInput.files[0];
-        this.selfAvatarInput.value = '';
-        if (!file) return;
-        if (this.handlers.onAvatarPick) this.handlers.onAvatarPick(file);
-      });
-      side.appendChild(this.selfAvatarInput);
-
-      const pick = el('button', 'avatar-pick__label', 'Аватар');
-      pick.type = 'button';
-      pick.addEventListener('click', () => this.selfAvatarInput.click());
-      side.appendChild(pick);
-
-      this.selfAvatarClear = el('button', 'btn btn--ghost btn--tiny', 'Убрать');
-      this.selfAvatarClear.type = 'button';
-      this.selfAvatarClear.hidden = true;
-      this.selfAvatarClear.addEventListener('click', () => {
-        if (this.handlers.onAvatarClear) this.handlers.onAvatarClear();
-      });
-      side.appendChild(this.selfAvatarClear);
-
-      return side;
-    }
-
-    /**
-     * Можно ли менять аватар. У мастера, открывшего чужой лист, — нельзя:
-     * портрет игрока он не редактирует.
-     * @param {boolean} editable
-     */
+/**
+   * Можно ли менять аватар. У мастера, открывшего чужой лист, — нельзя:
+   * портрет игрока он не редактирует.
+   * @param {boolean} editable
+   */
     setAvatarEditable(editable) {
       if (this.avatarInput) this.avatarInput.disabled = !editable;
       // Кнопку гасим по-настоящему, а не классом: у disabled не бывает
@@ -1048,7 +974,7 @@ if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
     /** Скрывает броски там, где бросать нельзя: список игроков, замороженный лист. */
     updateRollAvailability() {
       const canRoll = Boolean(this.handlers.onRollCheck) && !this.readOnly;
-      const visible = canRoll && this.mode !== 'list';
+      const visible = canRoll && this.mode === 'sheet';
       // Прячем всю строку с переключателем, а не сам переключатель: одна
       // подпись «Проверка» без кнопок выглядит как ошибка вёрстки.
       if (this.rollRow) this.rollRow.hidden = !visible;
@@ -1068,88 +994,27 @@ if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
     }
 
    /**
-   * Режим панели: список игроков («list») или открытый лист («sheet»).
-   * Кнопка возврата нужна только там, где есть откуда возвращаться — то есть
-   * у ДМ, который попал в лист из списка игроков.
-   * @param {'list'|'sheet'} mode
+   * Режим панели: подсказка выбора игрока («pick») или открытый лист («sheet»).
+   *
+   * Списка игроков в панели больше нет: игрок выбирается в списке участников
+   * слева, а кнопка возврата закрывает открытый лист обратно.
+   * @param {'pick'|'sheet'} mode
    * @param {{canGoBack?: boolean, canDetach?: boolean}} [options]
    */
   setMode(mode, options = {}) {
-    this.mode = mode === 'list' ? 'list' : 'sheet';
-    const isList = this.mode === 'list';
-    this.listNode.hidden = !isList;
-    this.gridNode.hidden = isList;
-    this.backButton.hidden = isList || !options.canGoBack;
+    this.mode = mode === 'pick' ? 'pick' : 'sheet';
+    const isPick = this.mode === 'pick';
+    this.pickNode.hidden = !isPick;
+    this.gridNode.hidden = isPick;
+    this.backButton.hidden = isPick || !options.canGoBack;
     // Отдельное окно нужно там, где лист открыт поверх стола. На экране
     // подготовки лист и есть всё окно, и кнопка только мешает.
-    this.detachButton.hidden = isList || options.canDetach === false;
-    // Печатать лист из списка игроков нечего: печатают открытый лист.
-    if (this.printButton) this.printButton.hidden = isList;
+    this.detachButton.hidden = isPick || options.canDetach === false;
+    // Печатать лист из подсказки нечего: печатают открытый лист.
+    if (this.printButton) this.printButton.hidden = isPick;
     this.updateRollAvailability();
-    this.titleNode.textContent = isList ? 'Листы игроков' : 'Лист персонажа';
+    this.titleNode.textContent = isPick ? 'Листы игроков' : 'Лист персонажа';
   }
-
-    /**
-     * Список игроков у ДМ: лист открывается нажатием на имя.
-     * @param {Array<{playerId: string, name: string, online: boolean, role: string}>} players
-     * @param {string|null} selectedId
-     */
-    setPlayerList(players, selectedId) {
-      this.listNode.innerHTML = '';
-      if (!players.length) {
-        this.listNode.appendChild(el('div', 'sheet__players-empty',
-          'В лобби сейчас никого нет. Как только игрок подключится к столу, его имя появится здесь.'));
-        return;
-      }
-      // Портрет мастера. Листа персонажа у него нет, а портрет нужен: он стоит
-      // рядом с его именем в списке и у его бросков в чате. Ставить его больше
-      // негде, поэтому он живёт здесь. В режиме листа этого блока нет, а
-      // список игроков вообще видит только мастер.
-      const mine = el('div', 'sheet__self');
-      mine.appendChild(el('div', 'sheet__self-title', 'Ваш портрет'));
-      const row = el('div', 'avatar-pick');
-      this.selfAvatarNode = el('div', 'avatar-pick__preview');
-      row.appendChild(this.selfAvatarNode);
-      row.appendChild(this.buildSelfAvatarSide());
-      mine.appendChild(row);
-      mine.appendChild(el('div', 'muted',
-        'Виден игрокам в списке участников и рядом с вашими бросками в чате.'));
-      this.listNode.appendChild(mine);
-      this.paintAvatar(this.selfAvatarNode, this.selfAvatarUrl, this.selfAvatarName);
-
-      this.listNode.appendChild(el('div', 'muted',
-        'Нажмите на имя игрока — откроется его лист персонажа (для ДМ он только для чтения).'));
-
-      for (const player of players) {
-        const row = el('button', 'player-row player-row--button');
-        row.type = 'button';
-        row.dataset.playerId = player.playerId;
-        row.classList.toggle('is-offline', !player.online);
-        row.classList.toggle('is-selected', player.playerId === selectedId);
-
-        row.appendChild(avatarCircle(
-          this.handlers.resolveUrl ? this.handlers.resolveUrl(player.avatar) : '',
-          player.name
-        ));
-
-        const main = el('div', 'player-row__main');
-        const nameRow = el('div', 'player-row__name');
-        nameRow.appendChild(el('span', null, player.name));
-        main.appendChild(nameRow);
-        const meta = el('div', 'player-row__meta');
-        meta.appendChild(el('span', `dot ${player.online ? 'dot--on' : 'dot--off'}`));
-        meta.appendChild(el('span', null, player.online ? 'в сети' : 'не в сети'));
-        main.appendChild(meta);
-        row.appendChild(main);
-
-        row.appendChild(el('span', 'player-row__go', 'Открыть лист →'));
-
-        row.addEventListener('click', () => {
-          if (this.handlers.onPlayerChange) this.handlers.onPlayerChange(player.playerId);
-        });
-        this.listNode.appendChild(row);
-      }
-    }
   }
 
   global.SheetView = SheetView;

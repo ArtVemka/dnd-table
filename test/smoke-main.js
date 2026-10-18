@@ -28,6 +28,13 @@ require(path.join(__dirname, '..', 'main.js'));
 
 const consoleLogs = [];
 
+// Проверки приходят в renderer событием console-log и печатаются только в
+// конце прогона. При аварии их не видно, а падать тут почти всегда есть чем:
+// список рендера, файл с данными или отказ сервера. Поэтому каждое сообщение
+// пишется ещё и в журнал, который переживает падение.
+// @type {(line: string) => void}
+let journalLine = () => {};
+
 function describeArg(value) {
   if (value === null || value === undefined) return String(value);
   if (typeof value === 'object') {
@@ -45,10 +52,12 @@ function collectConsoleLogs(contents) {
     if (first && typeof first === 'object' && 'message' in first) {
       if (process.env.DND_PROGRESS) console.log(`  ${String(first.message)}`);
       consoleLogs.push({ level: String(first.level || ''), text: String(first.message) });
+      journalLine(String(first.message || ''));
       return;
     }
     if (process.env.DND_PROGRESS) console.log(`  ${String(args[2] || '')}`);
     consoleLogs.push({ level: String(args[1] || ''), text: String(args[2] || '') });
+    journalLine(String(args[2] || ''));
   });
   contents.on('preload-error', (event, preloadPath, error) => {
     consoleLogs.push({ level: 'error', text: `preload-error ${preloadPath}: ${error && error.message}` });
@@ -99,13 +108,18 @@ async function main() {
   // неё, и первый же опрос иначе прочитает пустую форму.
   const loadedSheetWindows = new Map();
   app.on('browser-window-created', (event, created) => {
+    // Идентификатор запоминаем сразу: к моменту «closed» объект webContents
+    // уже разрушен, и обращение к нему бросает «Object has been destroyed»
+    // прямо в процессе main — Electron показывает на это отдельное окно и
+    // весь прогон выглядит упавшим.
+    const contentsId = created.webContents.id;
     created.webContents.on('did-finish-load', () => {
       if (created.webContents.getURL().includes('sheet-window.html')) {
-        loadedSheetWindows.set(created.webContents.id, Date.now());
+        loadedSheetWindows.set(contentsId, Date.now());
       }
     });
     created.on('closed', () => {
-      loadedSheetWindows.delete(created.webContents.id);
+      loadedSheetWindows.delete(contentsId);
     });
   });
   /** Читает состояние окна листа; страховочный таймаут на случай зависания. */
@@ -278,11 +292,44 @@ function cleanup() {
 }
 
 app.whenReady().then(() => {
-  main().catch((error) => {
-    console.error('\nSmoke-тест упал:', error && error.stack ? error.stack : error);
-    cleanup();
-    app.exit(1);
-  });
+  // При аварии терялся весь собранный отчёт о проверках, и первое, что видно,
+  // это «Cannot read properties of undefined» через двадцать строк от причины.
+  // Поэтому результаты каждой проверки дублируются в файл: он переживёт
+  // падение, и по нему видно, где остановились.
+  const journal = path.join(os.tmpdir(), `dnd-smoke-${process.pid}.log`);
+  journalLine = (line) => {
+    try {
+      fs.appendFileSync(journal, `${line}\n`);
+    } catch {
+      // Отчёт без файла всё равно печатается в консоль.
+    }
+  };
+  try {
+    fs.rmSync(journal, { force: true });
+  } catch {
+    // Файла не было — и хорошо.
+  }
+  main()
+    .then(() => {
+      cleanup();
+      try { fs.rmSync(journal, { force: true }); } catch { /* временный файл */ }
+      app.exit(0);
+    })
+    .catch((error) => {
+      console.error('\nSmoke-тест упал:', error && error.stack ? error.stack : error);
+      let saved = '';
+      try {
+        saved = fs.readFileSync(journal, 'utf8');
+      } catch {
+        saved = '';
+      }
+      if (saved) {
+        console.error('\nПроверки, выполненные до сбоя:');
+        console.error(saved.trim());
+      }
+      cleanup();
+      app.exit(1);
+    });
 });
 
 setTimeout(() => {

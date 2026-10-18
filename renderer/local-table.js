@@ -430,6 +430,15 @@
 
     const findToken = (tokenId) => state.tokens.find((token) => token.id === String(tokenId || ''));
 
+    /** Карта вкладки по id, иначе та, что сейчас открыта. */
+    const findMap = (slot, mapId) => {
+      if (!slot || !Array.isArray(slot.items) || !slot.items.length) return null;
+      const wanted = String(mapId || '');
+      return wanted
+        ? slot.items.find((entry) => entry.id === wanted)
+        : (slot.items.find((entry) => entry.id === slot.activeId) || slot.items[0]);
+    };
+
     const cloneInitiative = () => ({
       entries: state.initiative.entries.map((entry) => ({ ...entry })),
       turnId: state.initiative.turnId,
@@ -547,6 +556,39 @@
           state.activeMap = DnD.MAP_TYPES.find((other) => other !== type && state.maps[other].items.length) || null;
         }
         mapUpdated(type);
+      },
+
+      /**
+       * Туман войны в тренировочном столе.
+       *
+       * Здесь карту грузит и водит по ней игрок, поэтому роль считается его:
+       * на настоящем столе туман открывает мастер, а тут один человек и он
+       * же хозяин стола.
+       */
+      openMapFog(payload) {
+        const slot = state.maps[payload && payload.type];
+        const item = findMap(slot, payload && payload.mapId);
+        if (!item) return;
+        item.fogMask = DnD.openFogAt(item.fogMask, Number(payload.x), Number(payload.y), Number(payload.radius));
+        emitTo('mapUpdated', {
+          type: payload.type,
+          items: slot.items.map((entry) => ({ ...entry })),
+          activeId: slot.activeId,
+          activeMap: state.activeMap
+        });
+      },
+
+      setMapFog(payload) {
+        const slot = state.maps[payload && payload.type];
+        const item = findMap(slot, payload && payload.mapId);
+        if (!item) return;
+        item.fogMask = DnD.setFogWhole(item.fogMask, Boolean(payload.open));
+        emitTo('mapUpdated', {
+          type: payload.type,
+          items: slot.items.map((entry) => ({ ...entry })),
+          activeId: slot.activeId,
+          activeMap: state.activeMap
+        });
       },
 
       setActiveMap(payload) {

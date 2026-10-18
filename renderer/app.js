@@ -918,6 +918,9 @@ let chosenSheetId = null;
         },
         onAssignToken: (tokenId, playerId) => emit('assignTokenToPlayer', { tokenId, playerId }),
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
+        // Туман войны: карта уезжает на сервер целиком, маской на месте.
+        onOpenMapFog: (type, mapId, x, y, radius) => emit('openMapFog', { type, mapId, x, y, radius }),
+        onSetMapFog: (type, mapId, open) => emit('setMapFog', { type, mapId, open }),
         // Тот же спавн, что и в панели участников: одно действие на оба места.
         onSpawnFromSheet: spawnTokenFromSheet,
         // Скрытость решает только мастер, но сервер всё равно проверяет.

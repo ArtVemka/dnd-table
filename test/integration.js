@@ -15,6 +15,8 @@ const assert = require('assert');
 const diceModule = require('../renderer/dice.js');
 const LIMITS_MAX_INITIATIVE = 40;
 const LIMITS_MAX_DEATH_SAVES = 3;
+const FOG_COLUMNS = 64;
+const FOG_ROWS = 40;
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -1463,6 +1465,107 @@ async function main() {
   });
   emit(p1, 'saveCharacterSheet', { sheet: { ...room.sheets.get(P1), hp: 7 } });
   await wait(80);
+
+  /* ----------------------------------------------------- туман войны */
+
+  console.log('\nТуман войны');
+  const fogType = 'world';
+  const fogSlot = room.maps[fogType];
+  const fogMap = fogSlot.items.find((item) => item.id === fogSlot.activeId) || fogSlot.items[0];
+  check('у карты есть своя маска тумана, и она пустая', () => {
+    assert(fogMap, 'вкладка карт пуста');
+    assert.strictEqual(typeof fogMap.fogMask, 'string', 'у карты нет маски тумана');
+    assert.strictEqual(fogMap.fogMask.length, FOG_COLUMNS * FOG_ROWS, `длина маски: ${fogMap.fogMask.length}`);
+    assert.strictEqual(fogMap.fogMask.indexOf('1'), -1, 'новая карта идёт с открытым туманом');
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'openMapFog', { type: fogType, mapId: fogMap.id, x: 0.5, y: 0.5, radius: 0.15 });
+  emit(p1, 'setMapFog', { type: fogType, mapId: fogMap.id, open: true });
+  await waitFor(() => p1.log.errorMessage.length >= 2, 'игрок пробовал открыть туман');
+  check('туман открывает только мастер', () => {
+    assert.strictEqual(p1.log.errorMessage.length, 2);
+    assert.ok(p1.log.errorMessage.every((item) => /только ДМ/.test(item.message)));
+    assert.strictEqual(room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask.indexOf('1'), -1,
+      'игрок всё-таки открыл карту');
+  });
+
+  const playerMapsBefore = p2.log.mapUpdated.length;
+  emit(dm, 'openMapFog', { type: fogType, mapId: fogMap.id, x: 0.5, y: 0.5, radius: 0.15 });
+  await waitFor(() => p2.log.mapUpdated.length > playerMapsBefore, 'туман дошёл до игрока');
+  check('открытый участок видят и игроки: у них та же карта', () => {
+    const last = p2.log.mapUpdated[p2.log.mapUpdated.length - 1];
+    const seen = last.items.find((item) => item.id === fogMap.id);
+    assert(seen, 'игрок не увидел карту в обновлении');
+    // Маска приходит игроку как есть: иначе карты у игроков и у мастера
+    // разъедутся, и открытое у одного будет закрытым у другого.
+    assert.strictEqual(seen.fogMask, room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask,
+      'у игрока и мастера разные маски тумана');
+    assert(seen.fogMask.indexOf('1') >= 0, 'у игрока карта осталась закрытой');
+  });
+
+  check('кисть открывает круг, а не квадрат', () => {
+    const mask = room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask;
+    const opened = (mask.match(/1/g) || []).length;
+    assert(opened > 40 && opened < 400, `кисть открыла ${opened} клеток`);
+    // Угол карты кисть не задела: открывать угол, которого никто не трогал,
+    // мастер не ожидает.
+    const firstRow = mask.slice(0, FOG_COLUMNS);
+    assert.strictEqual(firstRow.indexOf('1'), -1, 'кисть накрыла верхний край карты');
+  });
+
+  emit(dm, 'openMapFog', { type: fogType, mapId: fogMap.id, x: 0.5, y: 0.5, radius: 0.15 });
+  await wait(120);
+  check('повтор по тому же месту не раздувает маску', () => {
+    const before = room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask;
+    emit(dm, 'openMapFog', { type: fogType, mapId: fogMap.id, x: 0.5, y: 0.5, radius: 0.15 });
+    assert.strictEqual(
+      room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask,
+      before,
+      'маска изменилась при повторной кисти'
+    );
+  });
+
+  emit(dm, 'setMapFog', { type: fogType, mapId: fogMap.id, open: true });
+  await waitFor(
+    () => room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask.indexOf('0') < 0,
+    'карта открыта целиком'
+  );
+  check('«Открыть всё» снимает туман с карты', () => {
+    const mask = room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask;
+    assert.strictEqual(mask.indexOf('0'), -1, 'на карте остались закрытые участки');
+  });
+
+  emit(dm, 'setMapFog', { type: fogType, mapId: fogMap.id, open: false });
+  await waitFor(
+    () => room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask.indexOf('1') < 0,
+    'карта снова закрыта'
+  );
+  check('«Закрыть всё» возвращает карту в темноту', () => {
+    const mask = room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask;
+    assert.strictEqual(mask.indexOf('1'), -1);
+    assert.strictEqual(mask.length, FOG_COLUMNS * FOG_ROWS);
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'openMapFog', { type: fogType, mapId: 'no-such-map', x: 0.5, y: 0.5, radius: 0.1 });
+  await waitFor(() => dm.log.errorMessage.length > 0, 'несуществующая карта');
+  check('на несуществующей карте туман не открывается', () => {
+    assert.ok(dm.log.errorMessage.some((item) => /Карта не найдена/.test(item.message)));
+  });
+
+  emit(dm, 'openMapFog', { type: fogType, mapId: fogMap.id, x: 0.5, y: 0.5, radius: 0.12 });
+  await waitFor(
+    () => room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask.indexOf('1') >= 0,
+    'область открыта для проверки сохранения'
+  );
+  const fogSaved = new RoomState({ state: room.serialize() });
+  check('открытые участки переживают сохранение кампании', () => {
+    const saved = fogSaved.normalizeMapSlot(fogSaved.maps[fogType])
+      .items.find((item) => item.id === fogMap.id);
+    assert(saved.fogMask.indexOf('1') >= 0, 'маска тумана пропала из кампании');
+    assert.strictEqual(saved.fogMask.length, FOG_COLUMNS * FOG_ROWS);
+  });
 
   /* ------------------------------------------------- заметки мастера */
 

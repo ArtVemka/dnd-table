@@ -143,6 +143,70 @@ app.whenReady().then(async () => {
   image = await win.webContents.capturePage();
   fs.writeFileSync(path.join(outDir, 'table-initiative.png'), image.toPNG());
 
+  // Туман войны: карта с открытым участком и включённой кистью мастера.
+  // Картинку рисуем прямо в странице, иначе снимку нужен был бы файл с
+  // картой, которого в репозитории нет.
+  await win.webContents.executeJavaScript(`
+    (() => {
+      document.querySelector('.tabs__btn[data-tab="chat"]').click();
+      const paper = document.createElement('canvas');
+      paper.width = 900;
+      paper.height = 560;
+      const paperContext = paper.getContext('2d');
+      paperContext.fillStyle = '#cbb894';
+      paperContext.fillRect(0, 0, paper.width, paper.height);
+      paperContext.strokeStyle = 'rgba(90, 70, 45, 0.35)';
+      paperContext.lineWidth = 2;
+      for (let column = 1; column < 12; column += 1) {
+        paperContext.strokeRect(column * 75, 0, 75, 560);
+      }
+      for (let row = 1; row < 8; row += 1) {
+        paperContext.strokeRect(0, row * 70, 900, 70);
+      }
+      paperContext.fillStyle = 'rgba(60, 45, 30, 0.55)';
+      paperContext.fillRect(225, 140, 150, 140);
+      paperContext.fillRect(450, 350, 300, 70);
+
+      const players = [
+        { playerId: 'dm', name: 'Мастер', role: 'dm', online: true, hasSheet: false, tokenId: null, avatar: 'avatar-dm.png' },
+        { playerId: 'p-1', name: 'Артём', role: 'player', online: true, hasSheet: true, tokenId: 't2', avatar: null },
+        { playerId: 'p-2', name: 'Борис', role: 'player', online: true, hasSheet: true, tokenId: 't3', avatar: null }
+      ];
+
+      const mask = window.DnD5e.newFogMask();
+      const revealed = [
+        [0.34, 0.34, 0.16], [0.46, 0.42, 0.14], [0.52, 0.55, 0.13],
+        [0.63, 0.66, 0.12], [0.72, 0.62, 0.09]
+      ].reduce((acc, [x, y, radius]) => window.DnD5e.openFogAt(acc, x, y, radius), mask);
+
+      const mapItem = {
+        id: 'shot-fog',
+        name: 'Зал заброшенного храма',
+        url: paper.toDataURL('image/png'),
+        fogMask: revealed
+      };
+      const host = document.querySelector('#map-root');
+      host.innerHTML = '';
+      const view = new window.TableUI.MapView(host, { resolveUrl: (url) => url || '' });
+      view.render({
+        maps: { world: { items: [mapItem], activeId: mapItem.id }, battle: { items: [], activeId: null }, sketch: { items: [], activeId: null } },
+        activeMap: 'world',
+        grid: { enabled: false, cell: 46, columns: 0 },
+        tokens: [
+          { id: 't1', name: 'Гоблин', mapType: 'world', x: 0.3, y: 0.3, imageUrl: null, assignedPlayerId: null, color: '#c96f4a', hidden: true, maxHp: 12, hp: 7 },
+          { id: 't2', name: 'Тордин', mapType: 'world', x: 0.46, y: 0.44, imageUrl: null, assignedPlayerId: 'p-1', color: '#4a8fc9', hidden: false, maxHp: 27, hp: 19 }
+        ],
+        players
+      }, { role: 'dm', playerId: 'dm' });
+      view.setFogMode(true);
+      view.renderToolbar();
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'table-fog.png'), image.toPNG());
+
   // Лист персонажа: самая плотная страница приложения.
   await win.webContents.executeJavaScript(`
     (() => {

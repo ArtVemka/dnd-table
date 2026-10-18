@@ -40,6 +40,9 @@ const { decodeImage, sniffImageFormat } = require('./image');
 // Разбор формул броска. Модуль лежит в renderer/, потому что тем же файлом
 // считает бросок тренировочный стол: своя копия разбора разъехалась бы с ним.
 const dice = require('../renderer/dice.js');
+// Пустая маска тумана для новой карты: берём ту же модель, что и разбор
+// кисти, иначе у свежей карты окажется поле, которого нет у загруженной.
+const fogModel = require('../renderer/dnd5e.js');
 
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 /** Длина имени карты — та же, что при загрузке в состоянии стола. */
@@ -161,6 +164,24 @@ async function createTableServer(options) {
       activeId: slot ? slot.activeId : null,
       activeMap: room.activeMap
     });
+  };
+
+  /**
+   * Находит карту среди вкладок стола.
+   *
+   * Ищется именно карта, а не только вкладка: вкладка «Локация / битва» может
+   * держать несколько карт, и открывать надо ту, которую все видят.
+   * @param {{type?: string, mapId?: string}} payload
+   * @returns {{type: string, item: object|null}}
+   */
+  const findMapItem = (payload) => {
+    const slot = room.maps[payload && payload.type];
+    if (!slot || !Array.isArray(slot.items) || !slot.items.length) return { type: 'world', item: null };
+    const wanted = payload && payload.mapId ? String(payload.mapId) : '';
+    const item = wanted
+      ? slot.items.find((entry) => entry.id === wanted)
+      : (slot.items.find((entry) => entry.id === slot.activeId) || slot.items[0]);
+    return { type: payload && payload.type, item: item || null };
   };
 
   const requireJoined = (socket) => {
@@ -557,6 +578,10 @@ async function createTableServer(options) {
           id: newMapId(),
           url: `/files/${fileName}`,
           name: sanitizeText(payload && payload.name, MAP_NAME_MAX) || 'Карта',
+          // Туман есть у каждой карты с момента появления: иначе свежая карта
+          // отличалась бы от загруженной из кампании, а мастер нарисовал бы
+          // туман поверх поля, которого в её форме нет.
+          fogMask: fogModel.newFogMask(),
           uploadedAt: new Date().toISOString()
         };
         slot.items.push(map);
@@ -683,6 +708,34 @@ async function createTableServer(options) {
      * понял бы, где правда. Фишка без прочности (maxHp === null) — метка,
      * здоровья у неё нет, и сервер молча игнорирует правку.
      */
+    /**
+     * Туман войны.
+     *
+     * Открывает мастер, видят все. Игрок не может ничего открыть: если бы мог,
+     * он просто открыл бы всю карту себе.
+     *
+     * Маска уходит игрокам в любом случае: им нужен тот же самый туман, что и
+     * мастеру, иначе карты у игроков разъедутся.
+     */
+    socket.on('openMapFog', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      room.openMapFog(item, Number(payload && payload.x), Number(payload && payload.y), Number(payload && payload.radius));
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    /** Открывает карту целиком или снова закрывает. */
+    socket.on('setMapFog', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      room.setWholeMapFog(item, Boolean(payload && payload.open));
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
     /**
      * Состояния фишки: слепой, парализован, сбит с ног и прочие.
      *

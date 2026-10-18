@@ -17,6 +17,9 @@ const CONDITIONS = require('../renderer/dnd5e.js').CONDITIONS || [];
 const CONDITION_IDS = new Set(CONDITIONS.map((item) => item.id));
 // Ступени ячеек заклинаний: их девять, и это знает сервер.
 const SPELL_SLOT_LEVELS = require('../renderer/dnd5e.js').SPELL_SLOT_LEVELS || [1, 2, 3, 4, 5, 6, 7, 8, 9];
+// Разбор маски тумана тоже оттуда: своя копия в сервере разъехалась бы с
+// интерфейсом при первом же изменении разрешения сетки.
+const fogModel = require('../renderer/dnd5e.js');
 
 const CAMPAIGN_FORMAT_VERSION = 2;
 
@@ -137,6 +140,15 @@ function normalizeConditions(raw) {
  * @param {unknown} raw
  * @returns {number[]}
  */
+/**
+ * Приводит маску тумана к нужному размеру.
+ * @param {unknown} raw
+ * @returns {string}
+ */
+function normalizeFog(raw) {
+  return fogModel.normalizeFogMask(raw);
+}
+
 function clampSlotArray(raw) {
   const rows = Array.isArray(raw) ? raw.slice(0, 9) : [];
   return SPELL_SLOT_LEVELS.map((level, index) => clampInt(rows[index], 0, LIMITS.maxSpellSlotsPerLevel, 0));
@@ -669,6 +681,34 @@ class RoomState {
   }
 
 /**
+   * Открывает участок карты туманом войны.
+   *
+   * Открытое хранится у карты, а не у фишки или фигуры: правило «кто что видит»
+   * в игре держится на столе, но открытые участки накоплены разными фишками и
+   * переживают её уход со стола.
+   * @param {object} mapItem
+   * @param {number} x Центр кисти по ширине, от 0 до 1.
+   * @param {number} y Центр кисти по высоте, от 0 до 1.
+   * @param {number} radius Радиус кисти по ширине карты.
+   * @returns {object} Обновлённая карта.
+   */
+  openMapFog(mapItem, x, y, radius) {
+    mapItem.fogMask = fogModel.openFogAt(normalizeFog(mapItem.fogMask), x, y, radius);
+    return mapItem;
+  }
+
+  /**
+   * Открывает карту целиком или снова закрывает.
+   * @param {object} mapItem
+   * @param {boolean} open
+   * @returns {object}
+   */
+  setWholeMapFog(mapItem, open) {
+    mapItem.fogMask = fogModel.setFogWhole(normalizeFog(mapItem.fogMask), open);
+    return mapItem;
+  }
+
+  /**
    * Убирает участника боя вслед за исчезновением того, на кого он ссылается:
    * удалённая фишка не должна оставаться в порядке боя.
    * @param {string} refId
@@ -703,6 +743,9 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
         id: newMapId(),
         url: source.url,
         name: sanitizeText(source.name, MAP_NAME_MAX) || 'Карта',
+        // Туман живёт у карты, а не у стола: у каждой карты он свой, и при
+        // переключении вкладки мастер не должен открывать заново.
+        fogMask: normalizeFog(source.fogMask),
         uploadedAt: source.uploadedAt || new Date().toISOString()
       });
     } else if (Array.isArray(source.items)) {
@@ -712,6 +755,9 @@ if (entry.refId === id && this.removeInitiativeEntry(entry.id)) removed += 1;
           id: String(item.id || newMapId()),
           url: item.url,
           name: sanitizeText(item.name, MAP_NAME_MAX) || 'Карта',
+          // Маска из кампании может достаться от другой версии игры или быть
+          // правлена руками, поэтому чинится здесь же.
+          fogMask: normalizeFog(item.fogMask),
           uploadedAt: item.uploadedAt || new Date().toISOString()
         });
       }

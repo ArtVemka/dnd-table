@@ -903,6 +903,28 @@
 
     const mapHost = document.createElement('div');
     sandbox.appendChild(mapHost);
+    /**
+     * Событие указателя в середине подложки карты.
+     *
+     * Настоящий PointerEvent без координат бесполезен: туман считается от
+     * позиции указателя, а ноль по умолчанию открыл бы угол карты.
+     */
+    class MapViewEvent {
+      constructor(rect) {
+        this.rect = rect;
+      }
+
+      payload() {
+        return {
+          clientX: this.rect.left + this.rect.width / 2,
+          clientY: this.rect.top + this.rect.height / 2,
+          buttons: 1,
+          bubbles: true,
+          cancelable: true
+        };
+      }
+    }
+
     const mapView = new window.TableUI.MapView(mapHost, {});
 
     mapView.render(
@@ -1040,6 +1062,75 @@
     mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     // Возвращаем ДМ на общую карту: предыдущие проверки увели его на карту локации.
     mapView.onTabClick('world');
+
+    /* ------------------------------------------------------ туман войны */
+
+    const fogEvents = [];
+    const fogView = new window.TableUI.MapView(document.createElement('div'), {
+      onOpenMapFog: (type, mapId, x, y, radius) => fogEvents.push({ kind: 'open', type, mapId, x, y, radius }),
+      onSetMapFog: (type, mapId, open) => fogEvents.push({ kind: 'whole', type, mapId, open })
+    });
+    sandbox.appendChild(fogView.root);
+    const fogMap = { ...MAP_STATE.maps.world.items[0], fogMask: window.DnD5e.newFogMask() };
+    const fogState = { ...MAP_STATE, maps: { ...MAP_STATE.maps, world: { items: [fogMap], activeId: fogMap.id } } };
+
+    check('у мастера есть панель тумана, а у игрока нет', () => {
+      fogView.render(fogState, { role: 'dm', playerId: 'dm' });
+      assert(fogView.toolbar.querySelector('.fog-bar'), 'у мастера нет панели тумана');
+      assert(fogView.toolbar.textContent.includes('Туман'), 'нет переключателя режима');
+      fogView.render(fogState, { role: 'player', playerId: 'p-1' });
+      assert(!fogView.toolbar.querySelector('.fog-bar'), 'игрок видит панель тумана');
+      fogView.render(fogState, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('карта без открытых участков тумана не рисует', () => {
+      assert(fogView.fogCanvas.hidden, 'на карте без тумана всё равно рисуется слой');
+      assert(!window.DnD5e.fogHasOpenArea(fogMap.fogMask), 'у новой карты что-то открыто');
+    });
+
+    check('кисть открывает участок и уходит на сервер', () => {
+      fogView.setFogMode(true);
+      assert(fogView.surface.classList.contains('is-fogging'), 'режим кисти не включился');
+      const rect = fogView.surface.getBoundingClientRect();
+      assert(rect.width > 0, 'поверхность карты нулевой ширины, точку не посчитать');
+      const opened = new MapViewEvent(rect);
+      fogView.openFogAt(opened);
+      assert(!fogView.fogCanvas.hidden, 'слой тумана не показался после кисти');
+      assert(window.DnD5e.fogHasOpenArea(fogMap.fogMask), 'кисть ничего не открыла');
+      const sent = fogEvents[fogEvents.length - 1];
+      assert.strictEqual(sent.kind, 'open');
+      assert.strictEqual(sent.mapId, fogMap.id);
+      assert(sent.radius > 0 && sent.radius <= 0.5, `радиус: ${sent.radius}`);
+      fogView.setFogMode(false);
+    });
+
+    check('у игрока карта с открытыми участками затенена, и он ими не управляет', () => {
+      const withFog = { ...fogMap, fogMask: window.DnD5e.openFogAt(fogMap.fogMask, 0.5, 0.5, 0.15) };
+      const state = { ...MAP_STATE, maps: { ...MAP_STATE.maps, world: { items: [withFog], activeId: withFog.id } } };
+      fogView.render(state, { role: 'player', playerId: 'p-1' });
+      assert(!fogView.fogCanvas.hidden, 'игрок не видит туман на карте');
+      // Игрок в режиме кисти не входит даже принудительно: проверка стоит в
+      // обработчике, а не только в панели.
+      const before = fogEvents.length;
+      fogView.setFogMode(true);
+      const rect = fogView.surface.getBoundingClientRect();
+      fogView.surface.dispatchEvent(new PointerEvent('pointerdown', new MapViewEvent(rect).payload()));
+      assert.strictEqual(fogEvents.length, before, 'игрок открыл туман');
+      fogView.setFogMode(false);
+      fogView.render(fogState, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('кнопки открывают и закрывают карту целиком', () => {
+      const box = fogView.toolbar.querySelector('.fog-bar');
+      const buttons = [...box.querySelectorAll('button')];
+      const openAll = buttons.find((button) => button.textContent === 'Открыть всё');
+      const coverAll = buttons.find((button) => button.textContent === 'Закрыть всё');
+      openAll.click();
+      assert.strictEqual(fogEvents[fogEvents.length - 1].kind, 'whole');
+      assert.strictEqual(fogEvents[fogEvents.length - 1].open, true, 'не отправлено «открыть всё»');
+      coverAll.click();
+      assert.strictEqual(fogEvents[fogEvents.length - 1].open, false, 'не отправлено «закрыть всё»');
+    });
 
     check('имя фишки видно под фишкой, а не обрезано', () => {
       const label = mapHost.querySelector('[data-token-id="t1"] .token__label');

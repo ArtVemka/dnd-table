@@ -676,6 +676,15 @@
       this.pan = { x: 0, y: 0 };
       this.dragState = null;
       this.lastEmit = 0;
+      /**
+       * Режим тумана: мастер рисует открытые участки мышью по карте.
+       * По умолчанию выключен, иначе первое же движение мыши съедало бы
+       * карту вместо перетаскивания фишки.
+       * @type {boolean}
+       */
+      this.fogMode = false;
+      /** Радиус кисти по ширине карты. */
+      this.fogBrush = 0.12;
       this.build();
     }
 
@@ -739,6 +748,14 @@
       const layer = el('div', 'token-layer');
       this.tokenLayer = layer;
       surface.appendChild(layer);
+
+      // Туман войны лежит поверх всего: фишка в закрытом участке не должна
+      // просвечивать, поэтому слой идёт после токенов, а под ним.
+      this.fogCanvas = document.createElement('canvas');
+      this.fogCanvas.className = 'map-fog';
+      this.fogCanvas.hidden = true;
+      surface.appendChild(this.fogCanvas);
+      this.fogContext = this.fogCanvas.getContext('2d');
 
       const empty = el('div', 'map-empty');
       // Водяной знак: гранёный куб. Он же и герб игры, и подсказка, что
@@ -814,7 +831,26 @@
       this.badge.hidden = true;
       this.root.appendChild(this.badge);
 
-      this.image.addEventListener('load', () => this.layoutSurface());
+      this.image.addEventListener('load', () => {
+        this.layoutSurface();
+        // После загрузки картинки меняется размер подложки, а с ним и холст
+        // тумана: без перерисовки туман лёг бы на прошлую карту.
+        this.paintFog(this.mapOf(this.viewedMap));
+      });
+
+      // Кисть тумана живёт на самой подложке: в режиме тумана указатель
+      // открывает карту, а не двигает фишку.
+      this.surface.addEventListener('pointerdown', (event) => {
+        if (!this.fogMode || this.role !== 'dm' || this.editing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.openFogAt(event);
+      });
+      this.surface.addEventListener('pointermove', (event) => {
+        if (!this.fogMode || this.role !== 'dm' || this.editing) return;
+        if (event.buttons !== 1) return;
+        this.openFogAt(event);
+      });
       if (typeof ResizeObserver === 'function') {
         this.resizeObserver = new ResizeObserver(() => {
           this.layoutSurface();
@@ -948,6 +984,178 @@
       this.stage.addEventListener('pointerup', up);
       this.stage.addEventListener('pointercancel', up);
       event.preventDefault();
+    }
+
+    /**
+     * Панель тумана: режим кисти, её размер и две кнопки на всю карту.
+     * @param {string} type Вкладка карты.
+     * @param {object} map Текущая карта.
+     * @returns {HTMLElement}
+     */
+    buildFogControls(type, map) {
+      const box = el('div', 'fog-bar');
+      const mode = el('button', 'btn btn--tiny', this.fogMode ? 'Туман: рисуем' : 'Туман: выключен');
+      mode.type = 'button';
+      mode.classList.toggle('btn--accent', this.fogMode);
+      mode.title = this.fogMode
+        ? 'Рисуем открытые участки. Выключите, чтобы двигать фишки'
+        : 'Включить режим тумана и открывать участки карты';
+      mode.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.setFogMode(!this.fogMode);
+        this.renderToolbar();
+      });
+      box.appendChild(mode);
+
+      const size = el('input', 'fog-bar__brush');
+      size.type = 'range';
+      size.min = '4';
+      size.max = '40';
+      size.step = '1';
+      size.value = String(Math.round(this.fogBrush * 100));
+      size.title = 'Размер кисти';
+      size.addEventListener('input', () => {
+        this.fogBrush = Number(size.value) / 100;
+      });
+      size.addEventListener('click', (event) => event.stopPropagation());
+      box.appendChild(size);
+
+      const openAll = el('button', 'btn btn--tiny btn--ghost', 'Открыть всё');
+      openAll.type = 'button';
+      openAll.title = 'Убрать туман с карты целиком';
+      openAll.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (this.handlers.onSetMapFog) this.handlers.onSetMapFog(type, map.id, true);
+      });
+      box.appendChild(openAll);
+
+      const coverAll = el('button', 'btn btn--tiny btn--ghost', 'Закрыть всё');
+      coverAll.type = 'button';
+      coverAll.title = 'Снова закрыть карту целиком';
+      coverAll.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (this.handlers.onSetMapFog) this.handlers.onSetMapFog(type, map.id, false);
+      });
+      box.appendChild(coverAll);
+      return box;
+    }
+
+    /**
+     * Включает или выключает режим кисти.
+     * @param {boolean} value
+     */
+    setFogMode(value) {
+      this.fogMode = Boolean(value);
+      this.surface.classList.toggle('is-fogging', this.fogMode);
+    }
+
+    /**
+     * Где на карте оказался указатель, в долях от размера карты.
+     * @param {PointerEvent|MouseEvent} event
+     * @returns {{x: number, y: number}}
+     */
+    mapPoint(event) {
+      const rect = this.surface.getBoundingClientRect();
+      return {
+        x: rect.width ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0,
+        y: rect.height ? Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) : 0
+      };
+    }
+
+    /**
+     * Рисует туман по маске карты.
+     *
+     * Маска рисуется в её собственном масштабе и растягивается на всю карту.
+     * Так граница получается мягкой: билинейное сглаживание холста превращает
+     * лесенку клеток в плавный переход, а 2560 прямоугольников на каждый кадр
+     * не рисуются вовсе.
+     *
+     * У мастера туман бледнее: мастер должен видеть, где ещё темно, а игроку
+     * нужен почти сплошной мрак.
+     * @param {object|null} map Текущая карта.
+     */
+    paintFog(map) {
+      const canvas = this.fogCanvas;
+      if (!canvas) return;
+      const mask = map && typeof map.fogMask === 'string' ? map.fogMask : '';
+      // Открытых участков нет: слой не рисуется вовсе. Карта без тумана не
+      // должна выглядеть как сломанная только потому, что мастер его ещё не
+      // открывал.
+      if (!DnD.fogHasOpenArea(mask)) {
+        canvas.hidden = true;
+        return;
+      }
+      canvas.hidden = false;
+      const width = Math.max(1, Math.round(this.surface.clientWidth));
+      const height = Math.max(1, Math.round(this.surface.clientHeight));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      const context = this.fogContext;
+      context.clearRect(0, 0, width, height);
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.globalAlpha = 1;
+      context.drawImage(this.fogLayer(mask), 0, 0, width, height);
+    }
+
+    /**
+     * Мелкий холст с маской: закрытая клетка тёмная, открытая прозрачная.
+     *
+     * Холст переиспользуется между вызовами, а пиксели заливаются только когда
+     * маска действительно изменилась: кисть шлёт событие на каждое движение
+     * мыши, и пересобирать картинку заново было бы заметно.
+     * @param {string} mask
+     * @returns {HTMLCanvasElement}
+     */
+    fogLayer(mask) {
+      if (!this.fogSource) {
+        const source = document.createElement('canvas');
+        source.width = DnD.FOG.columns;
+        source.height = DnD.FOG.rows;
+        this.fogSource = source;
+        this.fogSourceContext = source.getContext('2d');
+        this.fogSourceImage = this.fogSourceContext.createImageData(DnD.FOG.columns, DnD.FOG.rows);
+        this.fogSourceMask = '';
+      }
+      if (this.fogSourceMask === mask) return this.fogSource;
+      this.fogSourceMask = mask;
+      const data = this.fogSourceImage.data;
+      const alpha = this.role === 'dm' ? 140 : 247;
+      for (let row = 0; row < DnD.FOG.rows; row += 1) {
+        for (let column = 0; column < DnD.FOG.columns; column += 1) {
+          const index = row * DnD.FOG.columns + column;
+          const offset = index * 4;
+          data[offset] = 8;
+          data[offset + 1] = 6;
+          data[offset + 2] = 12;
+          data[offset + 3] = mask[index] === DnD.FOG.open ? 0 : alpha;
+        }
+      }
+      this.fogSourceContext.putImageData(this.fogSourceImage, 0, 0);
+      return this.fogSource;
+    }
+
+    /**
+     * Открывает участок карты под указателем и показывает результат сразу.
+     *
+     * Маску считает сервер, но ждать ответа нельзя: карта отставала бы от
+     * руки на полсекунды, и мастер видел бы, куда он уже открыл, а куда ещё
+     * нет. Поэтому маска применяется сразу и уходит наверх, а ответ сервера
+     * её только подтверждает.
+     * @param {PointerEvent} event
+     */
+    openFogAt(event) {
+      const type = this.viewedMap;
+      const map = this.mapOf(type);
+      if (!map) return;
+      const point = this.mapPoint(event);
+      map.fogMask = DnD.openFogAt(map.fogMask, point.x, point.y, this.fogBrush);
+      this.paintFog(map);
+      if (this.handlers.onOpenMapFog) {
+        this.handlers.onOpenMapFog(type, map.id, point.x, point.y, this.fogBrush);
+      }
     }
 
     /**
@@ -1151,6 +1359,12 @@
       const slot = type ? this.maps[type] : null;
       const index = map && slot ? slot.items.findIndex((item) => item.id === map.id) : -1;
 
+      // Туман войны — только мастеру. Игрок получает уже открытые участки и
+      // ничего не может изменить.
+      if (map && this.role === 'dm') {
+        this.toolbar.appendChild(this.buildFogControls(type, map));
+      }
+
       // Переключение между картами одной вкладки: их может быть много.
       if (count > 1) {
         const prev = el('button', 'btn btn--ghost', '◀');
@@ -1267,6 +1481,7 @@
       this.layoutSurface();
       this.applyGrid();
       this.renderTokens();
+      this.paintFog(map);
     }
 
     renderTokens() {

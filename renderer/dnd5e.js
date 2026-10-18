@@ -106,6 +106,113 @@
    * одного до шести, а здесь переключатели включены и выключены.
    */
   /**
+   * Туман войны.
+   *
+   * Открытые участки хранятся не списком прямоугольников, а крупной сеткой
+   * букв: одна карта при 64 на 40 клетки это 2560 символов, и размер не растёт
+   * от того, сколько раз мастер провёл кистью. Прямоугольники копились бы
+   * беспрерывно и за пару часов игры превратили кампанию в мусор.
+   *
+   * Символ '1' означает открытую клетку, '0' закрытую. Разрешение выбрано
+   * под кисть, которой удобно водить: клетка это примерно полтора процента
+   * ширины карты, и края тумана выглядят ровно, а не лесенкой.
+   * @type {{columns: number, rows: number, mask: string}}
+   */
+  const FOG = { columns: 64, rows: 40, open: '1', closed: '0' };
+
+  /**
+   * Пустая маска тумана: вся карта закрыта.
+   * @returns {string}
+   */
+  function newFogMask() {
+    return FOG.closed.repeat(FOG.columns * FOG.rows);
+  }
+
+  /**
+   * Приводит маску из кампании к нужному размеру.
+   *
+   * Маска может достаться от другой версии игры или быть правлена руками, а
+   * размер нужен ровно такой, чтобы клетка адресовалась по индексу.
+   * @param {unknown} raw
+   * @returns {string}
+   */
+  function normalizeFogMask(raw) {
+    const size = FOG.columns * FOG.rows;
+    const mask = typeof raw === 'string' ? raw.replace(/[^01]/g, '') : '';
+    if (mask.length === size) return mask;
+    if (!mask.length) return newFogMask();
+    // Длина не совпала: обрезаем или дополняем закрытыми клетками, иначе
+    // индексы поедут и карта покроется дырами в неожиданных местах.
+    return (mask + FOG.closed.repeat(size)).slice(0, size);
+  }
+
+  /**
+   * Открывает участок карты кистью.
+   *
+   * Работает прямо по строке маски и возвращает её целиком: раз в конце
+   * вызывать пришлось бы гонять по всей строке на каждое движение мыши.
+   * @param {string} mask Текущая маска.
+   * @param {number} x Центр кисти по ширине, от 0 до 1.
+   * @param {number} y Центр кисти по высоте, от 0 до 1.
+   * @param {number} radius Радиус кисти по ширине карты, от 0.02 до 0.5.
+   * @returns {string}
+   */
+  function openFogAt(mask, x, y, radius) {
+    const size = FOG.columns * FOG.rows;
+    const current = mask && mask.length === size ? mask : normalizeFogMask(mask);
+    const r = Math.max(0.02, Math.min(0.5, Number(radius) || 0.12));
+    const cx = Math.max(0, Math.min(1, Number(x) || 0));
+    const cy = Math.max(0, Math.min(1, Number(y) || 0));
+    const halfX = Math.max(1, Math.round(r * FOG.columns));
+    const halfY = Math.max(1, Math.round(r * FOG.rows));
+    const fromX = Math.max(0, Math.floor(cx * FOG.columns) - halfX);
+    const toX = Math.min(FOG.columns - 1, Math.ceil(cx * FOG.columns) + halfX);
+    const fromY = Math.max(0, Math.floor(cy * FOG.rows) - halfY);
+    const toY = Math.min(FOG.rows - 1, Math.ceil(cy * FOG.rows) + halfY);
+    // Круг, а не квадрат: кисть по краям карты должна давать круглый край,
+    // иначе открывается угол, которого никто не открывал.
+    const cells = [];
+    for (let row = fromY; row <= toY; row += 1) {
+      for (let column = fromX; column <= toX; column += 1) {
+        const cellX = (column + 0.5) / FOG.columns;
+        const cellY = (row + 0.5) / FOG.rows;
+        const dx = (cellX - cx) / Math.max(1e-6, halfX / FOG.columns);
+        const dy = (cellY - cy) / Math.max(1e-6, halfY / FOG.rows);
+        if (dx * dx + dy * dy <= 1) cells.push(row * FOG.columns + column);
+      }
+    }
+    let next = '';
+    let index = 0;
+    for (const cell of cells) {
+      next += current.slice(index, cell) + FOG.open;
+      index = cell + 1;
+    }
+    return next + current.slice(index);
+  }
+
+  /**
+   * Открывает всю карту или снова закрывает её целиком.
+   * @param {string} mask
+   * @param {boolean} open
+   * @returns {string}
+   */
+  function setFogWhole(mask, open) {
+    return open ? FOG.open.repeat(FOG.columns * FOG.rows) : newFogMask();
+  }
+
+  /**
+   * Есть ли на карте хоть что-то открытое.
+   *
+   * По этому признаку карта решает, рисовать ли туман: над картой без
+   * открытых участков тёмный слой выглядит как поломка, а не как замысел мастера.
+   * @param {string} mask
+   * @returns {boolean}
+   */
+  function fogHasOpenArea(mask) {
+    return typeof mask === 'string' && mask.indexOf(FOG.open) >= 0;
+  }
+
+  /**
    * Ячейки заклинаний по уровням: девять ступеней, девятой нет у части классов.
    *
    * Список один на клиента и сервер, а таблица по уровням живёт тут: считать
@@ -461,6 +568,7 @@
     ABILITY_LABELS,
     CONDITIONS,
     DICE_SIDES,
+    FOG,
     FULL_CASTER_CLASSES,
     FULL_CASTER_SLOTS,
     SPELL_SLOT_LEVELS,
@@ -479,6 +587,11 @@
     createEmptySheet,
     formatModifier,
     proficiencyBonus,
+    fogHasOpenArea,
+    newFogMask,
+    normalizeFogMask,
+    openFogAt,
+    setFogWhole,
     spellSlotMax,
     spellSlotRow
   };

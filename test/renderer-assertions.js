@@ -1458,6 +1458,18 @@
       assert(/фишк/i.test(notices[0]), `не сказано, что делать: ${notices[0]}`);
     });
 
+        check('игроку вместо строки карты показывают подсказку', () => {
+      // У игрока строка карты скрыта целиком: там только мастерские инструменты,
+      // и выключенный переключатель выглядел бы сломанной кнопкой.
+      mapView.render({ ...COMBAT_STATE, combat: { enabled: false } }, { role: 'player', playerId: 'p-1' });
+      mapView.renderToolbar();
+      assert(mapView.toolbar.hidden, 'строка карты показана игроку');
+      assert.strictEqual(mapView.toolbar.childNodes.length, 0, 'игроку показаны мастерские кнопки');
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+      mapView.renderToolbar();
+      assert(!mapView.toolbar.hidden, 'строка карты не вернулась мастеру');
+    });
+
     /* --------------------------------------------------- поверхность карта */
 
     const surfaceHost = document.createElement('div');

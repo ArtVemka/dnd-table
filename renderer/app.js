@@ -775,8 +775,14 @@ let chosenSheetId = null;
     // Режим боя приходит отдельным событием: мастер щёлкнул переключателем или
     // бой начался сам после броска инициативы.
     socket.on('combatMode', (combat) => {
+      const wasEnabled = Boolean(app.room.combat && app.room.combat.enabled);
       app.room.combat = combat || { enabled: false };
       renderAll();
+      // Сразу говорим, что делать дальше: без подсказки включённый режим боя
+      // выглядит как пустая кнопка, потому что сам по себе он ничего не меняет.
+      if (app.room.combat.enabled && !wasEnabled) {
+        toast('Ход по клеткам: нажмите на фишку, потом на клетку');
+      }
     });
 
     socket.on('diceRollResult', (roll) => {

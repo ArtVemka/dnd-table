@@ -1434,6 +1434,47 @@
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
 
+    check('маршрут начинается с фишки, а не с центра её клетки', () => {
+      // Фишку ставили мышью, и она стоит внутри клетки не по центру. Линия,
+      // начавшаяся от центра клетки, выглядела так, будто маршрут выходит откуда
+      //-то рядом с фишкой.
+      withRealMapSize(() => {
+        // Клетка 46 при карте 400x300: центр второй клетки по ширине и по
+        // высоте — это 0.2875 и 0.3458, а фишка стоит в 0.25 и 0.45.
+        const off = {
+          ...COMBAT_STATE,
+          activeMap: 'world',
+          maps: {
+            world: { items: [{ id: 'm-world', url: MAP_PNG, name: 'world.png' }], activeId: 'm-world' }
+          },
+          tokens: [{ ...MAP_STATE.tokens[0], x: 0.25, y: 0.45, conditions: [] }]
+        };
+        mapView.render(off, { role: 'dm', playerId: 'dm' });
+        mapView.selectCombatToken(off.tokens[0].id);
+        const rect = mapView.surface.getBoundingClientRect();
+        mapView.surface.dispatchEvent(new PointerEvent('pointermove', new MapViewEvent(
+          rect, rect.left + ((4.5 * 46) / 400) * rect.width, rect.top + ((1.5 * 46) / 300) * rect.height
+        ).payload()));
+        const points = mapView.routeLine.getAttribute('points')
+          .split(' ')
+          .map((pair) => pair.split(',').map((value) => Number(value)));
+        assert.strictEqual(points[0][0], 250, `линия начинается не от фишки: ${JSON.stringify({
+          точки: mapView.routeLine.getAttribute('points'),
+          режим: mapView.combat.enabled,
+          выбрана: mapView.combat.tokenId,
+          фишка: mapView.combatToken() ? mapView.combatToken().id : null,
+          сетка: mapView.cellGeometry(),
+          цель: mapView.route,
+          редактор: mapView.editing
+        })}`);
+        assert.strictEqual(points[0][1], 450, `линия начинается не от фишки: y=${points[0][1]}`);
+        // Дальше путь идёт по центрам клеток, и вторая точка — центр её клетки.
+        assert.strictEqual(points[1][0], 287.5, `вторая точка не центр клетки: ${points[1][0]}`);
+        mapView.selectCombatToken(null);
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
     check('нажатие по клетке в бою отправляет фишку в эту клетку одним ходом', () => {
       withRealMapSize(() => {
         mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });

@@ -2522,6 +2522,10 @@
       if (combatEnabled !== this.combat.enabled) {
         this.combat.enabled = combatEnabled;
         if (!combatEnabled) this.combat.tokenId = null;
+        // Перетаскивание, оставшееся незаконченным, держит слой фишек: он
+        // перестаёт перерисовываться, и смена режима боя выглядит как «ничего
+        // не произошло». Раз незахват состояние сменилось, снимаем его.
+        if (this.dragState && !this.dragState.walk) this.dragState = null;
       }
       this.applyGrid();
 
@@ -2803,11 +2807,16 @@
       const measure = this.combatMeasure(from, route);
       const fromCenter = this.cellCenterInMap(from.col, from.row);
       const toCenter = this.cellCenterInMap(route.col, route.row);
-      // Путь рисуется ломаной по центрам клеток: одна точка на клетку, и линия
-      // идёт ровно там, куда потом пойдёт фишка. Прямая через угол клетки
-      // выглядела бы короче, но вела бы мимо них.
-      const points = [from, ...this.combatPath(from, route)]
+      // Линия идёт от самой фишки, а не от центра её клетки.
+      //
+      // Фишка стоит там, куда её поставили мышью, то есть не обязательно по
+      // центру клетки, и линия, начавшаяся от центра, выглядела так, будто
+      // маршрут начинается где-то рядом с фишкой. Дальше путь идёт по центрам
+      // клеток: туда же, куда потом ступит фишка.
+      const here = { x: Number(token.x), y: Number(token.y) };
+      const cells = this.combatPath(from, route)
         .map((cell) => this.cellCenterInMap(cell.col, cell.row));
+      const points = [here, fromCenter, ...cells];
       line.setAttribute('points', points.map((point) => `${point.x * 1000},${point.y * 1000}`).join(' '));
       line.setAttribute('fill', 'none');
       line.setAttribute('stroke', 'var(--accent-hover)');
@@ -2865,12 +2874,14 @@
         return;
       }
       const node = this.tokenLayer.querySelector(`[data-token-id="${token.id}"]`);
-      const start = { x: Number(token.x), y: Number(token.y) };
-      // Фишка идёт по тому же пути, что нарисован: клетка за клеткой и с тем же
-      // поворотом. Прямая через угол клетки выглядела бы быстрее, но вела бы
-      // мимо клеток.
-      const route = [start, ...this.combatPath(from, target)
-        .map((cell) => this.cellCenterInMap(cell.col, cell.row))];
+      // Фишка идёт по тому же пути, что нарисован: сперва в центр своей клетки,
+      // потом клетка за клеткой и с тем же поворотом. Прямая через угол клетки
+      // выглядела бы быстрее, но вела бы мимо клеток.
+      const route = [
+        { x: Number(token.x), y: Number(token.y) },
+        this.cellCenterInMap(from.col, from.row),
+        ...this.combatPath(from, target).map((cell) => this.cellCenterInMap(cell.col, cell.row))
+      ];
       const steps = route.length - 1;
       const finish = route[route.length - 1];
       this.route = null;
@@ -3172,7 +3183,10 @@
     renderTokens() {
       // Во время перетаскивания фишки слой не трогаем: иначе очистка снесла бы
       // ту самую фишку, которую сейчас тащат.
-      if (this.dragState) return;
+      // Пока фишку тянут, слой не перерисовываем: очистка уничтожила бы её.
+      // Зависшее перетаскивание держало бы слой навсегда, поэтому состояние
+      // снимается и здесь: карта обязана оставаться живой при любом сбое.
+      if (this.dragState && !this.dragState.walk) return;
       const type = this.viewedMap;
       const activeMapId = (this.mapOf(type) || {}).id || '';
       // Показываем фишки той карты, что открыта. Фишка без mapId — из кампании,
@@ -3400,18 +3414,30 @@
       const node = event.currentTarget;
       node.classList.add('token--dragging');
       this.dragState = { tokenId: token.id, node, rect };
-      node.setPointerCapture(event.pointerId);
-
+      // Слушатели вешаем и на фишку, и на окно. Захват указателя может не
+      // сработать, и тогда отпускание кнопки фишке не дойдёт: перетаскивание
+      // останется незаконченным, слой перестанет перерисовываться, а режим боя
+      // вместе с ним перестанет брать фишки.
+      const target = node;
       const onMove = (moveEvent) => this.onDragMove(moveEvent);
       const onUp = (upEvent) => {
-        node.removeEventListener('pointermove', onMove);
-        node.removeEventListener('pointerup', onUp);
-        node.removeEventListener('pointercancel', onUp);
+        target.removeEventListener('pointermove', onMove);
+        target.removeEventListener('pointerup', onUp);
+        target.removeEventListener('pointercancel', onUp);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
         this.finishDrag(upEvent);
       };
-      node.addEventListener('pointermove', onMove);
-      node.addEventListener('pointerup', onUp);
-      node.addEventListener('pointercancel', onUp);
+      target.addEventListener('pointermove', onMove);
+      target.addEventListener('pointerup', onUp);
+      target.addEventListener('pointercancel', onUp);
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      try {
+        node.setPointerCapture(event.pointerId);
+      } catch {
+        // Захват недоступен — обойдёмся слушателями на окне, они уже навешаны.
+      }
     }
 
     onDragMove(event) {

@@ -89,7 +89,10 @@ const REQUIRED_FILES = [
   'server/image.js',
   'server/iroh-manager.js',
   'server/importer/index.js',
-  'scripts/copy-vendor.js'
+  'scripts/copy-vendor.js',
+  // main.js требует ./scripts/version-label сразу при старте. Без этого файла
+  // в app.asar приложение падает с «Cannot find module» ещё до окна.
+  'scripts/version-label.js'
 ];
 /** Папки production-зависимостей — проверяем по префиксу. */
 const REQUIRED_PREFIXES = ['node_modules/express/', 'node_modules/socket.io/'];

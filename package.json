@@ -44,7 +44,8 @@
       "package.json",
       "server/**/*",
       "renderer/**/*",
-      "scripts/copy-vendor.js"
+      "scripts/copy-vendor.js",
+      "scripts/version-label.js"
     ],
     "win": {
       "icon": "build/icon.ico",

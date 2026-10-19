@@ -360,7 +360,14 @@
       sheets: {},
       maps: emptyMaps(),
       activeMap: null,
-      grid: { enabled: false, cell: DnD.GRID.defaultCell, columns: 0, feetPerCell: DnD.GRID.defaultFeetPerCell },
+      grid: {
+        enabled: false,
+        cell: DnD.GRID.defaultCell,
+        columns: 0,
+        feetPerCell: DnD.GRID.defaultFeetPerCell,
+        offsetX: 0,
+        offsetY: 0
+      },
       tokens: [],
       /** Порядок боя. Тренировочный стол — тоже стол: порядок нужен и здесь. */
       initiative: { entries: [], turnId: null, round: 1 },
@@ -771,14 +778,13 @@
       },
 
       setGrid(payload) {
-        const enabled = Boolean(payload.enabled);
-        const cell = clampInt(payload.cell, DnD.GRID.minCell, DnD.GRID.maxCell, state.grid.cell);
-        // columns — сколько клеток по ширине карты; по нему клетка считается
-        // от настоящей ширины подложки. Здесь без сервера, поэтому и держим
-        // ровно то же, что и за настоящим столом.
-        const columns = clampInt(payload.columns, 0, DnD.GRID.maxColumns, state.grid.columns || 0);
-        if (state.grid.enabled === enabled && state.grid.cell === cell && state.grid.columns === columns) return;
-        state.grid = { enabled, cell, columns };
+        // Те же пределы и те же поля, что у настоящего стола: тренировочный
+        // стол не должен терять сдвиг и футы в клетке.
+        const next = DnD.normalizeGrid(payload);
+        const same = ['enabled', 'cell', 'columns', 'feetPerCell', 'offsetX', 'offsetY']
+          .every((key) => state.grid[key] === next[key]);
+        if (same) return;
+        state.grid = next;
         emitTo('gridUpdated', state.grid);
       },
 

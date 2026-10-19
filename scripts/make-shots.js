@@ -105,6 +105,11 @@ app.whenReady().then(async () => {
   });
   await win.loadFile(path.join(root, 'renderer', 'index.html'));
   await new Promise((resolve) => setTimeout(resolve, 1000));
+  // Снимки должны быть одинаковыми от запуска к запуску: сохранённое
+  // сворачивание меню карты могло остаться с прошлого прогона.
+  await win.webContents.executeJavaScript(
+    "try { localStorage.removeItem('dnd-table.map-menus'); } catch (err) {} true"
+  );
 
   for (const theme of THEMES) {
     await win.webContents.executeJavaScript(
@@ -200,12 +205,63 @@ app.whenReady().then(async () => {
       }, { role: 'dm', playerId: 'dm' });
       view.setFogMode(true);
       view.renderToolbar();
+      // Следующему снимку нужен тот же экземпляр: линейка и шаблоны живут в нём.
+      window.__mapView = view;
       return true;
     })()
   `);
   await new Promise((resolve) => setTimeout(resolve, 700));
   image = await win.webContents.capturePage();
   fs.writeFileSync(path.join(outDir, 'table-fog.png'), image.toPNG());
+
+  // Свёрнутые верхние меню: над картой остаются только название и кнопка.
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const toggle = document.querySelector('#map-root .map-menus__toggle');
+      if (toggle && !document.querySelector('#map-root').classList.contains('is-menus-collapsed')) {
+        toggle.click();
+      }
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'table-map-collapsed.png'), image.toPNG());
+
+  // Линейка и шаблоны: конус, сфера и замер расстояния на одной карте.
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const view = window.__mapView;
+      if (!view) return false;
+      if (view.menusCollapsed) view.toggleMenus();
+      view.setFogMode(false);
+      view.renderToolbar();
+      const rect = () => view.surface.getBoundingClientRect();
+      const drag = (from, to) => {
+        const box = rect();
+        view.surface.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, clientX: box.left + box.width * from[0], clientY: box.top + box.height * from[1]
+        }));
+        window.dispatchEvent(new PointerEvent('pointermove', {
+          clientX: box.left + box.width * to[0], clientY: box.top + box.height * to[1]
+        }));
+        window.dispatchEvent(new PointerEvent('pointerup', {}));
+      };
+      // Конус от мага к гоблинам.
+      view.templateDraft = { kind: 'cone', size: 20 };
+      drag([0.5, 0.62], [0.36, 0.34]);
+      // Сфера на отряд.
+      view.templateDraft = { kind: 'sphere', size: 15 };
+      drag([0.7, 0.4], [0.74, 0.42]);
+      // Линейка до дальней цели.
+      view.toggleMeasure();
+      drag([0.5, 0.62], [0.24, 0.72]);
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'table-templates.png'), image.toPNG());
 
   // Смена имени мастера: окно с вопросом «как вас зовут у стола».
   await win.webContents.executeJavaScript(`
@@ -262,12 +318,56 @@ app.whenReady().then(async () => {
       view.setMode('sheet');
       view.setSheet(sheet);
       view.setStatus('Имя игрока: Артём');
+      window.__sheetView = view;
       return true;
     })()
   `);
   await new Promise((resolve) => setTimeout(resolve, 600));
   image = await win.webContents.capturePage();
   fs.writeFileSync(path.join(outDir, 'sheet.png'), image.toPNG());
+
+  // Кость хитов: прокручиваем лист к бою и бросаем, чтобы на снимке был
+  // не только ввод, но и результат, ради которого бросок и делается.
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const hit = document.querySelector('#tab-sheet .hit-die');
+      if (hit) hit.scrollIntoView({ block: 'center' });
+      const roll = document.querySelector('#tab-sheet .hit-die__roll');
+      if (roll) roll.click();
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'sheet-hit-die.png'), image.toPNG());
+
+  // Мультикласс: две строки классов и выбор кости хитов.
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const view = window.__sheetView;
+      if (!view) return false;
+      const sheet = window.DnD5e.createEmptySheet();
+      sheet.characterName = 'Тордин';
+      sheet.playerName = 'Артём';
+      sheet.charClass = 'Воин';
+      sheet.subclass = 'Мастер войны';
+      sheet.race = 'Полуэльф';
+      sheet.level = 5;
+      sheet.classes = [{ name: 'Воин', level: 5 }, { name: 'Волшебник', level: 3 }];
+      sheet.abilities = { str: 17, dex: 14, con: 16, int: 13, wis: 10, cha: 8 };
+      sheet.skillProficiencies = { athletics: true, perception: true, arcana: true };
+      sheet.hp = 52;
+      sheet.maxHp = 52;
+      sheet.hitDice = '1d10';
+      view.setSheet(sheet);
+      const block = document.querySelector('#tab-sheet .field--classes');
+      if (block) block.scrollIntoView({ block: 'center' });
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  image = await win.webContents.capturePage();
+  fs.writeFileSync(path.join(outDir, 'sheet-multiclass.png'), image.toPNG());
 
   // Экран подключения: первое, что видит игрок. В нём же выбор листа, поэтому
   // библиотеку перед снимком наполняем: пустой список ничего не показывает.

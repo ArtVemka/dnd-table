@@ -24,6 +24,13 @@ const METHOD_DEFLATE = 8;
 /** Сколько данных распаковываем суммарно — защита от zip-бомбы. */
 const MAX_TOTAL_BYTES = 400 * 1024 * 1024;
 
+/**
+ * Потолок на одну запись. Суммарного лимита мало: одна запись может
+ * раздуться на гигабайты, и память под неё выделится ещё до проверки суммы.
+ * Поэтому zlib обрывает распаковку, едва результат превысит это число.
+ */
+const MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+
 /** Больше этого в архиве ищем end-of-central-directory. */
 const MAX_COMMENT = 0xffff;
 
@@ -90,7 +97,10 @@ function readEntry(buffer, localOffset, compressedSize, method) {
   const raw = buffer.subarray(start, start + compressedSize);
 
   if (method === METHOD_STORE) return Buffer.from(raw);
-  if (method === METHOD_DEFLATE) return zlib.inflateRawSync(raw);
+  if (method === METHOD_DEFLATE) {
+    // maxOutputLength не даёт одной записи съесть память целиком.
+    return zlib.inflateRawSync(raw, { maxOutputLength: MAX_ENTRY_BYTES });
+  }
   throw new Error(`Неподдерживаемый метод сжатия в архиве: ${method}`);
 }
 

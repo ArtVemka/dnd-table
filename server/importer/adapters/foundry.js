@@ -200,7 +200,7 @@ function describeDocument(doc, fallbackKind, resolveAsset) {
     name: String(raw.name || ''),
     tags: Array.isArray(raw.tags) ? raw.tags : [],
     image: documentImage(raw, resolveAsset),
-    children: kind === 'scene' ? sceneTokens(raw) : [],
+      children: kind === 'scene' ? sceneTokens(raw, resolveAsset) : [],
     raw: {
       text: kind === 'journal' ? journalText(raw) : richText(raw.text ?? raw.description ?? raw.content),
       type: String(raw.type || ''),

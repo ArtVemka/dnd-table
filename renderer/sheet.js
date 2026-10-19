@@ -24,11 +24,22 @@
     return node;
   }
 
+  /** Бросок одной кости: crypto, если он есть, иначе обычный random. */
+  function secureDie(sides) {
+    const count = Math.max(2, Math.round(Number(sides) || 0));
+    if (global.crypto && typeof global.crypto.getRandomValues === 'function') {
+      const buffer = new Uint32Array(1);
+      global.crypto.getRandomValues(buffer);
+      return (buffer[0] % count) + 1;
+    }
+    return Math.floor(Math.random() * count) + 1;
+  }
+
   function numberInput(field, options = {}) {
     const input = el('input');
     input.type = 'number';
     input.className = options.className || 'field__input';
-    input.dataset.field = field;
+    if (field) input.dataset.field = field;
     if (options.min !== undefined) input.min = String(options.min);
     if (options.max !== undefined) input.max = String(options.max);
     return input;
@@ -135,7 +146,8 @@
       identity.appendChild(this.buildAvatarBlock());
       identity.appendChild(this.field('characterName', 'Имя персонажа'));
       identity.appendChild(this.field('playerName', 'Имя игрока'));
-      identity.appendChild(this.field('charClass', 'Класс'));
+      identity.appendChild(this.buildClassesBlock());
+      identity.appendChild(this.field('subclass', 'Подкласс'));
       identity.appendChild(this.field('race', 'Раса'));
       identity.appendChild(this.field('background', 'Предыстория'));
       identity.appendChild(this.field('alignment', 'Мировоззрение'));
@@ -220,7 +232,6 @@
       const combat = el('div', 'box');
       combat.appendChild(el('div', 'box__title', 'Бой'));
       const levelRow = el('div', 'inline-row');
-      levelRow.appendChild(this.field('level', 'Уровень *', { number: true, min: 1, max: 20 }));
       levelRow.appendChild(this.field('experience', 'Опыт', { number: true, min: 0, max: 9999999 }));
       combat.appendChild(levelRow);
 
@@ -259,6 +270,42 @@
       combatGrid.appendChild(this.field('hitDice', 'Кость хитов', { list: DnD.HIT_DICE }));
       combatGrid.appendChild(this.readonlyField('Пассивное восприятие', 'passivePerception'));
       combat.appendChild(combatGrid);
+
+      // Кость хитов: одна кость + модификатор Телосложения, как при повышении
+      // уровня и на коротком отдыхе. Результат считается прямо в листе, чтобы
+      // не искать его в ленте бросков.
+      const hit = el('div', 'hit-die');
+      const hitHead = el('div', 'hit-die__head');
+      this.hitDieDie = el('span', 'hit-die__die', 'd8');
+      hitHead.appendChild(this.hitDieDie);
+      const hitCaption = el('span', 'hit-die__caption');
+      hitCaption.appendChild(el('span', 'hit-die__name', 'Кость хитов'));
+      hitCaption.appendChild(el('span', 'hit-die__hint', 'одна кость + модификатор Тел'));
+      hitHead.appendChild(hitCaption);
+      const hitRoll = el('button', 'btn btn--accent btn--tiny hit-die__roll', 'Бросить');
+      hitRoll.type = 'button';
+      hitRoll.addEventListener('click', () => this.rollHitDie());
+      hitHead.appendChild(hitRoll);
+      this.hitDieRoll = hitRoll;
+      hit.appendChild(hitHead);
+      // У мультикласса кости разного размера: выбираем, какую бросать.
+      this.hitDiePick = el('select', 'select hit-die__pick');
+      this.hitDiePick.hidden = true;
+      this.hitDiePick.title = 'Какую кость хитов бросать';
+      this.hitDiePick.addEventListener('change', () => {
+        this.hitDieSelected = this.hitDiePick.value;
+        this.syncHitDie();
+      });
+      hit.appendChild(this.hitDiePick);
+      const hitOut = el('div', 'hit-die__out');
+      hitOut.hidden = true;
+      this.hitDieValue = el('span', 'hit-die__value', '0');
+      this.hitDieDetail = el('span', 'hit-die__detail', '');
+      hitOut.appendChild(this.hitDieValue);
+      hitOut.appendChild(this.hitDieDetail);
+      this.hitDieOut = hitOut;
+      hit.appendChild(hitOut);
+      combat.appendChild(hit);
 
       // Спасброски смерти. Показываются, когда хиты на нуле: раньше этого они
       // не значат ничего, а три неудачи рядом со здоровым героем выглядят как
@@ -448,6 +495,8 @@
       // Считаем здесь, а не по клику: лист без обработчика броска — это
       // список игроков, экран подготовки и чужой лист у мастера.
       this.updateRollAvailability();
+      this.syncHitDie();
+      this.updateClassSummary();
     }
 
     field(name, label, options = {}) {
@@ -475,6 +524,212 @@
       }
       input.addEventListener('input', () => this.refresh());
       return wrap;
+    }
+
+    /**
+     * Классы листа. Первый класс живёт в полях charClass/level, остальные
+     * (мультикласс) — отдельными строками. Держать оба вида в одном списке
+     * было бы красивее, но тогда пришлось бы переписать все старые листы;
+     * а так одноклассовый герой и мультиклассовый читаются одним кодом.
+     * @returns {HTMLElement}
+     */
+    buildClassesBlock() {
+      const wrap = el('div', 'field field--classes');
+      wrap.appendChild(el('span', 'field__label', 'Классы'));
+      this.classListRows = el('div', 'class-editor');
+      this.extraRows = [];
+      this.classListRows.appendChild(this.buildPrimaryClassRow());
+      wrap.appendChild(this.classListRows);
+      const add = el('button', 'btn btn--tiny class-editor__add', '+ Ещё класс');
+      add.type = 'button';
+      add.addEventListener('click', () => this.addClassRow());
+      this.addClassButton = add;
+      wrap.appendChild(add);
+      this.classListSummary = el('span', 'class-editor__sum');
+      wrap.appendChild(this.classListSummary);
+      return wrap;
+    }
+
+    /** Первый класс: список и его уровень. Остальные добавляются кнопкой. */
+    buildPrimaryClassRow() {
+      const row = el('div', 'class-row class-row--primary');
+      const select = this.classSelect();
+      select.dataset.field = 'charClass';
+      const level = numberInput('level', { className: 'field__input class-row__level', min: 1, max: 20 });
+      level.title = 'Уровень этого класса';
+      select.addEventListener('input', () => this.onClassChange(select));
+      level.addEventListener('input', () => this.onClassesChanged());
+      row.appendChild(select);
+      row.appendChild(level);
+      row.appendChild(el('span', 'class-row__spacer'));
+      row.select = select;
+      row.level = level;
+      return row;
+    }
+
+    /**
+     * Список классов с пустым пунктом: пустая строка значит «класса нет», и
+     * тогда лист считается одноклассовым по старым полям.
+     * @param {string} [value]
+     */
+    classSelect(value = '') {
+      const select = el('select', 'select class-row__name');
+      const empty = el('option', null, '—');
+      empty.value = '';
+      select.appendChild(empty);
+      for (const item of DnD.CLASSES) {
+        const option = el('option', null, item.label);
+        option.value = item.label;
+        select.appendChild(option);
+      }
+      // Старый лист мог хранить класс свободным текстом: не теряем его.
+      if (value && ![...select.options].some((option) => option.value === value)) {
+        const extra = el('option', null, value);
+        extra.value = value;
+        select.appendChild(extra);
+      }
+      select.value = value || '';
+      return select;
+    }
+
+    /**
+     * Добавляет строку класса. Молча — при заполнении листа с сервера, чтобы
+     * не отправить только что полученные данные обратно.
+     * @param {{name?: string, level?: number}} [entry]
+     * @param {{silent?: boolean}} [options]
+     */
+    addClassRow(entry = {}, options = {}) {
+      if (!this.classListRows) return null;
+      if (this.extraRows.length >= DnD.MAX_CLASS_ENTRIES - 1) return null;
+      const row = el('div', 'class-row');
+      const select = this.classSelect(entry.name);
+      const level = numberInput(null, { className: 'field__input class-row__level', min: 1, max: 20 });
+      level.value = String(DnD.clampNumber(entry.level, 1, 20, 1));
+      level.title = 'Уровень этого класса';
+      const remove = el('button', 'class-row__remove', '×');
+      remove.type = 'button';
+      remove.title = 'Убрать класс';
+      select.addEventListener('input', () => this.onClassesChanged());
+      level.addEventListener('input', () => this.onClassesChanged());
+      remove.addEventListener('click', () => {
+        row.remove();
+        this.extraRows = this.extraRows.filter((item) => item !== row);
+        this.onClassesChanged();
+      });
+      row.appendChild(select);
+      row.appendChild(level);
+      row.appendChild(remove);
+      row.select = select;
+      row.level = level;
+      row.removeButton = remove;
+      this.extraRows.push(row);
+      this.classListRows.appendChild(row);
+      if (this.readOnly) {
+        select.disabled = true;
+        level.disabled = true;
+        remove.disabled = true;
+      }
+      if (!options.silent) this.onClassesChanged();
+      return row;
+    }
+
+    /** Классы из формы: первый всегда, остальные — пока заполнены. */
+    currentClasses() {
+      const list = [];
+      const primaryName = this.root.querySelector('[data-field="charClass"]');
+      const primaryLevel = this.root.querySelector('[data-field="level"]');
+      const name = primaryName ? String(primaryName.value).trim() : '';
+      if (name) {
+        list.push({
+          name,
+          level: DnD.clampNumber(primaryLevel ? primaryLevel.value : 1, 1, 20, 1)
+        });
+      }
+      for (const row of this.extraRows || []) {
+        const extraName = String(row.select.value || '').trim();
+        if (!extraName) continue;
+        list.push({ name: extraName, level: DnD.clampNumber(row.level.value, 1, 20, 1) });
+      }
+      return list;
+    }
+
+    /** Подпись «всего уровней» и доступность кнопки добавления. */
+    updateClassSummary() {
+      const classes = this.currentClasses();
+      const total = classes.reduce((sum, item) => sum + item.level, 0);
+      if (this.classListSummary) {
+        this.classListSummary.textContent = this.extraRows.length
+          ? `Всего уровней: ${Math.min(20, total)}`
+          : '';
+      }
+      if (this.addClassButton) {
+        this.addClassButton.disabled = this.readOnly
+          || this.extraRows.length >= DnD.MAX_CLASS_ENTRIES - 1
+          || total >= DnD.LIMITS.maxLevel;
+      }
+    }
+
+    /** Правка классов: пересчитать лист и отправить его на стол. */
+    onClassesChanged() {
+      this.updateClassSummary();
+      this.syncHitDie();
+      this.refresh();
+    }
+
+    /**
+     * Пересобирает строки мультикласса из листа, пришедшего с сервера.
+     * @param {object} data
+     */
+    applyExtraClasses(data) {
+      for (const row of this.extraRows || []) row.remove();
+      this.extraRows = [];
+      const classes = DnD.classLevels(data);
+      for (const entry of classes.slice(1)) this.addClassRow(entry, { silent: true });
+      this.updateClassSummary();
+    }
+
+    /**
+     * Поле-список. Подкласс оставлен свободным полем: названий подклассов
+     * слишком много, и половина существует только в дополнениях.
+     * @param {string} name
+     * @param {string} label
+     * @param {{label: string, hitDie?: string}[]} items
+     */
+    selectField(name, label, items) {
+      const wrap = el('label', 'field');
+      wrap.appendChild(el('span', 'field__label', label));
+      const select = el('select', 'select');
+      select.dataset.field = name;
+      const empty = el('option', null, 'Не выбран');
+      empty.value = '';
+      select.appendChild(empty);
+      for (const item of items) {
+        const option = el('option', null, item.label);
+        option.value = item.label;
+        select.appendChild(option);
+      }
+      select.value = this.sheet[name] || '';
+      // input, а не change: так список ведёт себя одинаково с остальными
+      // полями листа и таблица тестов может заполнять его как поле.
+      select.addEventListener('input', () => this.onClassChange(select));
+      wrap.appendChild(select);
+      return wrap;
+    }
+
+    /**
+     * Смена класса подставляет его кость хитов. Если человек уже правил
+     * кость вручную, его число не трогаем: мультикласс и домашние классы
+     * важнее автоматики.
+     * @param {HTMLSelectElement} select
+     */
+    onClassChange(select) {
+      const cls = DnD.CLASSES.find((item) => item.label === select.value);
+      const field = this.root.querySelector('[data-field="hitDice"]');
+      if (cls && field && (!field.value.trim() || !this.autoHitDie || field.value === this.autoHitDie)) {
+        field.value = `1${cls.hitDie}`;
+      }
+      if (cls) this.autoHitDie = `1${cls.hitDie}`;
+      this.onClassesChanged();
     }
 
     readonlyField(label, key) {
@@ -599,6 +854,9 @@ sheet.spellSlotsMax = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
         // обнулял значение, и игрок об этом не узнавал.
         sheet.skillExpertise[skill.key] = Boolean(node.expert && node.expert.checked) && node.check.checked;
       }
+      // Мультикласс хранится списком только когда он есть: у одноклассового
+      // листа класс остаётся в старых полях, и кампании не нужно мигрировать.
+      sheet.classes = this.extraRows.length ? this.currentClasses() : [];
       return sheet;
     }
 
@@ -608,7 +866,60 @@ sheet.spellSlotsMax = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
       this.sheet = sheet;
       this.derived = DnD.computeDerived(sheet);
       this.paintDerived();
+      this.syncHitDie();
       if (this.handlers.onChange && !this.readOnly) this.handlers.onChange(sheet);
+    }
+
+    /** Обновляет подпись кости хитов и доступность броска. */
+    syncHitDie() {
+      if (!this.hitDieDie) return;
+      const hitField = this.root.querySelector('[data-field="hitDice"]');
+      const raw = hitField ? hitField.value : (this.sheet && this.sheet.hitDice);
+      // Пул строится из классов в форме, а не из присланного листа: человек
+      // мог только что добавить класс, и кость должна появиться сразу.
+      const pool = DnD.hitDicePool({ classes: this.currentClasses(), hitDice: raw });
+      if (this.hitDiePick) {
+        this.hitDiePick.innerHTML = '';
+        for (const item of pool) {
+          const option = el('option', null, `${item.die} ×${item.count}`);
+          option.value = item.die;
+          this.hitDiePick.appendChild(option);
+        }
+        this.hitDiePick.hidden = pool.length <= 1;
+      }
+      const selected = pool.find((item) => item.die === this.hitDieSelected) || pool[0] || null;
+      if (selected) {
+        this.hitDieSelected = selected.die;
+        this.hitDieDie.textContent = selected.die;
+        if (this.hitDiePick) this.hitDiePick.value = selected.die;
+      } else {
+        this.hitDieDie.textContent = '—';
+      }
+      const sides = selected ? selected.sides : null;
+      if (this.hitDieRoll) {
+        this.hitDieRoll.disabled = this.readOnly || !sides;
+        this.hitDieRoll.title = sides
+          ? 'Бросить одну кость хитов и добавить модификатор Телосложения'
+          : 'Выберите класс, чтобы появилась кость';
+      }
+      if (!sides) this.hitDieOut.hidden = true;
+    }
+
+    /** Бросает одну кость хитов; результат виден тут же, в листе. */
+    rollHitDie() {
+      const sides = DnD.hitDieSides(this.hitDieSelected || (this.sheet && this.sheet.hitDice));
+      if (!sides || this.readOnly) return;
+      const roll = secureDie(sides);
+      const con = this.derived && Number.isFinite(this.derived.modifiers.con)
+        ? this.derived.modifiers.con
+        : 0;
+      const total = roll + con;
+      this.hitDieValue.textContent = String(total);
+      this.hitDieDetail.textContent = `d${sides}: ${roll} ${DnD.formatModifier(con)} Тел`;
+      this.hitDieOut.hidden = false;
+      this.hitDieOut.classList.remove('is-pop');
+      void this.hitDieOut.offsetWidth;
+      this.hitDieOut.classList.add('is-pop');
     }
 
     paintDerived() {
@@ -747,7 +1058,16 @@ node.max.disabled = this.readOnly;
      */
     setSheet(sheet) {
       const data = sheet && typeof sheet === 'object' ? sheet : DnD.createEmptySheet();
+      const previous = this.sheet;
       this.sheet = data;
+      const cls = DnD.CLASSES.find((item) => item.label === data.charClass);
+      this.autoHitDie = cls ? `1${cls.hitDie}` : null;
+      // Другой персонаж — другой бросок: результат прошлого героя на новом
+      // листе выглядел бы как только что выпавший.
+      if (previous && this.hitDieOut
+        && (previous.playerName !== data.playerName || previous.characterName !== data.characterName)) {
+        this.hitDieOut.hidden = true;
+      }
       for (const input of this.inputs) {
         const name = input.dataset.field;
         if (!name) continue;
@@ -762,6 +1082,18 @@ node.max.disabled = this.readOnly;
           input.hidden = !this.manualProfCheck.checked;
           continue;
         }
+        if (name === 'charClass' && input.tagName === 'SELECT') {
+          const value = data[name] === null || data[name] === undefined ? '' : String(data[name]);
+          // Старые листы хранят класс свободным текстом. Чтобы выбор не стёр
+          // незнакомое название, добавляем его отдельным пунктом списка.
+          if (value && ![...input.options].some((option) => option.value === value)) {
+            const option = el('option', null, value);
+            option.value = value;
+            input.appendChild(option);
+          }
+          input.value = value;
+          continue;
+        }
         const value = data[name];
         input.value = value === null || value === undefined ? '' : String(value);
       }
@@ -772,8 +1104,10 @@ node.max.disabled = this.readOnly;
         this.skillNodes[skill.key].check.checked = Boolean(data.skillProficiencies && data.skillProficiencies[skill.key]);
         this.skillNodes[skill.key].expert.checked = Boolean(data.skillExpertise && data.skillExpertise[skill.key]);
       }
+      this.applyExtraClasses(data);
       this.derived = DnD.computeDerived(data);
       this.paintDerived();
+      this.syncHitDie();
     }
 
     /** @param {boolean} value */
@@ -782,6 +1116,12 @@ node.max.disabled = this.readOnly;
       this.root.classList.toggle('is-readonly', this.readOnly);
       for (const input of this.inputs) input.disabled = this.readOnly;
       for (const box of this.checkboxes) box.disabled = this.readOnly;
+      for (const row of this.extraRows || []) {
+        row.select.disabled = this.readOnly;
+        row.level.disabled = this.readOnly;
+        if (row.removeButton) row.removeButton.disabled = this.readOnly;
+      }
+      this.updateClassSummary();
 if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
     if (this.manualProfCheck && !this.manualProfCheck.checked) this.manualProfInput.hidden = true;
     // Кнопки ячеек и счётчиков собраны мимо this.inputs, поэтому гасим их
@@ -801,6 +1141,7 @@ if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
     // в неё вносить боевые броски от лица игрока.
     this.updateRollAvailability();
     this.paintDerived();
+    this.syncHitDie();
     }
 
     /**

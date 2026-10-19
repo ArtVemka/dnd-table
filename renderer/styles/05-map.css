@@ -98,6 +98,66 @@
   max-width: 260px;
 }
 
+/* Быстрая настройка сетки за столом: всплывающее меню из тулбара карты. */
+.map-grid-menu {
+  position: absolute;
+  top: 78px;
+  left: 0;
+  z-index: 8;
+  width: 262px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.6);
+}
+
+.map-grid-menu[hidden] {
+  display: none;
+}
+
+.map-grid-menu__check,
+.map-grid-menu__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.map-grid-menu__check {
+  justify-content: flex-start;
+  gap: 7px;
+  color: var(--text);
+}
+
+.map-grid-menu__label {
+  flex: 1;
+  min-width: 0;
+}
+
+.map-grid-menu__input {
+  width: 84px;
+  flex-shrink: 0;
+}
+
+.map-grid-menu__note {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.map-grid-menu__toggle.is-on {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
 .map-stage {
   flex: 1;
   min-height: 0;
@@ -220,20 +280,6 @@
 }
 
 /* ------------------------------------- Режим боя: ход фишки по клеткам */
-
-/* Ломаная маршрута лежит поверх фишек и под туманом: видно, куда идёт фишка,
-   но закрытый участок она не выдаёт. Координаты заданы в тысячных долях
-   карты, поэтому подпись и линия едут вместе с приближением. */
-.map-route {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: visible;
-}
-
-.map-route polyline {
-  vector-effect: non-scaling-stroke;
-}
 
 /* Клетка назначения: рамка ровно в размер клетки сетки. */
 .map-cell {

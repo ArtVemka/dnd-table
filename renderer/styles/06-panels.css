@@ -15,26 +15,48 @@
   pointer-events: none;
 }
 
+/*
+ * Фишка — это ровно её кружок. Якорь (left/top из координат фишки) приходится
+ * на центр кружка, а подписи и прочность лежат отдельными слоями. Если держать
+ * их в потоке, колонка растягивается, якорь уезжает от кружка, и по нему
+ * начинает считаться не та клетка: маршрут хода начинается выше фишки.
+ */
 .token {
   position: absolute;
   transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
+  width: var(--cell, 46px);
+  height: var(--cell, 46px);
   pointer-events: auto;
   user-select: none;
   touch-action: none;
 }
 
-/* Прочность на самой фишке: полоса под кружком и число вида «7/12». */
+/* Прочность на самой фишке: полоса над кружком и число вида «7/12». */
 .token__hp {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 2px);
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 1px 5px;
   background: var(--hp-plate);
   border-radius: 6px;
+  white-space: nowrap;
+}
+
+/* Подписи под фишкой: имя, состояния и владелец. Лежат вне разметки фишки,
+   чтобы не сдвигать её якорь; друг под другом, а не в ряд. */
+.token__info {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 2px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
 }
 
 .token__hp-track {

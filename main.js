@@ -7,7 +7,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 
 const { CampaignStore } = require('./server/campaign');
 const { createTableServer } = require('./server/socket');
-const { RoomState } = require('./server/state');
+const { RoomState, LIMITS } = require('./server/state');
 const { decodeImage } = require('./server/image');
 const irohManager = require('./server/iroh-manager');
 const importer = require('./server/importer');
@@ -80,7 +80,14 @@ let currentCampaign = null;
 let host = null;
 let autosaveTimer = null;
 let dirty = false;
+/**
+ * Номер изменения состояния. По нему видно, трогали ли стол во время записи:
+ * если за время save() счётчик вырос, снимать «грязный» флаг нельзя.
+ */
+let dirtyVersion = 0;
 let saving = false;
+/** Во время записи пришёл ещё один запрос на сохранение. */
+let saveRequested = false;
 let quitting = false;
 
 /* -------------------------------------------------------------------------- *
@@ -190,6 +197,9 @@ function sendToRenderer(channel, payload) {
     // hostKey наружу не уходит: окно забирает контекст по случайному id.
     hostKey: isDm && host ? host.hostKey : '',
     playerId: isDm ? 'dm' : String(request.playerId || ''),
+    // Секрет личности игрока: окно листа входит тем же кодом, что и стол,
+    // и без секрета стол не пустил бы его к своему листу.
+    playerKey: isDm ? '' : String(request.playerKey || '').slice(0, 128),
     name: String(request.name || 'Игрок').slice(0, 40),
     viewPlayerId,
     readOnly,
@@ -250,15 +260,34 @@ function campaignMeta(campaign) {
  */
 async function persistCampaign({ notify = false } = {}) {
   if (!currentCampaign) return null;
-  if (saving) return campaignMeta(currentCampaign);
+  if (saving) {
+    // Запись уже идёт. Просим повторить её после и отвечаем текущими
+    // метаданными: раньше такой вызов молча терял изменения, сделанные
+    // во время записи.
+    saveRequested = true;
+    return campaignMeta(currentCampaign);
+  }
   saving = true;
   try {
-    if (host && host.room) {
-      currentCampaign.state = host.room.serialize();
-    }
-    await store.save(currentCampaign);
-    dirty = false;
-    const meta = campaignMeta(currentCampaign);
+    let meta = campaignMeta(currentCampaign);
+    do {
+      saveRequested = false;
+      const version = dirtyVersion;
+      if (host && host.room) {
+        currentCampaign.state = host.room.serialize();
+      }
+      await store.save(currentCampaign);
+      // Подчищаем файлы, на которые уже никто не ссылается: заменённая карта,
+      // портрет или картинка фишки иначе остаются на диске навсегда.
+      if (host && host.room && currentCampaign.state) {
+        store.sweepFiles(currentCampaign.id, currentCampaign.state)
+          .catch(() => { /* свалка не должна мешать сохранению */ });
+      }
+      // За время записи ничего не изменилось — стол чист. Иначе флаг остаётся,
+      // и следующий автосейв допишет то, что успело появиться.
+      if (dirtyVersion === version) dirty = false;
+      meta = campaignMeta(currentCampaign);
+    } while (saveRequested);
     if (notify) sendToRenderer('campaign:saved', { meta, reason: 'auto' });
     return meta;
   } catch (error) {
@@ -283,6 +312,7 @@ function stopAutosave() {
 
 function markDirty() {
   dirty = true;
+  dirtyVersion += 1;
 }
 
 /* -------------------------------------------------------------------------- *
@@ -571,6 +601,42 @@ function registerIpc() {
   /** Максимальный размер файла импорта. */
   const ADVENTURE_MAX_BYTES = 400 * 1024 * 1024;
 
+  /** Файлы, выбранные пользователем в диалоге. Импорт берёт только их. */
+  const adventurePicked = [];
+
+  /**
+   * Приводит путь к сравнимому виду: и диалог, и renderer должны дать одно и
+   * то же. Симлинки раскрываем, если файл ещё на месте.
+   * @param {unknown} filePath
+   * @returns {string}
+   */
+  function adventurePathKey(filePath) {
+    const value = String(filePath || '');
+    if (!value) return '';
+    try {
+      return fs.realpathSync(value);
+    } catch {
+      return path.resolve(value);
+    }
+  }
+
+  /** Запоминает путь, выбранный в диалоге: без него импорт не примет файл. */
+  function rememberAdventurePath(filePath) {
+    const key = adventurePathKey(filePath);
+    if (!key) return '';
+    const index = adventurePicked.indexOf(key);
+    if (index !== -1) adventurePicked.splice(index, 1);
+    adventurePicked.push(key);
+    if (adventurePicked.length > 8) adventurePicked.shift();
+    return key;
+  }
+
+  /** @param {unknown} filePath @returns {boolean} */
+  function isPickedAdventurePath(filePath) {
+    const key = adventurePathKey(filePath);
+    return Boolean(key) && adventurePicked.includes(key);
+  }
+
   /**
    * Проверяет путь, присланный renderer'ом.
    *
@@ -619,7 +685,9 @@ function registerIpc() {
       if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return dataUrl;
       if (cache.has(dataUrl)) return cache.get(dataUrl);
       const decoded = decodeImage(dataUrl);
-      if (!decoded) return null;
+      // decodeImage возвращает { error }, а не null: раньше битая картинка
+      // проходила проверку и падала уже на записи файла.
+      if (!decoded || decoded.error) return null;
       const fileName = await store.saveImage(campaignId, decoded.buffer, decoded.ext);
       const url = `/files/${fileName}`;
       cache.set(dataUrl, url);
@@ -655,11 +723,15 @@ function registerIpc() {
       filters: [{ name: 'Приключения Foundry', extensions: ['json', 'zip'] }]
     });
     if (picked.canceled || !picked.filePaths.length) return { ok: false, canceled: true };
+    rememberAdventurePath(picked.filePaths[0]);
     return { ok: true, filePath: picked.filePaths[0] };
   });
 
   ipcMain.handle('adventure:inspect', async (event, filePath) => {
     if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    if (!isPickedAdventurePath(filePath)) {
+      return { ok: false, error: 'Файл нужно выбрать в окне выбора приключения.' };
+    }
     const read = readAdventureFile(filePath);
     if (!read.ok) return read;
     try {
@@ -682,7 +754,9 @@ function registerIpc() {
     if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
     const selected = Array.isArray(include) ? include.map(String) : [];
     if (!selected.length) return { ok: false, error: 'Не выбрано ни одной сущности.' };
-
+    if (!isPickedAdventurePath(filePath)) {
+      return { ok: false, error: 'Файл нужно выбрать в окне выбора приключения.' };
+    }
     const read = readAdventureFile(filePath);
     if (!read.ok) return read;
 
@@ -694,13 +768,29 @@ function registerIpc() {
       );
       await materializeImages(patch, host.room.campaign.id);
 
+      // Импорт собирает карты вручную, без стен, света, тумана и поверхности.
+      // normalizeMapSlot дописывает их и заодно режет вкладку по пределу: без
+      // этого первый же нарисованный на импортированной карте отрезок стены
+      // падал бы на item.walls.length.
+      for (const type of Object.keys(patch.maps)) {
+        patch.maps[type] = host.room.normalizeMapSlot(patch.maps[type]);
+      }
+      // Фишки — тем же путём через normalizeToken и с тем же пределом, что у
+      // стола: импорт не должен переполнять стол или приносить кривые поля.
+      const freeTokenSlots = Math.max(0, LIMITS.maxTokens - host.room.tokens.length);
+      const addedTokens = [];
+      for (const token of patch.tokens) {
+        if (addedTokens.length >= freeTokenSlots) break;
+        addedTokens.push(host.room.normalizeToken(token));
+      }
+
       // Приключение — часть кампании, поэтому её формат тоже меняется.
       host.room.campaign.version = 2;
       // Единственное место, где патч трогает стол. До этого момента ничего
       // измениться не могло.
       host.room.maps = patch.maps;
       host.room.adventure = patch.adventure;
-      if (patch.tokens.length) host.room.tokens.push(...patch.tokens);
+      for (const token of addedTokens) host.room.tokens.push(token);
       host.room.markDirty();
 
       // Рассылаем ровно то же событие, что и сервер при загрузке карты вручную,
@@ -717,7 +807,7 @@ function registerIpc() {
       // Новые фишки рассылаем по одному событию на каждую — так же, как при
       // создании фишки руками, поэтому клиенту не нужен отдельный обработчик
       // массового обновления.
-      for (const token of patch.tokens) host.server.io.emit('tokenCreated', token);
+      for (const token of addedTokens) host.server.io.emit('tokenCreated', token);
       await persistCampaign({ notify: true });
       // Приключение отдаём сразу: отдельного события со снимком стола нет,
       // а мастеру нужно увидеть, что именно перенеслось.

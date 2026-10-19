@@ -136,6 +136,16 @@ check('ячейки заклинаний считаются только у по
   const manual = DnD.computeSpellSlots(fighter);
   assert.strictEqual(manual.rows[0].max, null, 'придумано ячеек у воина');
   assert.strictEqual(manual.levels, 9, 'ручной счётчик не показан');
+
+  // Мультикласс: уровни полных заклинателей складываются, воин не мешает.
+  const multiclass = DnD.createEmptySheet();
+  multiclass.classes = [{ name: 'Воин', level: 3 }, { name: 'Волшебник', level: 2 }];
+  const multiSlots = DnD.computeSpellSlots(multiclass);
+  assert.strictEqual(multiSlots.rows[0].max, 3, 'волшебник 2 уровня даёт три ячейки');
+  assert.strictEqual(DnD.totalCharacterLevel(multiclass), 5, 'общий уровень мультикласса');
+  const pool = DnD.hitDicePool(multiclass);
+  assert.strictEqual(pool.length, 2, 'у мультикласса две разные кости');
+  assert.strictEqual(pool.map((item) => `${item.die}×${item.count}`).join(','), 'd10×3,d6×2');
 });
 
 function assert(condition, message) {

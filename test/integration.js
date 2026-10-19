@@ -239,6 +239,19 @@ async function main() {
     assert.strictEqual(p2Join.you.playerId, 'p-test-0002');
   });
 
+  const hijack = makeClient(server.port);
+  clients.push(hijack);
+  await once(hijack, 'connect');
+  const hijackAck = await join(hijack, { name: 'Самозванец', playerId: 'p-test-0001' });
+  check('чужой клиент не входит под кодом игрока без секрета', () => {
+    assert.strictEqual(hijackAck.ok, false);
+    assert.strictEqual(hijackAck.code, 'identity-denied');
+  });
+  check('самозванец не переименовал чужого игрока', () => {
+    const entry = room.playerList().find((player) => player.playerId === 'p-test-0001');
+    assert.strictEqual(entry.name, 'Артём');
+  });
+
   const players = await waitFor(
     () => dm.log.playersUpdate.find((list) => list.length === 4) ? dm.log.playersUpdate[dm.log.playersUpdate.length - 1] : null,
     'playersUpdate со всеми участниками'
@@ -262,6 +275,8 @@ async function main() {
     playerName: 'Артём',
     characterName: 'Тордин',
     charClass: 'Воин',
+    subclass: 'Мастер войны',
+    classes: [{ name: 'Воин', level: 3 }, { name: 'Волшебник', level: 2 }],
     race: 'Дварф',
     background: 'Солдат',
     alignment: 'Законно-добрый',
@@ -286,8 +301,12 @@ async function main() {
     assert.strictEqual(saved.sheet.level, 5);
     assert.strictEqual(saved.sheet.abilities.str, 17);
     assert.strictEqual(saved.sheet.hitDice, '1d10');
+    assert.strictEqual(saved.sheet.subclass, 'Мастер войны');
     assert.strictEqual(saved.sheet.armorClass, 18);
     assert.strictEqual(saved.sheet.proficiencyBonusManual, null);
+    assert.strictEqual(saved.sheet.classes.length, 2, 'мультикласс должен сохраниться списком');
+    assert.strictEqual(saved.sheet.classes[1].name, 'Волшебник');
+    assert.strictEqual(saved.sheet.classes[1].level, 2);
   });
   check('компетентность без владения сбрасывается', () => {
     assert.strictEqual(saved.sheet.skillProficiencies.stealth, false);
@@ -344,6 +363,15 @@ async function main() {
   check('в снимке ДМ есть листы всех игроков', () => {
     const snapshot = room.snapshotFor({ playerId: 'dm', role: 'dm' });
     assert.strictEqual(Object.keys(snapshot.sheets).length, 3);
+  });
+
+  const fakeDm = makeClient(server.port);
+  clients.push(fakeDm);
+  await once(fakeDm, 'connect');
+  const fakeDmAck = await join(fakeDm, { name: 'Не ДМ', playerId: 'dm' });
+  check('игрок не может занять код мастера', () => {
+    assert.strictEqual(fakeDmAck.ok, false);
+    assert.strictEqual(fakeDmAck.code, 'identity-denied');
   });
 
   /* --------------------------------------------------------------- карты */
@@ -910,6 +938,13 @@ async function main() {
     () => p2.log.tokenCreated.find((item) => item.id === hpToken.id),
     'фишка показана игрокам'
   );
+  check('показ скрытой фишки не выдаёт игроку прочность монстра', () => {
+    const shown = p2.log.tokenCreated.find((item) => item.id === hpToken.id);
+    // Показ идёт тем же путём, что и правка: иначе tokenCreated уносил бы
+    // игрокам полные хиты и скрытое имя, которое сервер прячет в снимке.
+    assert.strictEqual(shown.maxHp, null, `игрок увидел максимум при показе: ${shown.maxHp}`);
+    assert.strictEqual(shown.hp, null, `игрок увидел хиты при показе: ${shown.hp}`);
+  });
 
   dm.log.tokenUpdated.length = 0;
   p2.log.tokenUpdated.length = 0;
@@ -1797,6 +1832,32 @@ async function main() {
     assert.strictEqual(litMap().walls[0].id, wallId);
   });
 
+  const templateId = 'tpl-test-1';
+  emit(dm, 'addMapTemplate', {
+    type: fogType, mapId: fogMap.id, templateId,
+    kind: 'cone', x: 0.4, y: 0.5, size: 30, rotation: 90
+  });
+  await waitFor(() => litMap().templates && litMap().templates.length === 1, 'шаблон дошёл до стола');
+  check('шаблон сохраняет вид, размер и поворот', () => {
+    const template = litMap().templates[0];
+    assert.strictEqual(template.id, templateId);
+    assert.strictEqual(template.kind, 'cone');
+    assert.strictEqual(template.size, 30);
+    assert.strictEqual(template.rotation, 90);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'addMapTemplate', {
+    type: fogType, mapId: fogMap.id, kind: 'sphere', x: 0.5, y: 0.5, size: 20
+  });
+  await waitFor(() => p1.log.errorMessage.length >= 1, 'игрок пробовал поставить шаблон');
+  check('шаблон ставит только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/i.test(item.message)));
+    assert.strictEqual(litMap().templates.length, 1, 'игрок добавил шаблон');
+  });
+  emit(dm, 'clearMapTemplates', { type: fogType, mapId: fogMap.id });
+  await waitFor(() => litMap().templates.length === 0, 'шаблоны убраны');
+
   emit(dm, 'addMapWall', { type: fogType, mapId: fogMap.id, x1: 0.2, y1: 0.2, x2: 0.2, y2: 0.2 });
   await wait(60);
   check('точку стеной считать нельзя: карта не засоряется', () => {
@@ -2387,6 +2448,52 @@ async function main() {
     assert.ok(list[0].createdAt && list[0].updatedAt);
   });
 
+  console.log('\nФайлы кампании');
+
+  const foreignDir = path.join(root, 'campaigns', 'foreigncamp1234');
+  fs.mkdirSync(path.join(foreignDir, 'files'), { recursive: true });
+  fs.writeFileSync(path.join(foreignDir, 'campaign.json'), JSON.stringify({
+    id: campaign.id,
+    name: 'Чужая',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1,
+    state: {}
+  }));
+  const foreign = await store.load('foreigncamp1234');
+  check('кампания с чужим id внутри файла берёт id из папки', () => {
+    assert.strictEqual(foreign.id, 'foreigncamp1234');
+  });
+
+  const sweepId = 'sweeptest12345';
+  fs.mkdirSync(path.join(root, 'campaigns', sweepId, 'files'), { recursive: true });
+  const keepName = await store.saveImage(sweepId, Buffer.from('keep'), 'png');
+  const dropName = await store.saveImage(sweepId, Buffer.from('drop'), 'png');
+  const sweepRemoved = await store.sweepFiles(sweepId, {
+    maps: { world: { items: [{ url: `/files/${keepName}` }] }, battle: { items: [] }, sketch: { items: [] } },
+    tokens: [],
+    players: [],
+    adventure: null
+  }, { keepMs: 0 });
+  check('свалка удаляет файл без ссылок и оставляет нужный', () => {
+    assert.strictEqual(sweepRemoved, 1);
+    assert.ok(fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', keepName)));
+    assert.ok(!fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', dropName)));
+  });
+
+  const quotaStore = new CampaignStore(path.join(root, 'quota-campaigns'), { maxFilesBytes: 32 });
+  const quotaCampaign = await quotaStore.create('Квота');
+  await quotaStore.saveImage(quotaCampaign.id, Buffer.alloc(20), 'png');
+  let quotaThrown = null;
+  try {
+    await quotaStore.saveImage(quotaCampaign.id, Buffer.alloc(20), 'png');
+  } catch (error) {
+    quotaThrown = error;
+  }
+  check('квота папки files не даёт кампании расти без предела', () => {
+    assert.ok(quotaThrown && quotaThrown.quota === true, 'ожидалась ошибка квоты');
+  });
+
   const restoredCampaign = await store.load(campaign.id);
   const restored = new RoomState(restoredCampaign);
   check('листы персонажей восстановлены', () => {
@@ -2434,9 +2541,11 @@ async function main() {
   /* ------------------------------- переподключение и остановка сервера */
 
   console.log('\nПереподключение и остановка сервера');
-  const { client: p1Again, ack: rejoin } = await open({ name: 'Артём', playerId: 'p-test-0001' });
+  const { client: p1Again, ack: rejoin } = await open({
+    name: 'Артём', playerId: 'p-test-0001', playerKey: p1Join.you.playerKey
+  });
   const rejoinState = p1Again.log.joined[0].state;
-  check('переподключение с тем же playerId возвращает тот же лист', () => {
+  check('переподключение с тем же playerId и секретом возвращает тот же лист', () => {
     assert.strictEqual(rejoin.you.playerId, 'p-test-0001');
     assert.strictEqual(rejoinState.sheets['p-test-0001'].characterName, 'Тордин');
     assert.strictEqual(Object.keys(rejoinState.sheets).length, 1, 'игроку не должен уходить чужой лист');

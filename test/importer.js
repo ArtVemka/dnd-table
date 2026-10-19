@@ -9,6 +9,7 @@
 const assert = require('node:assert');
 const zlib = require('node:zlib');
 const { inspect, runImport } = require('../server/importer');
+const { readZipJsonAndAssets } = require('../server/importer/adapters/zip.js');
 const { emptyMaps, normalizeAdventure } = require('../server/state');
 
 const checks = [];
@@ -512,6 +513,14 @@ check('фишки сцены привязаны к своей карте, а н�
     // рисовались на каждой карте вкладки и наезжали друг на друга.
     assert.strictEqual(token.mapId, map.id, `фишка ${token.name} должна принадлежать своей карте`);
   }
+});
+
+check('zip-бомба обрывается на потолке одной записи, а не съедает память', () => {
+  // 70 МБ нулей жмутся в десятки килобайт: суммарный лимит такую запись
+  // пропустил бы, её держит потолок на распаковку одной записи.
+  const bomb = Buffer.alloc(70 * 1024 * 1024);
+  const zip = makeZipEntries({ 'adventure.json': bomb });
+  assert.throws(() => readZipJsonAndAssets(zip), 'распаковка обязана прерваться');
 });
 
 (async () => {

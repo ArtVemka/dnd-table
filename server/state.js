@@ -204,6 +204,34 @@ function clampSlotArray(raw) {
   return SPELL_SLOT_LEVELS.map((level, index) => clampInt(rows[index], 0, LIMITS.maxSpellSlotsPerLevel, 0));
 }
 
+/** Виды шаблонов заклинаний и их пределы. */
+const TEMPLATE_KINDS = ['sphere', 'cone', 'line'];
+const TEMPLATE_LIMITS = { maxPerMap: 20, minSize: 5, maxSize: 120 };
+
+/**
+ * Приводит шаблон к безопасному виду: вид, центр, размер в футах и поворот.
+ * @param {unknown} raw
+ * @returns {{id: string, kind: string, x: number, y: number, size: number, rotation: number}|null}
+ */
+function normalizeTemplate(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = /** @type {any} */ (raw);
+  return {
+    id: String(value.id || newTokenId()),
+    kind: TEMPLATE_KINDS.includes(value.kind) ? value.kind : 'sphere',
+    x: clampNumber(value.x, 0, 1, 0.5),
+    y: clampNumber(value.y, 0, 1, 0.5),
+    size: clampInt(value.size, TEMPLATE_LIMITS.minSize, TEMPLATE_LIMITS.maxSize, 20),
+    rotation: clampInt(value.rotation, 0, 359, 0)
+  };
+}
+
+/** @param {unknown} raw @returns {object[]} */
+function normalizeTemplates(raw) {
+  const list = Array.isArray(raw) ? raw.slice(0, TEMPLATE_LIMITS.maxPerMap) : [];
+  return list.map(normalizeTemplate).filter(Boolean);
+}
+
 function normalizeInitiative(raw) {
   const state = emptyInitiative();
   if (!raw || typeof raw !== 'object') return state;
@@ -353,6 +381,9 @@ function createEmptySheet(playerName = '') {
     playerName,
     characterName: '',
     charClass: '',
+    subclass: '',
+    /** Мультикласс: [{name, level}]. Пусто — класс берётся из charClass/level. */
+    classes: [],
     race: '',
     background: '',
     alignment: '',
@@ -442,6 +473,29 @@ function normalizeAdventure(input) {
  * @param {string} [fallbackPlayerName]
  * @returns {object}
  */
+/**
+ * Приводит список классов листа к чистому виду: имя и уровень, не больше
+ * шести записей, суммарно не больше 20 уровней.
+ * @param {unknown} value
+ * @returns {{name: string, level: number}[]}
+ */
+function normalizeSheetClasses(value) {
+  const list = Array.isArray(value) ? value : [];
+  const result = [];
+  let sum = 0;
+  for (const entry of list) {
+    if (result.length >= 6) break;
+    const name = sanitizeText(entry && entry.name, 60);
+    if (!name) continue;
+    const room = LIMITS.maxLevel - sum;
+    if (room <= 0) break;
+    const level = Math.min(clampInt(entry && entry.level, 1, LIMITS.maxLevel, 1), room);
+    result.push({ name, level });
+    sum += level;
+  }
+  return result;
+}
+
 function normalizeSheet(input, fallbackPlayerName = '') {
   const sheet = createEmptySheet(fallbackPlayerName);
   if (!input || typeof input !== 'object') return sheet;
@@ -450,6 +504,8 @@ function normalizeSheet(input, fallbackPlayerName = '') {
   sheet.playerName = sanitizeText(raw.playerName, LIMITS.maxNameLength) || fallbackPlayerName;
   sheet.characterName = sanitizeText(raw.characterName, LIMITS.maxNameLength);
   sheet.charClass = sanitizeText(raw.charClass, 60);
+  sheet.subclass = sanitizeText(raw.subclass, 60);
+  sheet.classes = normalizeSheetClasses(raw.classes);
   sheet.race = sanitizeText(raw.race, 60);
   sheet.background = sanitizeText(raw.background, 60);
   sheet.alignment = sanitizeText(raw.alignment, 60);
@@ -567,10 +623,16 @@ class RoomState {
       if (!player || !player.playerId) continue;
       const playerId = String(player.playerId);
       const isDm = playerId === DM_PLAYER_ID;
+      // Секрет личности: по нему стол узнаёт вернувшегося игрока. В кампании
+      // он лежит, иначе после перезапуска игрок потерял бы свой лист.
+      const playerKey = typeof player.playerKey === 'string'
+        ? player.playerKey.replace(/[^a-f0-9]/gi, '').slice(0, 128)
+        : '';
       this.players.set(playerId, {
         playerId,
         name: sanitizeText(player.name, LIMITS.maxNameLength) || (isDm ? 'ДМ' : 'Игрок'),
         role: isDm ? ROLE_DM : ROLE_PLAYER,
+        playerKey,
         // Аватар хранится у игрока, а не в листе: лист мастер не редактирует,
         // а портрет нужен и ему, и всем остальным в списке и чате.
         avatar: typeof player.avatar === 'string' && player.avatar
@@ -812,6 +874,7 @@ fogMask: normalizeFog(source.fogMask),
           surface: normalizeSurface(source.surface),
           walls: normalizeWalls(source.walls),
           lights: normalizeLights(source.lights),
+          templates: normalizeTemplates(source.templates),
           darkness: normalizeDarkness(source.darkness),
           uploadedAt: source.uploadedAt || new Date().toISOString()
         });
@@ -828,6 +891,7 @@ fogMask: normalizeFog(source.fogMask),
           surface: normalizeSurface(item.surface),
           walls: normalizeWalls(item.walls),
           lights: normalizeLights(item.lights),
+          templates: normalizeTemplates(item.templates),
           darkness: normalizeDarkness(item.darkness),
           uploadedAt: item.uploadedAt || new Date().toISOString()
         });
@@ -958,6 +1022,7 @@ fogMask: normalizeFog(source.fogMask),
         playerId: player.playerId,
         name: player.name,
         role: player.role,
+        playerKey: player.playerKey || '',
         avatar: player.avatar || null,
         // Заметка мастера едет в кампании вместе с игроком. Без неё мастер
         // терял все свои заготовки при первом же сохранении.
@@ -992,15 +1057,17 @@ fogMask: normalizeFog(source.fogMask),
    * его лист персонажа и данные сохраняются.
    * @param {string} playerId
    * @param {string} name
+   * @param {string} [playerKey] секрет личности, выданный сервером при входе
    * @returns {object}
    */
-  addPlayer(playerId, name) {
+  addPlayer(playerId, name, playerKey = '') {
     let player = this.players.get(playerId);
     if (!player) {
       player = {
         playerId,
         name,
         role: ROLE_PLAYER,
+        playerKey: playerKey || '',
         avatar: null,
         online: false,
         sockets: new Set(),
@@ -1011,6 +1078,9 @@ fogMask: normalizeFog(source.fogMask),
       this.markDirty();
     } else {
       player.name = name;
+      // Стол старого формата: ключа ещё не было, закрепляем его за игроком
+      // при первом входе, дальше личность защищена.
+      if (playerKey && !player.playerKey) player.playerKey = playerKey;
       this.markDirty();
     }
     return player;
@@ -1087,6 +1157,7 @@ fogMask: normalizeFog(source.fogMask),
         playerId: DM_PLAYER_ID,
         name,
         role: ROLE_DM,
+        playerKey: '',
         avatar: null,
         online: false,
         sockets: new Set(),
@@ -1261,6 +1332,8 @@ module.exports = {
   ROLE_DM,
   ROLE_PLAYER,
   SKILLS,
+  TEMPLATE_KINDS,
+  TEMPLATE_LIMITS,
   TOKEN_PALETTE,
   RoomState,
   abilityModifier,
@@ -1273,6 +1346,8 @@ module.exports = {
   normalizeSheet,
   normalizeAdventure,
   normalizeDarkness,
+  normalizeTemplate,
+  normalizeTemplates,
   normalizeTokenLight,
   proficiencyBonus,
   sanitizeText

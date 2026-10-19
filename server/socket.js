@@ -27,12 +27,15 @@ const {
   MAP_TYPES,
   ROLE_DM,
   ROLE_PLAYER,
+  TEMPLATE_KINDS,
+  TEMPLATE_LIMITS,
   TOKEN_PALETTE,
   clampInt,
   clampNumber,
   newMapId,
   newTokenId,
   normalizeSheet,
+  normalizeTemplate,
   normalizeTokenLight,
   sanitizeText
 } = require('./state');
@@ -286,7 +289,9 @@ async function createTableServer(options) {
       io.emit('tokenHidden', { tokenId: token.id, hidden: true });
     } else {
       io.to('dm-sockets').emit('tokenHidden', { tokenId: token.id, hidden: false });
-      if (wasHidden) io.emit('tokenCreated', token);
+      // emitToken, а не io.emit: игрокам фишка уходит через tokenForViewer,
+      // иначе вместе с показом утекали бы хиты и скрытое имя монстра.
+      if (wasHidden) emitToken('tokenCreated', token);
     }
     broadcastPlayers();
   };
@@ -347,6 +352,10 @@ async function createTableServer(options) {
 
       let role;
       let playerId;
+      // Секрет личности. Без него клиент мог бы назваться чужим кодом и
+      // забрать чужой лист, фишку и имя в чате: роль берётся сокетом из этого
+      // значения, а не из сообщений.
+      let playerKey = '';
       if (isHost) {
         role = ROLE_DM;
         playerId = DM_PLAYER_ID;
@@ -357,8 +366,44 @@ async function createTableServer(options) {
       } else {
         role = ROLE_PLAYER;
         const requested = String(data.playerId || '');
-        playerId = PLAYER_ID_PATTERN.test(requested) ? requested : `p-${crypto.randomUUID()}`;
-        const player = room.addPlayer(playerId, name);
+        const providedKey = typeof data.playerKey === 'string' ? data.playerKey.slice(0, 128) : '';
+        // Код 'dm' зарезервирован за мастером: роль ДМ даёт только hostKey, но
+        // и саму запись мастера игрок занять не должен.
+        if (requested === DM_PLAYER_ID) {
+          respond({
+            ok: false,
+            code: 'identity-denied',
+            error: 'Это код мастера. Войдём заново под своим кодом.'
+          });
+          return;
+        }
+        const wanted = PLAYER_ID_PATTERN.test(requested) ? requested : '';
+        const existing = wanted ? room.players.get(wanted) : null;
+        if (existing && existing.playerKey) {
+          if (!safeEqual(providedKey, existing.playerKey)) {
+            respond({
+              ok: false,
+              code: 'identity-denied',
+              error: 'Игрок с таким кодом уже за столом. Войдём заново под новым кодом.'
+            });
+            return;
+          }
+          playerId = wanted;
+          playerKey = existing.playerKey;
+        } else if (existing && existing.online) {
+          // Стол старого формата, ключа ещё нет, но игрок сейчас за столом:
+          // чужой вход под его кодом не пускаем.
+          respond({
+            ok: false,
+            code: 'identity-denied',
+            error: 'Игрок с таким кодом уже за столом. Войдём заново под новым кодом.'
+          });
+          return;
+        } else {
+          playerId = wanted || `p-${crypto.randomUUID()}`;
+          playerKey = crypto.randomBytes(24).toString('hex');
+        }
+        const player = room.addPlayer(playerId, name, playerKey);
         player.sockets.add(socket.id);
         player.online = true;
         // Комната с именем игрока: так все его окна получают синхронизацию.
@@ -372,10 +417,10 @@ async function createTableServer(options) {
       if (role === ROLE_DM) socket.join('dm-sockets');
 
       socket.emit('joined', {
-        you: { playerId, name, role },
+        you: { playerId, name, role, playerKey },
         state: room.snapshotFor({ playerId, role })
       });
-      respond({ ok: true, you: { playerId, name, role } });
+      respond({ ok: true, you: { playerId, name, role, playerKey } });
       markDirty();
       broadcastPlayers();
       onLog(`Подключился ${role === ROLE_DM ? 'ДМ' : 'игрок'} ${name} (${socket.handshake.address})`);
@@ -568,7 +613,7 @@ async function createTableServer(options) {
         applyAvatar(playerId, `/files/${fileName}`);
         onLog(`Аватар игрока ${player.name} обновлён`);
       } catch (error) {
-        emitError(socket, 'Не получилось сохранить аватар');
+        emitError(socket, error && error.quota ? error.message : 'Не получилось сохранить аватар');
         onLog(`Ошибка сохранения аватара: ${error.message}`);
       }
     });
@@ -660,7 +705,7 @@ async function createTableServer(options) {
         broadcastMapUpdate(type);
         onLog(`ДМ загрузил карту (${type}), всего в вкладке: ${slot.items.length}`);
       } catch (error) {
-        emitError(socket, 'Не удалось сохранить изображение карты');
+        emitError(socket, error && error.quota ? error.message : 'Не удалось сохранить изображение карты');
         onLog(`Ошибка сохранения карты: ${error.message}`);
       }
     });
@@ -936,6 +981,56 @@ socket.on('setGrid', (payload) => {
       broadcastMapUpdate(type);
     });
 
+    /**
+     * Шаблон заклинания (сфера, конус, линия). Как и стена, ставится по
+     * окончанию протяжки: мастер тянет от вершины, задавая направление.
+     * Видят все: это эффект на карте, а не заметка мастера.
+     */
+    socket.on('addMapTemplate', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      if (!Array.isArray(item.templates)) item.templates = [];
+      if (item.templates.length >= TEMPLATE_LIMITS.maxPerMap) {
+        return emitError(socket, `Шаблонов больше ${TEMPLATE_LIMITS.maxPerMap} быть не может`);
+      }
+      const template = normalizeTemplate({
+        id: (payload && payload.templateId) || newTokenId(),
+        kind: payload && payload.kind,
+        x: payload && payload.x,
+        y: payload && payload.y,
+        size: payload && payload.size,
+        rotation: payload && payload.rotation
+      });
+      if (!template) return;
+      item.templates.push(template);
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    socket.on('deleteMapTemplate', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const templateId = String((payload && payload.templateId) || '');
+      const list = Array.isArray(item.templates) ? item.templates : [];
+      const before = list.length;
+      item.templates = list.filter((template) => template.id !== templateId);
+      if (item.templates.length === before) return;
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    socket.on('clearMapTemplates', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      if (!Array.isArray(item.templates) || !item.templates.length) return;
+      item.templates = [];
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
     socket.on('addMapLight', (payload) => {
       if (!requireDm(socket)) return;
       const { type, item } = findMapItem(payload);
@@ -1180,7 +1275,7 @@ socket.on('setGrid', (payload) => {
         markDirty();
         emitToken('tokenUpdated', token);
       } catch (error) {
-        emitError(socket, 'Не удалось сохранить изображение фишки');
+        emitError(socket, error && error.quota ? error.message : 'Не удалось сохранить изображение фишки');
         onLog(`Ошибка сохранения фишки: ${error.message}`);
       }
     });
@@ -1216,11 +1311,13 @@ socket.on('setGrid', (payload) => {
         // Мастеру уходит вся группа, игрокам — только видимая часть: заготовки
         // мастера они не знают и знать не должны.
         io.to('dm-sockets').emit('tokensUpdated', { tokens: group });
-        const visible = group.filter((token) => !token.hidden);
+        const visible = group
+          .filter((token) => !token.hidden)
+          .map((token) => room.tokenForViewer(token, false));
         if (visible.length) io.except('dm-sockets').emit('tokensUpdated', { tokens: visible });
         onLog(`Картинка «${wanted}» назначена фишкам: ${group.length} шт.`);
       } catch (error) {
-        emitError(socket, 'Не получилось сохранить картинку');
+        emitError(socket, error && error.quota ? error.message : 'Не получилось сохранить картинку');
         onLog(`Ошибка сохранения картинки: ${error.message}`);
       }
     });
@@ -1249,10 +1346,12 @@ socket.on('setGrid', (payload) => {
         const url = `/files/${fileName}`;
         for (const entry of group) entry.image = url;
         markDirty();
-        io.emit('adventureUpdated', room.adventure);
+        // Справочник приключения сервер отдаёт только мастеру: в журнале лежат
+        // его заметки и заготовки, игрокам они не нужны.
+        io.to('dm-sockets').emit('adventureUpdated', room.adventure);
         onLog(`Картинка «${wanted}» назначена в справочнике: ${group.length} шт.`);
       } catch (error) {
-        emitError(socket, 'Не получилось сохранить картинку');
+        emitError(socket, error && error.quota ? error.message : 'Не получилось сохранить картинку');
         onLog(`Ошибка сохранения картинки: ${error.message}`);
       }
     });
@@ -1363,7 +1462,7 @@ socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       const entry = room.initiative.entries.find((item) => item.id === String(payload && payload.id));
       if (!entry) return emitError(socket, 'Участник боя не найден');
-      const total = Math.round(Number(payload.total));
+      const total = Math.round(Number(payload && payload.total));
       if (!Number.isFinite(total)) return emitError(socket, 'Итог должен быть числом');
       entry.total = total;
       markDirty();
@@ -1414,7 +1513,13 @@ socket.on('setGrid', (payload) => {
     socket.on('setCombatMode', (payload) => {
       if (!requireDm(socket)) return;
       const enabled = Boolean(payload && payload.enabled);
-      if (room.combat.enabled === enabled) return;
+      if (room.combat.enabled === enabled) {
+        // Значение уже такое: окно могло отстать (переподключилось и не знало,
+        // что бой идёт). Отвечаем текущим состоянием, чтобы переключатель
+        // встал на место, а не выглядел мёртвым.
+        socket.emit('combatMode', room.combat);
+        return;
+      }
       room.combat.enabled = enabled;
       markDirty();
       io.emit('combatMode', room.combat);

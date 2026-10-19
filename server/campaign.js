@@ -21,6 +21,48 @@ const { CAMPAIGN_FORMAT_VERSION, emptyMaps, sanitizeText } = require('./state');
 
 const IMAGE_EXTENSIONS = { png: 'png', jpg: 'jpg', jpeg: 'jpg', webp: 'webp' };
 
+/** Потолок на объём папки files одной кампании. Карты и портреты вместе. */
+const MAX_FILES_BYTES = 512 * 1024 * 1024;
+
+/** Файл моложе этого возраста свалка не трогает: его могли только что записать. */
+const SWEEP_KEEP_MS = 2 * 60 * 1000;
+
+/** Ошибка «место кончилось»: её показывают игроку, в отличие от сбоев диска. */
+function quotaError(fileName) {
+  const error = new Error(
+    `В папке кампании больше ${Math.round(MAX_FILES_BYTES / 1024 / 1024)} МБ изображений. Удалите лишние карты или портреты.`
+  );
+  error.quota = true;
+  error.fileName = fileName;
+  return error;
+}
+
+/**
+ * Собирает имена файлов, на которые ссылается состояние. Одно место, чтобы
+ * свалка не удалила нужное, когда у игрока карта, портрет или картинка фишки.
+ * @param {object} state
+ * @returns {Set<string>}
+ */
+function collectFileRefs(state) {
+  const refs = new Set();
+  const add = (value) => {
+    const match = /^\/files\/([A-Za-z0-9_.-]{1,80})$/.exec(String(value || ''));
+    if (match) refs.add(match[1]);
+  };
+  const maps = state && state.maps ? state.maps : {};
+  for (const slot of Object.values(maps)) {
+    if (!slot || typeof slot !== 'object') continue;
+    add(slot.url);
+    for (const item of Array.isArray(slot.items) ? slot.items : []) add(item && item.url);
+  }
+  for (const token of Array.isArray(state && state.tokens) ? state.tokens : []) add(token && token.imageUrl);
+  for (const player of Array.isArray(state && state.players) ? state.players : []) add(player && player.avatar);
+  const adventure = state && state.adventure ? state.adventure : {};
+  for (const actor of Array.isArray(adventure.actors) ? adventure.actors : []) add(actor && actor.image);
+  for (const item of Array.isArray(adventure.items) ? adventure.items : []) add(item && item.image);
+  return refs;
+}
+
 /**
  * Есть ли в вкладке карт хоть одна картинка.
  * Понимает и старый формат кампании, где на вкладке была одна карта.
@@ -36,9 +78,14 @@ function mapsHaveImages(slot) {
 class CampaignStore {
   /**
    * @param {string} rootDir папка, внутри которой лежат папки кампаний
+   * @param {{maxFilesBytes?: number}} [options]
    */
-  constructor(rootDir) {
+  constructor(rootDir, options = {}) {
     this.rootDir = rootDir;
+    // Потолок выносим в поле: тесты проверяют квоту на маленьком числе.
+    this.maxFilesBytes = Number.isFinite(options.maxFilesBytes)
+      ? Number(options.maxFilesBytes)
+      : MAX_FILES_BYTES;
     fs.mkdirSync(this.rootDir, { recursive: true });
   }
 
@@ -75,7 +122,9 @@ class CampaignStore {
         const raw = await fsp.readFile(path.join(this.rootDir, entry.name, 'campaign.json'), 'utf8');
         const data = JSON.parse(raw);
         campaigns.push({
-          id: data.id,
+          // Идентификатор берём из имени папки: файл мог достаться от чужой
+          // кампании, и тогда data.id увёл бы к чужой папке files.
+          id: entry.name,
           name: data.name,
           createdAt: data.createdAt,
           updatedAt: data.updatedAt,
@@ -138,10 +187,12 @@ class CampaignStore {
     const raw = await fsp.readFile(file, 'utf8');
     const data = JSON.parse(raw);
     if (!data || typeof data !== 'object') throw new Error('Файл кампании повреждён');
-    // Гарантируем наличие папки для изображений.
-    await fsp.mkdir(this.filesDir(data.id), { recursive: true });
+    // Гарантируем наличие папки для изображений. Идентификатор берём из пути
+    // (он уже проверен), а не из содержимого файла: чужой id увёл бы к чужой
+    // папке files.
+    await fsp.mkdir(this.filesDir(id), { recursive: true });
     return {
-      id: data.id,
+      id: String(id),
       name: sanitizeText(data.name, 60) || 'Кампания',
       createdAt: data.createdAt || new Date().toISOString(),
       updatedAt: data.updatedAt || new Date().toISOString(),
@@ -188,8 +239,73 @@ class CampaignStore {
     const safeExt = IMAGE_EXTENSIONS[String(ext).toLowerCase()] || 'png';
     const fileName = `${Date.now().toString(36)}-${crypto.randomBytes(6).toString('hex')}.${safeExt}`;
     await fsp.mkdir(this.filesDir(campaignId), { recursive: true });
+    const used = await this.filesBytes(campaignId);
+    if (used + (buffer ? buffer.length : 0) > this.maxFilesBytes) throw quotaError(fileName);
     await fsp.writeFile(this.filePath(campaignId, fileName), buffer);
     return fileName;
+  }
+
+  /**
+   * Суммарный размер всех изображений кампании.
+   * @param {string} campaignId
+   * @returns {Promise<number>}
+   */
+  async filesBytes(campaignId) {
+    let total = 0;
+    let entries;
+    try {
+      entries = await fsp.readdir(this.filesDir(campaignId), { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const stat = await fsp.stat(path.join(this.filesDir(campaignId), entry.name));
+        total += stat.size;
+      } catch {
+        // Файл исчез между чтением папки и stat: для суммы это ноль.
+      }
+    }
+    return total;
+  }
+
+  /**
+   * Удаляет файлы, на которые больше никто не ссылается. Вызывается после
+   * сохранения: карту, фишку или портрет могли заменить или удалить, а файл
+   * оставался лежать на диске навсегда.
+   * @param {string} campaignId
+   * @param {object} state сериализованное состояние кампании
+   * @param {{keepMs?: number}} [options]
+   * @returns {Promise<number>} сколько файлов удалено
+   */
+  async sweepFiles(campaignId, state, options = {}) {
+    const keepMs = Number.isFinite(options.keepMs) ? options.keepMs : SWEEP_KEEP_MS;
+    const keep = collectFileRefs(state);
+    let entries;
+    try {
+      entries = await fsp.readdir(this.filesDir(campaignId), { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    const now = Date.now();
+    let removed = 0;
+    for (const entry of entries) {
+      if (!entry.isFile() || keep.has(entry.name)) continue;
+      const full = path.join(this.filesDir(campaignId), entry.name);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const stat = await fsp.stat(full);
+        if (now - stat.mtimeMs < keepMs) continue;
+        // eslint-disable-next-line no-await-in-loop
+        await fsp.unlink(full);
+        removed += 1;
+      } catch {
+        // Уже удалён или занят: следующий проход подберёт.
+      }
+    }
+    return removed;
   }
 
   /**
@@ -208,4 +324,4 @@ class CampaignStore {
   }
 }
 
-module.exports = { CampaignStore, IMAGE_EXTENSIONS };
+module.exports = { CampaignStore, IMAGE_EXTENSIONS, MAX_FILES_BYTES, collectFileRefs };

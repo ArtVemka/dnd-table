@@ -168,6 +168,7 @@
       table.emit('joinRoom', {
         name: context.name,
         playerId: context.playerId,
+        playerKey: context.playerKey,
         hostKey: context.hostKey
       }, (response) => {
         if (!response || !response.ok) {

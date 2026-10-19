@@ -18,6 +18,7 @@
   const LocalTable = window.LocalTable;
 
   const PLAYER_ID_KEY = 'dnd-table.playerId';
+  const PLAYER_KEY_KEY = 'dnd-table.playerKey';
   const PLAYER_NAME_KEY = 'dnd-table.playerName';
   const ADDRESSES_COLLAPSED_KEY = 'dnd-table.addressesCollapsed';
   const LEFT_COLLAPSED_KEY = 'dnd-table.leftPanelCollapsed';
@@ -62,6 +63,8 @@ const HISTORY_LIMITS = { dice: 200, chat: 300 };
       activeMap: null,
 grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetPerCell, offsetX: 0, offsetY: 0 },
       tokens: [],
+      initiative: { entries: [], turnId: null, round: 1 },
+      combat: { enabled: false },
       diceHistory: [],
       chatHistory: []
     },
@@ -223,6 +226,19 @@ let chosenSheetId = null;
 
   function storedName() {
     return (localStorage.getItem(PLAYER_NAME_KEY) || '').trim();
+  }
+
+  /**
+   * Секрет личности, выданный столом при входе. Вместе с идентификатором он
+   * доказывает, что за стол вернулся тот же игрок, а не чужой клиент с его
+   * кодом. Пустая строка значит «секрета ещё нет»: стол выдаст его при входе.
+   */
+  function storedPlayerKey() {
+    try {
+      return localStorage.getItem(PLAYER_KEY_KEY) || '';
+    } catch (err) {
+      return '';
+    }
   }
 
   /**
@@ -532,7 +548,7 @@ let chosenSheetId = null;
    * код о подмене не знает.
    * @param {{url: string, name: string, playerId: string, hostKey?: string, expectRole?: string, local?: boolean}} options
    */
-  function connect({ url, name, playerId, hostKey, expectRole, local = false, p2p = false, keepP2p = false }) {
+  function connect({ url, name, playerId, playerKey, hostKey, expectRole, local = false, p2p = false, keepP2p = false }) {
     disconnect({ keepP2p });
     app.serverUrl = local ? '' : String(url).replace(/\/+$/, '');
     if (!local) setStatus('#join-status', 'Подключаемся…');
@@ -562,14 +578,33 @@ let chosenSheetId = null;
 
     socket.on('connect', () => {
       app.connected = true;
-      socket.emit('joinRoom', { name, playerId, hostKey }, (response) => {
-        if (!response || !response.ok) {
-          const message = (response && response.error) || 'Сервер отклонил подключение';
-          setStatus('#join-status', message, 'error');
-          toast(message, 'error');
-          socket.disconnect();
-        }
-      });
+      // Личность пробуем вернуть свою: тот же код и секрет, что стол выдал
+      // в прошлый раз. Если секрет не подошёл, стол попросит войти заново, и
+      // мы один раз берём новый код, чтобы человек не застрял на входе.
+      let attemptId = playerId;
+      let attemptKey = playerKey !== undefined ? playerKey : storedPlayerKey();
+      const join = (isRetry) => {
+        socket.emit('joinRoom', { name, playerId: attemptId, playerKey: attemptKey, hostKey }, (response) => {
+          if (response && !response.ok && response.code === 'identity-denied' && !isRetry) {
+            try {
+              localStorage.removeItem(PLAYER_ID_KEY);
+              localStorage.removeItem(PLAYER_KEY_KEY);
+            } catch (err) { /* хранилище недоступно: просто входим новым кодом */ }
+            attemptId = localPlayerId();
+            attemptKey = '';
+            toast('Код игрока занят: вы вошли под новым кодом, лист придётся выбрать заново.', 'error');
+            join(true);
+            return;
+          }
+          if (!response || !response.ok) {
+            const message = (response && response.error) || 'Сервер отклонил подключение';
+            setStatus('#join-status', message, 'error');
+            toast(message, 'error');
+            socket.disconnect();
+          }
+        });
+      };
+      join(false);
     });
 
     socket.on('connect_error', (error) => {
@@ -598,6 +633,11 @@ let chosenSheetId = null;
         grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
         tokens: state.tokens || [],
         initiative: state.initiative || { entries: [], turnId: null, round: 1 },
+        // Режим боя приходит в снимке состояния. Без него при переподключении
+        // окно считало бой выключенным, хотя на столе он шёл: кнопка «Бой»
+        // показывала «выкл», нажатие слало «включить», сервер видел то же
+        // самое значение и молчал, и кнопка выглядела сломанной.
+        combat: state.combat || { enabled: false },
         diceHistory: state.diceHistory || [],
         chatHistory: state.chatHistory || []
       };
@@ -608,6 +648,7 @@ let chosenSheetId = null;
       // нечего, иначе они подменят данные игрока за настоящим столом.
       if (app.role === 'player' && !app.training) {
         localStorage.setItem(PLAYER_ID_KEY, app.playerId);
+        if (you.playerKey) localStorage.setItem(PLAYER_KEY_KEY, you.playerKey);
         localStorage.setItem(PLAYER_NAME_KEY, you.name);
       }
       setStatus('#join-status', '');
@@ -701,6 +742,9 @@ let chosenSheetId = null;
       else app.room.tokens.push(token);
       mapView.render(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
+      // Список выбора в порядке боя наполняется фишками: без перерисовки новая
+      // фишка появлялась бы там только после следующего события.
+      renderInitiativePanel();
     });
 
     socket.on('tokenUpdated', (token) => {
@@ -709,6 +753,7 @@ let chosenSheetId = null;
       else app.room.tokens.push(token);
       mapView.render(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
+      renderInitiativePanel();
       renderAdventurePanel();
     });
 
@@ -721,6 +766,7 @@ let chosenSheetId = null;
       app.room.tokens = [...byId.values()];
       mapView.render(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
+      renderInitiativePanel();
       renderAdventurePanel();
     });
 
@@ -739,6 +785,7 @@ let chosenSheetId = null;
       app.room.tokens = app.room.tokens.filter((token) => token.id !== tokenId);
       mapView.render(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
+      renderInitiativePanel();
     });
 
     /**
@@ -824,6 +871,9 @@ let chosenSheetId = null;
       app.socket.removeAllListeners();
       app.socket.disconnect();
     }
+    // Ход по клеткам и перетаскивание живут вне сокета: их таймеры иначе
+    // продолжали бы дёргать emit уже без стола.
+    if (mapView) mapView.cancelPending();
     app.socket = null;
     app.connected = false;
     app.role = null;
@@ -980,6 +1030,8 @@ let chosenSheetId = null;
           offsetX: app.room.grid.offsetX || 0,
           offsetY: app.room.grid.offsetY || 0
         }),
+        // Быстрая настройка сетки за столом шлёт те же поля, что и окно настроек.
+        onSetGrid: (grid) => emit('setGrid', grid),
         // Режим боя: ход по клеткам. Включает мастер, сервер проверяет.
         onSetCombatMode: (enabled) => emit('setCombatMode', { enabled }),
         onRenameToken: renameToken,
@@ -995,6 +1047,18 @@ let chosenSheetId = null;
         }),
         onDeleteMapWall: (type, mapId, wallId) => emit('deleteMapWall', { type, mapId, wallId }),
         onClearMapWalls: (type, mapId) => emit('clearMapWalls', { type, mapId }),
+        onAddMapTemplate: (type, mapId, template) => emit('addMapTemplate', {
+          type,
+          mapId,
+          templateId: template.id,
+          kind: template.kind,
+          x: template.x,
+          y: template.y,
+          size: template.size,
+          rotation: template.rotation
+        }),
+        onDeleteMapTemplate: (type, mapId, templateId) => emit('deleteMapTemplate', { type, mapId, templateId }),
+        onClearMapTemplates: (type, mapId) => emit('clearMapTemplates', { type, mapId }),
         onAddMapLight: (type, mapId, light) => emit('addMapLight', {
           type,
           mapId,
@@ -2056,7 +2120,15 @@ const gridRow = el('div', 'settings__row');
     shiftY.addEventListener('change', applyGrid);
     scaleInput.addEventListener('change', applyGrid);
     settingsGridInput = gridInput;
-    settingsGridFields = { columns: fitInput, cell: cellInput, offsetX: shiftX, offsetY: shiftY };
+    settingsGridFields = {
+      columns: fitInput,
+      cell: cellInput,
+      offsetX: shiftX,
+      offsetY: shiftY,
+      // Без этого поля ответ стола не обновлял «футов в клетке», и следующая
+      // правка любого поля отправляла старое значение обратно.
+      feetPerCell: scaleInput
+    };
 
     box.appendChild(tableBox);
 
@@ -2334,6 +2406,7 @@ const gridRow = el('div', 'settings__row');
       // запускал, и без адреса окно листа не знает, к чему подключаться.
       url: app.serverUrl || '',
       playerId: app.playerId,
+      playerKey: storedPlayerKey(),
       name: storedName() || (isDm ? 'Мастер' : 'Игрок'),
       viewPlayerId,
       readOnly: isDm,
@@ -2787,7 +2860,8 @@ const gridRow = el('div', 'settings__row');
       if (item.id === chosenSheetId) row.classList.add('is-selected');
       const info = el('div', 'sheet-choice__info');
       info.appendChild(el('span', 'sheet-choice__name', item.characterName));
-      const about = [item.playerName, item.race, item.charClass, `${item.level} ур.`]
+      const className = [item.charClass, item.subclass].filter(Boolean).join(' · ');
+      const about = [item.playerName, item.race, className, `${item.level} ур.`]
         .filter(Boolean).join(' · ');
       info.appendChild(el('span', 'sheet-choice__about', about || 'Лист без класса и предыстории'));
       row.appendChild(info);

@@ -54,6 +54,150 @@
 
   const HIT_DICE = ['1d6', '1d8', '1d10', '1d12'];
 
+  /**
+   * Классы D&D 5e (2014) и их кости хитов.
+   *
+   * Подкласс сюда не входит: его названий слишком много и они зависят от
+   * дополнений, поэтому подкласс в листе остаётся свободным полем.
+   */
+  const CLASSES = [
+    { label: 'Варвар', hitDie: 'd12' },
+    { label: 'Бард', hitDie: 'd8' },
+    { label: 'Воин', hitDie: 'd10' },
+    { label: 'Волшебник', hitDie: 'd6' },
+    { label: 'Друид', hitDie: 'd8' },
+    { label: 'Жрец', hitDie: 'd8' },
+    { label: 'Колдун', hitDie: 'd8' },
+    { label: 'Монах', hitDie: 'd8' },
+    { label: 'Паладин', hitDie: 'd10' },
+    { label: 'Плут', hitDie: 'd8' },
+    { label: 'Следопыт', hitDie: 'd10' },
+    { label: 'Чародей', hitDie: 'd6' }
+  ];
+
+  /**
+   * Достаёт число граней из записи кости хитов: «1d8», «d10», «5d8».
+   * @param {unknown} value
+   * @returns {number|null} null, если запись не похожа на кость.
+   */
+  function hitDieSides(value) {
+    const match = String(value || '').match(/(\d*)d(\d+)/i);
+    if (!match) return null;
+    const sides = Number(match[2]);
+    return Number.isInteger(sides) && sides >= 2 && sides <= 100 ? sides : null;
+  }
+
+  /** Больше этого классов на одном листе не бывает: мультикласс обычно 2-3. */
+  const MAX_CLASS_ENTRIES = 6;
+
+  /**
+   * Кость хитов класса по его названию.
+   * @param {unknown} name
+   * @returns {string|null}
+   */
+  function classHitDie(name) {
+    const value = String(name || '').trim().toLowerCase();
+    if (!value) return null;
+    const found = CLASSES.find((item) => item.label.toLowerCase() === value);
+    return found ? found.hitDie : null;
+  }
+
+  /**
+   * Приводит список классов листа к чистому виду: имя + уровень, без пустых
+   * строк, уровень 1..20, суммарно не больше 20 уровней.
+   * @param {unknown} value
+   * @returns {{name: string, level: number}[]}
+   */
+  function normalizeClasses(value) {
+    const list = Array.isArray(value) ? value : [];
+    const result = [];
+    let sum = 0;
+    for (const entry of list) {
+      if (result.length >= MAX_CLASS_ENTRIES) break;
+      const name = String((entry && entry.name) || '').trim().slice(0, LIMITS.maxClassLength);
+      if (!name) continue;
+      const room = LIMITS.maxLevel - sum;
+      if (room <= 0) break;
+      const level = Math.min(clampNumber(entry && entry.level, LIMITS.minLevel, LIMITS.maxLevel, 1), room);
+      result.push({ name, level });
+      sum += level;
+    }
+    return result;
+  }
+
+  /**
+   * Классы листа. Лист старого формата (один класс и уровень) читается как
+   * один класс, чтобы мультикласс не ломал уже заполненные листы.
+   * @param {object} sheet
+   * @returns {{name: string, level: number}[]}
+   */
+  function classLevels(sheet) {
+    const raw = sheet && typeof sheet === 'object' ? sheet : {};
+    const list = normalizeClasses(raw.classes);
+    if (list.length) return list;
+    const name = String(raw.charClass || '').trim();
+    if (!name) return [];
+    return [{
+      name: name.slice(0, LIMITS.maxClassLength),
+      level: clampNumber(raw.level, LIMITS.minLevel, LIMITS.maxLevel, 1)
+    }];
+  }
+
+  /** Суммарный уровень персонажа: он же уровень для бонуса мастерства. */
+  function totalCharacterLevel(sheet) {
+    const list = classLevels(sheet);
+    if (!list.length) {
+      return clampNumber(sheet && sheet.level, LIMITS.minLevel, LIMITS.maxLevel, 1);
+    }
+    const sum = list.reduce((acc, entry) => acc + entry.level, 0);
+    return Math.min(LIMITS.maxLevel, Math.max(LIMITS.minLevel, sum));
+  }
+
+  /**
+   * Пул костей хитов: по одной записи на каждый размер кости. У Воина 5 /
+   * Волшебника 3 выходит d10×5 и d6×3.
+   * @param {object} sheet
+   * @returns {{die: string, sides: number, count: number}[]}
+   */
+  function hitDicePool(sheet) {
+    /** @type {Map<string, {die: string, sides: number, count: number}>} */
+    const pool = new Map();
+    for (const entry of classLevels(sheet)) {
+      const die = classHitDie(entry.name);
+      const sides = hitDieSides(die);
+      if (!die || !sides) continue;
+      const current = pool.get(die) || { die, sides, count: 0 };
+      current.count += entry.level;
+      pool.set(die, current);
+    }
+    if (!pool.size) {
+      const sides = hitDieSides(sheet && sheet.hitDice);
+      if (sides) pool.set(`d${sides}`, { die: `d${sides}`, sides, count: 1 });
+    }
+    return [...pool.values()];
+  }
+
+  /**
+   * Суммарный уровень полных заклинателей: так считаются общие ячейки у
+   * мультикласса. Полукластеры (паладин, следопыт) намеренно не в счёте: своей
+   * таблицы у них нет, а приложение не выдумывает числа.
+   */
+  function combinedCasterLevel(sheet) {
+    let sum = 0;
+    for (const entry of classLevels(sheet)) {
+      if (FULL_CASTER_CLASSES.includes(entry.name.trim().toLowerCase())) sum += entry.level;
+    }
+    return sum;
+  }
+
+  /** Строка ячеек по суммарному уровню полных заклинателей (или null). */
+  function casterSlotRow(sheet) {
+    const level = combinedCasterLevel(sheet);
+    if (!level) return null;
+    const lv = Math.max(1, Math.min(20, level));
+    return (FULL_CASTER_SLOTS[lv - 1] || FULL_CASTER_SLOTS[0]).slice();
+  }
+
   const MAP_TYPES = ['world', 'battle', 'sketch'];
   const MAP_LABELS = {
     world: 'Общая карта',
@@ -926,6 +1070,10 @@ const GRID = {
       playerName,
       characterName: '',
       charClass: '',
+      subclass: '',
+      // Мультикласс: [{name, level}]. Пусто — лист считается одноклассовым, и
+      // класс берётся из charClass/level.
+      classes: [],
       race: '',
       background: '',
       alignment: '',
@@ -1000,7 +1148,7 @@ const GRID = {
     // Число из листа главнее: вписал человек, значит человек и прав.
     // Таблица класса только заполняет пустое, иначе приложение затирало бы
     // собственный подсчёт человека.
-    const automatic = spellSlotRow(raw.charClass, raw.level);
+    const automatic = casterSlotRow(raw);
     const rows = SPELL_SLOT_LEVELS.map((level, index) => {
       const usedValue = Math.max(0, Math.min(LIMITS.maxSpellSlotsPerLevel, Math.round(Number(used[index]) || 0)));
       const written = Math.round(Number(max[index]) || 0);
@@ -1029,7 +1177,7 @@ const GRID = {
 
   function computeDerived(sheet) {
     const safe = sheet && typeof sheet === 'object' ? sheet : createEmptySheet();
-    const level = Math.min(20, Math.max(1, Math.round(Number(safe.level) || 1)));
+    const level = totalCharacterLevel(safe);
     const profBonus = safe.proficiencyBonusManual === null || safe.proficiencyBonusManual === undefined
       ? proficiencyBonus(level)
       : Math.round(Number(safe.proficiencyBonusManual) || 0);
@@ -1076,6 +1224,7 @@ const GRID = {
     ABILITY_KEYS,
     ABILITIES,
     ABILITY_LABELS,
+    CLASSES,
     CONDITIONS,
     MOVE_BLOCKING,
     SURFACE_TYPES,
@@ -1087,6 +1236,15 @@ const GRID = {
     SPELL_SLOT_LEVELS,
     GRID,
     HIT_DICE,
+    hitDieSides,
+    MAX_CLASS_ENTRIES,
+    classHitDie,
+    normalizeClasses,
+    classLevels,
+    totalCharacterLevel,
+    hitDicePool,
+    combinedCasterLevel,
+    casterSlotRow,
     LIGHT_AMBIENT,
     LIGHT_LIMITS,
     LIGHT_PRESETS,

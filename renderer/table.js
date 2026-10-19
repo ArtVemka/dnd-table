@@ -141,7 +141,15 @@
     if (options.subtitle) head.appendChild(options.subtitle);
 
     const body = el('div', 'section__body');
-    const stored = storageKey ? localStorage.getItem(storageKey) : null;
+    let stored = null;
+    if (storageKey) {
+      try {
+        stored = localStorage.getItem(storageKey);
+      } catch {
+        // Хранилище может быть недоступно: панель обязана собраться и без него.
+        stored = null;
+      }
+    }
     // let, а не const: состояние переключается по клику, и на const обработчик
     // молча падал бы с «Assignment to constant variable».
     let collapsed = stored === null ? Boolean(options.collapsed) : stored === '1';
@@ -153,7 +161,13 @@
     };
     head.addEventListener('click', () => {
       collapsed = !collapsed;
-      if (storageKey) localStorage.setItem(storageKey, collapsed ? '1' : '0');
+      if (storageKey) {
+        try {
+          localStorage.setItem(storageKey, collapsed ? '1' : '0');
+        } catch {
+          // Не запомнили — не беда, секция всё равно свернулась.
+        }
+      }
       apply();
       // При раскрытии содержимое успело отлежаться в свёрнутом виде: ленты,
       // которые сами себя докручивают вниз, приходится догонять руками.
@@ -970,6 +984,13 @@
       this.combat = { enabled: false, tokenId: null };
       /** Маршрут последнего наведения: клетка назначения и расстояние. */
       this.route = null;
+      /** Линейка: включена ли и где начало с концом (доли карты). */
+      this.measureMode = false;
+      this.measureStart = null;
+      this.measureEnd = null;
+      /** Выбранный шаблон для постановки и его предпросмотр при протяжке. */
+      this.templateDraft = null;
+      this.templatePreview = null;
       /** Таймер пошагового хода фишки, пока он идёт по клеткам. */
       this.walkTimer = null;
       this.build();
@@ -992,9 +1013,58 @@
       return slot && Array.isArray(slot.items) ? slot.items.length : 0;
     }
 
+    /** Свернуть или показать верхние меню карты. Выбор помнится между запусками. */
+    toggleMenus() {
+      this.menusCollapsed = !this.menusCollapsed;
+      this.applyMenusCollapsed();
+      try {
+        localStorage.setItem('dnd-table.map-menus', this.menusCollapsed ? '0' : '1');
+      } catch (err) {
+        /* приватный режим или запрет хранилища: просто не помним выбор */
+      }
+    }
+
+    /** Привести полосу меню и панель к текущему состоянию свёрнутости. */
+    applyMenusCollapsed() {
+      this.root.classList.toggle('is-menus-collapsed', this.menusCollapsed);
+      if (!this.menusToggle) return;
+      this.menusCaret.textContent = this.menusCollapsed ? '▸' : '▾';
+      this.menusLabel.textContent = this.menusCollapsed ? 'Меню' : 'Свернуть';
+      this.menusToggle.title = this.menusCollapsed
+        ? 'Показать вкладки карт и управление'
+        : 'Свернуть вкладки и управление, оставив только карту';
+    }
+
     build() {
       this.root.innerHTML = '';
       this.root.classList.add('mapview');
+
+      // Верхние меню (вкладки карт + тулбар) занимают две-три строки, и на
+      // маленьком экране карте остаётся мало места. Тонкая полоса с названием
+      // карты всегда на виду и сворачивает всё, что над картой.
+      try {
+        this.menusCollapsed = localStorage.getItem('dnd-table.map-menus') === '0';
+      } catch (err) {
+        this.menusCollapsed = false;
+      }
+      const menus = el('div', 'map-menus');
+      const menusName = el('span', 'map-menus__name');
+      this.menusName = menusName;
+      menus.appendChild(menusName);
+      const menusToggle = el('button', 'map-menus__toggle');
+      menusToggle.type = 'button';
+      const menusCaret = el('span', 'map-menus__caret', this.menusCollapsed ? '▸' : '▾');
+      const menusLabel = el('span', 'map-menus__label', this.menusCollapsed ? 'Меню' : 'Свернуть');
+      menusToggle.appendChild(menusCaret);
+      menusToggle.appendChild(menusLabel);
+      menusToggle.addEventListener('click', () => this.toggleMenus());
+      menus.appendChild(menusToggle);
+      this.menusBar = menus;
+      this.menusCaret = menusCaret;
+      this.menusLabel = menusLabel;
+      this.menusToggle = menusToggle;
+      this.root.appendChild(menus);
+      this.applyMenusCollapsed();
 
       const tabs = el('div', 'map-tabs');
       this.tabButtons = {};
@@ -1027,6 +1097,117 @@
       const toolbar = el('div', 'map-toolbar');
       this.toolbar = toolbar;
       this.root.appendChild(toolbar);
+
+      // Быстрая настройка сетки прямо за столом. Поля те же, что в окне
+      // настроек, но лежат рядом с картой: подгонять сетку смотрят на неё, а
+      // не на список настроек. Строим один раз, значения подтягиваем в render.
+      const gridMenu = el('div', 'map-grid-menu');
+      gridMenu.hidden = true;
+      this.gridMenu = gridMenu;
+      this.gridMenuFields = {};
+      const gridField = (key, label, { min, max, step, title }) => {
+        const row = el('label', 'map-grid-menu__row');
+        row.appendChild(el('span', 'map-grid-menu__label', label));
+        const input = el('input', 'input map-grid-menu__input');
+        input.type = 'number';
+        input.dataset.field = key;
+        if (min !== undefined) input.min = String(min);
+        if (max !== undefined) input.max = String(max);
+        if (step !== undefined) input.step = String(step);
+        if (title) input.title = title;
+        input.addEventListener('change', () => this.applyGridMenu());
+        row.appendChild(input);
+        gridMenu.appendChild(row);
+        this.gridMenuFields[key] = input;
+      };
+      const gridOnLabel = el('label', 'map-grid-menu__check');
+      const gridOn = el('input');
+      gridOn.type = 'checkbox';
+      gridOn.dataset.field = 'enabled';
+      gridOn.addEventListener('change', () => this.applyGridMenu());
+      gridOnLabel.appendChild(gridOn);
+      gridOnLabel.appendChild(el('span', null, 'Сетка видна всем'));
+      gridMenu.appendChild(gridOnLabel);
+      this.gridMenuFields.enabled = gridOn;
+      gridField('columns', 'клеток по ширине (0 — вручную)', {
+        min: 0, max: DnD.GRID.maxColumns, step: DnD.GRID.minColumnsStep,
+        title: 'Сколько клеток укладывается по ширине карты. Можно с половиной: 37.5. Ноль — клетка берётся из ручного размера.'
+      });
+      gridField('cell', 'размер клетки, px', {
+        min: DnD.GRID.minCell, max: DnD.GRID.maxCell, step: 1,
+        title: 'Размер клетки в пикселях картинки, если число клеток по ширине равно нулю. Фишка занимает ровно клетку.'
+      });
+      gridField('offsetX', 'сдвиг вправо, px', {
+        min: -DnD.GRID.maxOffset, max: DnD.GRID.maxOffset, step: 1,
+        title: 'Сдвиг сетки вправо: у готовой карты клетки начинаются не с угла файла.'
+      });
+      gridField('offsetY', 'сдвиг вниз, px', {
+        min: -DnD.GRID.maxOffset, max: DnD.GRID.maxOffset, step: 1,
+        title: 'Сдвиг сетки вниз: у готовой карты клетки начинаются не с угла файла.'
+      });
+      gridField('feetPerCell', 'футов в клетке', {
+        min: DnD.GRID.minFeetPerCell, max: DnD.GRID.maxFeetPerCell, step: 1,
+        title: 'Сколько футов укладывается в клетку. По правилам 5e — пять.'
+      });
+      gridMenu.appendChild(el('div', 'map-grid-menu__note',
+        'Сетку, размер клетки и сдвиг видят все участники стола.'));
+      // Клик вне меню закрывает его; внутри — не закрывает.
+      this.root.addEventListener('pointerdown', (event) => {
+        if (this.gridMenu.hidden) return;
+        if (event.target.closest('.map-grid-menu') || event.target.closest('.map-grid-menu__toggle')) return;
+        this.gridMenu.hidden = true;
+      });
+      this.root.appendChild(gridMenu);
+
+      // Шаблоны заклинаний. Мастер выбирает фигуру и размер, затем тянет по
+      // карте от центра сферы или вершины конуса: длина протяжки задаёт
+      // направление, а размер берётся из поля.
+      const templateMenu = el('div', 'map-grid-menu map-template-menu');
+      templateMenu.hidden = true;
+      this.templateMenu = templateMenu;
+      const templateKindRow = el('label', 'map-grid-menu__row');
+      templateKindRow.appendChild(el('span', 'map-grid-menu__label', 'Фигура'));
+      const templateKind = el('select', 'select map-template-menu__kind');
+      for (const [id, label] of [['sphere', 'Сфера'], ['cone', 'Конус'], ['line', 'Линия']]) {
+        const option = el('option', null, label);
+        option.value = id;
+        templateKind.appendChild(option);
+      }
+      this.templateKind = templateKind;
+      templateKindRow.appendChild(templateKind);
+      templateMenu.appendChild(templateKindRow);
+      const templateSizeRow = el('label', 'map-grid-menu__row');
+      templateSizeRow.appendChild(el('span', 'map-grid-menu__label', 'Размер, футы'));
+      const templateSize = el('input', 'input map-grid-menu__input');
+      templateSize.type = 'number';
+      templateSize.min = '5';
+      templateSize.max = '120';
+      templateSize.step = '5';
+      templateSize.value = '20';
+      this.templateSize = templateSize;
+      templateSizeRow.appendChild(templateSize);
+      templateMenu.appendChild(templateSizeRow);
+      templateMenu.appendChild(el('div', 'map-grid-menu__note',
+        'Протяните по карте от центра сферы или вершины конуса: направление протяжки задаёт поворот.'));
+      const templatePlace = el('button', 'btn btn--accent btn--tiny', 'Поставить');
+      templatePlace.type = 'button';
+      templatePlace.addEventListener('click', () => this.startTemplatePlacement());
+      templateMenu.appendChild(templatePlace);
+      const templateClear = el('button', 'btn btn--tiny', 'Убрать все');
+      templateClear.type = 'button';
+      templateClear.addEventListener('click', () => {
+        if (this.handlers.onClearMapTemplates) {
+          this.handlers.onClearMapTemplates(this.viewedMap, this.currentMapId);
+        }
+        this.templateMenu.hidden = true;
+      });
+      templateMenu.appendChild(templateClear);
+      this.root.appendChild(templateMenu);
+      this.root.addEventListener('pointerdown', (event) => {
+        if (this.templateMenu.hidden) return;
+        if (event.target.closest('.map-template-menu') || event.target.closest('.map-template__toggle')) return;
+        this.templateMenu.hidden = true;
+      });
 
       // Панель освещения: своя вкладка вместо тесного тулбара.
       const lightPanel = el('div', 'map-lightbar');
@@ -1064,21 +1245,43 @@
       this.tokenLayer = layer;
       surface.appendChild(layer);
 
-      // Маршрут хода в режиме боя лежит поверх фишек и под туманом: линия
-      // показывает, куда пойдёт фишка, и её должно быть видно даже поверх
-      // другой фишки, но закрытый участок она выдавать не должна.
-      this.routeLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      this.routeLayer.setAttribute('class', 'map-route');
-      this.routeLayer.setAttribute('viewBox', '0 0 1000 1000');
-      this.routeLayer.setAttribute('preserveAspectRatio', 'none');
-      surface.appendChild(this.routeLayer);
-      // Ломаная, а не отрезок: путь идёт по центрам клеток с одним поворотом.
-      this.routeLine = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-      this.routeLayer.appendChild(this.routeLine);
+      // Клетка назначения и подпись расстояния лежат поверх фишек. Линию
+      // маршрута убрали: она уезжала от фишки, а клетка и число шагов дают
+      // то же без неё.
       this.cellMark = el('div', 'map-cell');
       surface.appendChild(this.cellMark);
       this.routeLabel = el('div', 'map-route__label');
       surface.appendChild(this.routeLabel);
+
+      // Линейка. В отличие от убранного маршрута это не постоянная линия, а
+      // инструмент: включил, протянул, прочитал футы. Лежит над фишками, но
+      // под светом и туманом.
+      this.measureLayer = el('div', 'map-measure');
+      this.measureLayer.hidden = true;
+      this.measureSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      this.measureSvg.setAttribute('class', 'map-measure__svg');
+      this.measureSvg.setAttribute('preserveAspectRatio', 'none');
+      this.measureLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      this.measureLine.setAttribute('class', 'map-measure__line');
+      this.measureStartDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      this.measureStartDot.setAttribute('class', 'map-measure__dot');
+      this.measureEndDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      this.measureEndDot.setAttribute('class', 'map-measure__dot');
+      this.measureSvg.appendChild(this.measureLine);
+      this.measureSvg.appendChild(this.measureStartDot);
+      this.measureSvg.appendChild(this.measureEndDot);
+      this.measureLabel = el('div', 'map-measure__label');
+      this.measureLayer.appendChild(this.measureSvg);
+      this.measureLayer.appendChild(this.measureLabel);
+      surface.appendChild(this.measureLayer);
+
+      // Шаблоны заклинаний: сферы, конусы и линии. Общие для стола, поэтому
+      // едут в кампании вместе с картой, а не живут в этом окне.
+      this.templateLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      this.templateLayer.setAttribute('class', 'map-templates');
+      this.templateLayer.setAttribute('preserveAspectRatio', 'none');
+      this.templateLayer.hidden = true;
+      surface.appendChild(this.templateLayer);
 
       // Свет лежит поверх карты, сетки и фишек, но под туманом. Порядок важен
       // в обе стороны: фишка в темноте должна быть видна, но туман должен
@@ -1169,10 +1372,28 @@
         event.stopPropagation();
         this.resetView();
       });
+      // Линейка доступна и игроку: расстояние до цели нужно всем за столом.
+      const measureButton = el('button', 'map-zoom__btn map-zoom__btn--measure');
+      measureButton.type = 'button';
+      measureButton.title = 'Измерять расстояние по сетке';
+      const measureIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      measureIcon.setAttribute('viewBox', '0 0 16 16');
+      measureIcon.setAttribute('class', 'map-zoom__icon');
+      measureIcon.setAttribute('aria-hidden', 'true');
+      const measurePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      measurePath.setAttribute('d', 'M2 8h12M2 5v6M14 5v6M8 6v4');
+      measureIcon.appendChild(measurePath);
+      measureButton.appendChild(measureIcon);
+      measureButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.toggleMeasure();
+      });
+      this.measureButton = measureButton;
       zoomBar.appendChild(zoomOut);
       zoomBar.appendChild(zoomValue);
       zoomBar.appendChild(zoomIn);
       zoomBar.appendChild(zoomReset);
+      zoomBar.appendChild(measureButton);
       stage.appendChild(zoomBar);
 
       stage.addEventListener('pointerdown', (event) => this.startPan(event));
@@ -1199,6 +1420,71 @@
         this.paintLight(map);
         this.paintWallOverlay(map);
         this.paintSurface(map);
+        this.paintTemplates(map);
+      });
+
+      // Линейка перехватывает нажатие раньше кистей: пока она включена, движение
+      // мыши мерит расстояние, а не открывает туман и не двигает фишки.
+      this.surface.addEventListener('pointerdown', (event) => {
+        if (!this.measureMode || this.editing || event.button !== 0) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const start = this.mapPoint(event);
+        this.measureStart = start;
+        this.measureEnd = start;
+        this.paintMeasure();
+        const move = (moveEvent) => {
+          this.measureEnd = this.mapPoint(moveEvent);
+          this.paintMeasure();
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+
+      // Постановка шаблона: протяжка от вершины задаёт и размер круга, и
+      // направление конуса с линией. Как и линейка, забирает нажатие первым.
+      this.surface.addEventListener('pointerdown', (event) => {
+        if (!this.templateDraft || this.role !== 'dm' || this.editing || event.button !== 0) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const start = this.mapPoint(event);
+        let current = start;
+        this.templatePreview = this.makeTemplate(start, current);
+        this.paintTemplates(this.mapOf(this.viewedMap));
+        const move = (moveEvent) => {
+          current = this.mapPoint(moveEvent);
+          this.templatePreview = this.makeTemplate(start, current);
+          this.paintTemplates(this.mapOf(this.viewedMap));
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          const template = this.makeTemplate(start, current);
+          this.templateDraft = null;
+          this.templatePreview = null;
+          this.surface.classList.remove('is-templating');
+          // Рисуем сразу, не дожидаясь ответа сервера: сеть может задержаться,
+          // а фигура уже брошена, и мастер должен видеть её на месте.
+          const map = this.mapOf(this.viewedMap);
+          if (map) {
+            map.templates = [...(Array.isArray(map.templates) ? map.templates : []), template];
+          }
+          this.paintTemplates(map);
+          if (this.handlers.onAddMapTemplate) {
+            this.handlers.onAddMapTemplate(this.viewedMap, this.currentMapId, template);
+          }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+
+      // Esc гасит линейку: после замера хочется сразу двигать фишки.
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && this.measureMode) this.toggleMeasure();
       });
 
       // Кисть тумана живёт на самой подложке: в режиме тумана указатель
@@ -1262,11 +1548,23 @@
       this.surface.addEventListener('contextmenu', (event) => {
         if (this.role !== 'dm' || this.editing) return;
         const wall = this.wallNear(event);
-        if (!wall) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (this.handlers.onDeleteMapWall) {
-          this.handlers.onDeleteMapWall(this.viewedMap, this.currentMapId, wall.id);
+        if (wall) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (this.handlers.onDeleteMapWall) {
+            this.handlers.onDeleteMapWall(this.viewedMap, this.currentMapId, wall.id);
+          }
+          return;
+        }
+        // Шаблон убирается тем же правым кликом: держать для него отдельную
+        // кнопку незачем, а лишняя фигура мешает читать карту.
+        const template = this.templateNear(event);
+        if (template) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (this.handlers.onDeleteMapTemplate) {
+            this.handlers.onDeleteMapTemplate(this.viewedMap, this.currentMapId, template.id);
+          }
         }
       });
       // Режим боя: нажатие по клетке отправляет выбранную фишку туда. Слушатель
@@ -1394,6 +1692,9 @@
       this.surface.style.width = `${Math.floor(boxWidth)}px`;
       this.surface.style.height = `${Math.floor(boxHeight)}px`;
       this.applyZoom();
+      // Размер подложки только что изменился: клетка и сдвиг сетки считаются
+      // от него, иначе сетка осталась бы в масштабе прежнего окна.
+      this.applyGrid();
     }
 
     /**
@@ -1868,7 +2169,9 @@
      * @param {PointerEvent|MouseEvent} event
      */
     paintSurfaceAt(event) {
-      if (!this.surfaceTool) return;
+      // null — кисть выключена; пустая строка — ластик, и он тоже рисует
+      // (точнее, стирает). Проверка на falsy убивала ластик молча.
+      if (this.surfaceTool === null) return;
       const map = this.mapOf(this.viewedMap);
       if (!map) return;
       const cell = this.cellAtClient(event.clientX, event.clientY);
@@ -2528,6 +2831,7 @@
         if (this.dragState && !this.dragState.walk) this.dragState = null;
       }
       this.applyGrid();
+      this.syncGridMenu(this.grid);
 
       const fallback = this.activeMap || DnD.MAP_TYPES.find((candidate) => this.mapOf(candidate)) || null;
       const previousViewed = this.viewedMap;
@@ -2585,13 +2889,98 @@
     /** Применяет настройки сетки стола к карте. */
     applyGrid() {
       const cell = this.effectiveCell();
-      this.surface.style.setProperty('--cell', `${cell}px`);
+      const scale = this.displayScale();
+      // Клетка и сдвиг заданы в пикселях картинки, а сетка и фишки рисуются в
+      // пикселях подложки. Подложка подгоняется под окно, поэтому без масштаба
+      // сетка была бы крупнее самой карты: клетка 46 px картинки занимала бы
+      // 46 px экрана вместо 46 × масштаб, и на уменьшенной карте линия маршрута
+      // не совпадала бы с клетками, по которым посчитаны шаги.
+      this.surface.style.setProperty('--cell', `${cell * scale}px`);
       // Сдвиг нужен, чтобы сетка легла на картинку с того же места, с которого
       // начинается сетка самой карты, а не с левого верхнего угла файла.
-      this.surface.style.setProperty('--grid-shift-x', `${Number(this.grid.offsetX) || 0}px`);
-      this.surface.style.setProperty('--grid-shift-y', `${Number(this.grid.offsetY) || 0}px`);
+      this.surface.style.setProperty('--grid-shift-x', `${(Number(this.grid.offsetX) || 0) * scale}px`);
+      this.surface.style.setProperty('--grid-shift-y', `${(Number(this.grid.offsetY) || 0) * scale}px`);
       this.gridLayer.hidden = !this.grid.enabled;
       if (this.editor) this.editor.setGrid(cell);
+    }
+
+    /**
+     * Во сколько раз подложка на экране отличается от картинки.
+     *
+     * Нужен, чтобы сетка, фишки и метка клетки жили в тех же единицах, что и
+     * карта: клетка задана в пикселях картинки, а рисуется в пикселях подложки.
+     * @returns {number}
+     */
+    displayScale() {
+      const natural = this.image ? this.image.naturalWidth : 0;
+      const shown = this.surface ? this.surface.offsetWidth : 0;
+      if (!natural || !shown) return 1;
+      return shown / natural;
+    }
+
+    /** Показывает или прячет быструю настройку сетки за столом. */
+    toggleGridMenu() {
+      if (!this.gridMenu) return;
+      const open = this.gridMenu.hidden;
+      this.gridMenu.hidden = !open;
+      if (this.gridMenuButton) this.gridMenuButton.classList.toggle('is-on', open);
+      if (!open) return;
+      this.syncGridMenu(this.grid);
+      // Ставим меню под кнопкой: тулбар переносится по строкам, и жёсткое
+      // смещение в CSS попадало бы то на карту, то на панель.
+      if (this.gridMenuButton) {
+        const rootRect = this.root.getBoundingClientRect();
+        const buttonRect = this.gridMenuButton.getBoundingClientRect();
+        const menuWidth = this.gridMenu.offsetWidth || 262;
+        const left = Math.max(0, Math.min(
+          buttonRect.left - rootRect.left,
+          rootRect.width - menuWidth - 4
+        ));
+        this.gridMenu.style.top = `${buttonRect.bottom - rootRect.top + 6}px`;
+        this.gridMenu.style.left = `${left}px`;
+      }
+    }
+
+    /** Отправляет сетку из быстрого меню на стол, тем же полем, что и настройки. */
+    applyGridMenu() {
+      if (!this.handlers.onSetGrid || !this.gridMenuFields) return;
+      const fields = this.gridMenuFields;
+      const num = (input, fallback) => {
+        const value = Number(input.value);
+        return Number.isFinite(value) ? value : fallback;
+      };
+      const columns = Math.min(
+        DnD.GRID.maxColumns,
+        Math.max(0, DnD.roundColumns(num(fields.columns, 0)))
+      );
+      this.handlers.onSetGrid({
+        enabled: fields.enabled.checked,
+        cell: Math.round(num(fields.cell, DnD.GRID.defaultCell)),
+        columns,
+        feetPerCell: Math.round(num(fields.feetPerCell, DnD.GRID.defaultFeetPerCell)),
+        offsetX: Math.round(num(fields.offsetX, 0)),
+        offsetY: Math.round(num(fields.offsetY, 0))
+      });
+    }
+
+    /**
+     * Подтягивает поля быстрого меню к текущей сетке.
+     * @param {object} grid
+     */
+    syncGridMenu(grid) {
+      if (!this.gridMenu || !this.gridMenuFields) return;
+      const fields = this.gridMenuFields;
+      const set = (input, value) => {
+        // Поле под курсором не трогаем: иначе ответ стола перебивал бы набор.
+        if (document.activeElement === input) return;
+        if (input.value !== String(value)) input.value = String(value);
+      };
+      fields.enabled.checked = Boolean(grid.enabled);
+      set(fields.columns, grid.columns || 0);
+      set(fields.cell, grid.cell || DnD.GRID.defaultCell);
+      set(fields.offsetX, grid.offsetX || 0);
+      set(fields.offsetY, grid.offsetY || 0);
+      set(fields.feetPerCell, grid.feetPerCell || DnD.GRID.defaultFeetPerCell);
     }
 
     /**
@@ -2680,8 +3069,12 @@
       if (!geometry || !token) return null;
       const width = this.image.naturalWidth;
       const height = this.image.naturalHeight;
-      const px = Number(token.x) * width;
-      const py = Number(token.y) * height;
+      // Положение берём у нарисованной фишки, а не из token.x/y: во время хода
+      // по клеткам узел уже стоит в новой клетке, а координаты в снимке ещё
+      // старые, и маршрут начинался бы там, откуда фишка ушла.
+      const point = this.tokenMapPoint(token);
+      const px = point.x * width;
+      const py = point.y * height;
       const col = Math.floor((px - geometry.offsetX) / geometry.cell);
       const row = Math.floor((py - geometry.offsetY) / geometry.cell);
       if (col < 0 || row < 0) return { col: 0, row: 0 };
@@ -2689,6 +3082,32 @@
         col: Math.min(geometry.columns - 1, col),
         row: Math.min(geometry.rows - 1, row)
       };
+    }
+
+    /**
+     * Где фишка нарисована сейчас, в долях карты.
+     *
+     * Обычно это token.x/y, но во время перетаскивания и пошагового хода узел
+     * двигается раньше, чем приходит обновление снимка. Брать координаты из
+     * узла надёжнее: линия маршрута обязана начинаться у кружка, который видит
+     * человек, а не там, где фишка была до хода.
+     * @param {object} token
+     * @returns {{x: number, y: number}}
+     */
+    tokenMapPoint(token) {
+      if (this.dragState && this.dragState.tokenId === token.id
+        && Number.isFinite(this.dragState.x) && Number.isFinite(this.dragState.y)) {
+        return { x: this.dragState.x, y: this.dragState.y };
+      }
+      const node = this.tokenLayer
+        ? this.tokenLayer.querySelector(`[data-token-id="${token.id}"]`)
+        : null;
+      if (node && node.style.left && node.style.top) {
+        const x = parseFloat(node.style.left) / 100;
+        const y = parseFloat(node.style.top) / 100;
+        if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+      }
+      return { x: Number(token.x), y: Number(token.y) };
     }
 
     /**
@@ -2778,18 +3197,207 @@
       this.paintRoute();
     }
 
+    /** Включает и выключает линейку. */
+    toggleMeasure() {
+      this.measureMode = !this.measureMode;
+      if (this.measureButton) {
+        this.measureButton.classList.toggle('is-on', this.measureMode);
+        this.measureButton.title = this.measureMode
+          ? 'Выключить измерение'
+          : 'Измерять расстояние по сетке';
+      }
+      this.surface.classList.toggle('is-measuring', this.measureMode);
+      if (!this.measureMode) this.clearMeasure();
+    }
+
+    /** Убирает линию линейки с карты. */
+    clearMeasure() {
+      this.measureStart = null;
+      this.measureEnd = null;
+      if (this.measureLayer) this.measureLayer.hidden = true;
+    }
+
+    /** Рисует линию линейки и подпись с футами по сетке. */
+    paintMeasure() {
+      if (!this.measureLayer) return;
+      const start = this.measureStart;
+      const end = this.measureEnd;
+      if (!start || !end) {
+        this.measureLayer.hidden = true;
+        return;
+      }
+      const width = Math.max(1, this.surface.clientWidth);
+      const height = Math.max(1, this.surface.clientHeight);
+      this.measureSvg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      const x1 = start.x * width;
+      const y1 = start.y * height;
+      const x2 = end.x * width;
+      const y2 = end.y * height;
+      this.measureLine.setAttribute('x1', String(x1));
+      this.measureLine.setAttribute('y1', String(y1));
+      this.measureLine.setAttribute('x2', String(x2));
+      this.measureLine.setAttribute('y2', String(y2));
+      this.measureStartDot.setAttribute('cx', String(x1));
+      this.measureStartDot.setAttribute('cy', String(y1));
+      this.measureStartDot.setAttribute('r', '5');
+      this.measureEndDot.setAttribute('cx', String(x2));
+      this.measureEndDot.setAttribute('cy', String(y2));
+      this.measureEndDot.setAttribute('r', '5');
+
+      const imageWidth = this.image.naturalWidth || width;
+      const imageHeight = this.image.naturalHeight || height;
+      const cell = Math.max(1, this.effectiveCell());
+      const cells = Math.hypot((end.x - start.x) * imageWidth, (end.y - start.y) * imageHeight) / cell;
+      const whole = Math.max(0, Math.round(cells));
+      const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+      this.measureLabel.textContent = `${whole * feetPerCell} фут. · ${whole} кл.`;
+      this.measureLabel.style.left = `${((start.x + end.x) / 2) * width}px`;
+      this.measureLabel.style.top = `${((start.y + end.y) / 2) * height}px`;
+      this.measureLayer.hidden = false;
+    }
+
+    /** Открывает и закрывает меню шаблонов рядом с тулбаром карты. */
+    toggleTemplateMenu() {
+      const open = this.templateMenu.hidden;
+      this.templateMenu.hidden = !open;
+      if (this.gridMenu) this.gridMenu.hidden = true;
+      if (this.templateButton) this.templateButton.classList.toggle('is-on', open);
+    }
+
+    /** Берёт фигуру и размер из меню и переводит карту в режим постановки. */
+    startTemplatePlacement() {
+      const kind = this.templateKind ? this.templateKind.value : 'sphere';
+      const size = Math.max(5, Math.min(120, Math.round(Number(this.templateSize && this.templateSize.value) || 20)));
+      this.templateDraft = { kind, size };
+      this.templateMenu.hidden = true;
+      if (this.templateButton) this.templateButton.classList.remove('is-on');
+      this.surface.classList.add('is-templating');
+      if (this.handlers.onNotice) {
+        this.handlers.onNotice(kind === 'sphere'
+          ? 'Нажмите на центр сферы и потяните, чтобы задать радиус'
+          : 'Нажмите на вершину и потяните в сторону действия');
+      }
+    }
+
     /**
-     * Показывает маршрут: клетку назначения, линию и расстояние в середине.
+     * Собирает шаблон из протяжки: начало — центр или вершина, направление
+     * протяжки — поворот (0° вверх, по часовой стрелке).
+     * @param {{x: number, y: number}} start
+     * @param {{x: number, y: number}} end
+     */
+    makeTemplate(start, end) {
+      const draft = this.templateDraft || { kind: 'sphere', size: 20 };
+      const width = this.image.naturalWidth || 1;
+      const height = this.image.naturalHeight || 1;
+      const dx = (end.x - start.x) * width;
+      const dy = (end.y - start.y) * height;
+      const rotation = Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01
+        ? 0
+        : (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+      return {
+        id: `t-${Math.random().toString(36).slice(2, 10)}`,
+        kind: draft.kind,
+        x: start.x,
+        y: start.y,
+        size: draft.size,
+        rotation: Math.round(rotation)
+      };
+    }
+
+    /**
+     * Рисует шаблоны карты и, если мастер сейчас тянет, предпросмотр.
+     * @param {object|null} map
+     */
+    paintTemplates(map) {
+      const layer = this.templateLayer;
+      if (!layer) return;
+      layer.innerHTML = '';
+      const templates = map && Array.isArray(map.templates) ? map.templates.slice() : [];
+      if (this.templatePreview) templates.push(this.templatePreview);
+      const width = this.image.naturalWidth;
+      const height = this.image.naturalHeight;
+      if (!templates.length || !width || !height) {
+        layer.hidden = true;
+        return;
+      }
+      layer.hidden = false;
+      layer.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      const cell = Math.max(1, this.effectiveCell());
+      const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+      const pxPerFoot = cell / Math.max(1, feetPerCell);
+      for (const template of templates) {
+        this.appendTemplate(layer, template, width, height, pxPerFoot);
+      }
+    }
+
+    /** @param {SVGElement} layer */
+    appendTemplate(layer, template, width, height, pxPerFoot) {
+      const cx = template.x * width;
+      const cy = template.y * height;
+      const length = Math.max(1, template.size * pxPerFoot);
+      const angle = (template.rotation * Math.PI) / 180;
+      const dirX = Math.sin(angle);
+      const dirY = -Math.cos(angle);
+      const namespace = 'http://www.w3.org/2000/svg';
+      const shape = document.createElementNS(namespace, template.kind === 'sphere' ? 'circle' : template.kind === 'cone' ? 'polygon' : 'line');
+      shape.setAttribute('class', `map-template map-template--${template.kind}`);
+      if (template.kind === 'sphere') {
+        shape.setAttribute('cx', String(cx));
+        shape.setAttribute('cy', String(cy));
+        shape.setAttribute('r', String(length));
+      } else if (template.kind === 'cone') {
+        const baseX = cx + dirX * length;
+        const baseY = cy + dirY * length;
+        const half = length / 2;
+        const perpX = Math.cos(angle);
+        const perpY = Math.sin(angle);
+        shape.setAttribute('points', [
+          `${cx},${cy}`,
+          `${baseX + perpX * half},${baseY + perpY * half}`,
+          `${baseX - perpX * half},${baseY - perpY * half}`
+        ].join(' '));
+      } else {
+        shape.setAttribute('x1', String(cx));
+        shape.setAttribute('y1', String(cy));
+        shape.setAttribute('x2', String(cx + dirX * length));
+        shape.setAttribute('y2', String(cy + dirY * length));
+      }
+      layer.appendChild(shape);
+    }
+
+    /**
+     * Ищет шаблон под указателем: правый клик по нему убирает фигуру.
+     * @param {PointerEvent|MouseEvent} event
+     */
+    templateNear(event) {
+      const map = this.mapOf(this.viewedMap);
+      if (!map || !Array.isArray(map.templates) || !map.templates.length) return null;
+      const width = this.image.naturalWidth;
+      const height = this.image.naturalHeight;
+      if (!width || !height) return null;
+      const point = this.mapPoint(event);
+      const cell = Math.max(1, this.effectiveCell());
+      const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+      const pxPerFoot = cell / Math.max(1, feetPerCell);
+      for (const template of map.templates) {
+        const distance = Math.hypot((point.x - template.x) * width, (point.y - template.y) * height);
+        const reach = template.kind === 'sphere'
+          ? template.size * pxPerFoot
+          : Math.max(12, (template.size * pxPerFoot) / 2);
+        if (distance <= reach) return template;
+      }
+      return null;
+    }
+
+    /**
+     * Показывает клетку назначения и расстояние до неё.
      * @param {{col: number, row: number}} [target]
      */
-    paintRoute(target) {
-      const geometry = this.cellGeometry();
+    paintRoute(target) {      const geometry = this.cellGeometry();
       const cellMark = this.cellMark;
       const label = this.routeLabel;
-      const line = this.routeLine;
       if (!geometry) {
         this.route = null;
-        line.setAttribute('stroke', 'transparent');
         cellMark.hidden = true;
         label.hidden = true;
         return;
@@ -2798,32 +3406,13 @@
       const route = this.route;
       const token = this.combatToken();
       if (!route || !token) {
-        line.setAttribute('stroke', 'transparent');
         cellMark.hidden = true;
         label.hidden = true;
         return;
       }
       const from = this.tokenCell(token);
       const measure = this.combatMeasure(from, route);
-      const fromCenter = this.cellCenterInMap(from.col, from.row);
       const toCenter = this.cellCenterInMap(route.col, route.row);
-      // Линия идёт от самой фишки, а не от центра её клетки.
-      //
-      // Фишка стоит там, куда её поставили мышью, то есть не обязательно по
-      // центру клетки, и линия, начавшаяся от центра, выглядела так, будто
-      // маршрут начинается где-то рядом с фишкой. Дальше путь идёт по центрам
-      // клеток: туда же, куда потом ступит фишка.
-      const here = { x: Number(token.x), y: Number(token.y) };
-      const cells = this.combatPath(from, route)
-        .map((cell) => this.cellCenterInMap(cell.col, cell.row));
-      const points = [here, fromCenter, ...cells];
-      line.setAttribute('points', points.map((point) => `${point.x * 1000},${point.y * 1000}`).join(' '));
-      line.setAttribute('fill', 'none');
-      line.setAttribute('stroke', 'var(--accent-hover)');
-      line.setAttribute('stroke-width', '8');
-      line.setAttribute('stroke-linecap', 'round');
-      line.setAttribute('stroke-linejoin', 'round');
-      line.setAttribute('opacity', '0.9');
 
       // Клетка назначения рисуется в процентах от картинки, иначе её размер
       // уезжал бы от клетки при приближении.
@@ -2833,17 +3422,13 @@
       cellMark.style.left = `${toCenter.x * 100}%`;
       cellMark.style.top = `${toCenter.y * 100}%`;
 
-      // Подпись расстояния стоит посередине пройденного пути, а не посередине
-      // прямой между фишкой и целью: на ломаной с поворотом это разные точки,
-      // и «середина» по прямой уезжала бы с маршрута.
-      const middle = points[Math.floor((points.length - 1) / 2)];
-      const next = points[Math.floor((points.length - 1) / 2) + 1] || middle;
-      const labelX = next === middle ? middle.x : (middle.x + next.x) / 2;
-      const labelY = next === middle ? middle.y : (middle.y + next.y) / 2;
+      // Подпись ставим между фишкой и клеткой назначения: линии больше нет,
+      // и без подписи у клетки было бы не понять, сколько это шагов.
+      const here = this.tokenMapPoint(token);
       label.hidden = false;
       label.textContent = this.combatDistanceText(measure);
-      label.style.left = `${labelX * 100}%`;
-      label.style.top = `${labelY * 100}%`;
+      label.style.left = `${((here.x + toCenter.x) / 2) * 100}%`;
+      label.style.top = `${((here.y + toCenter.y) / 2) * 100}%`;
     }
 
     /** Фишка, выбранная для хода, если её всё ещё можно двигать. */
@@ -2878,7 +3463,7 @@
       // потом клетка за клеткой и с тем же поворотом. Прямая через угол клетки
       // выглядела бы быстрее, но вела бы мимо клеток.
       const route = [
-        { x: Number(token.x), y: Number(token.y) },
+        this.tokenMapPoint(token),
         this.cellCenterInMap(from.col, from.row),
         ...this.combatPath(from, target).map((cell) => this.cellCenterInMap(cell.col, cell.row))
       ];
@@ -2903,12 +3488,27 @@
         this.walkTimer = null;
         this.dragState = null;
         if (node) node.classList.remove('token--walking');
+        // Записываем конечную точку сразу, не дожидаясь ответа стола: иначе
+        // renderTokens ниже переставил бы фишку обратно в старую клетку, и
+        // маршрут до прихода снимка начинался бы не от неё.
+        token.x = finish.x;
+        token.y = finish.y;
         if (this.handlers.onMoveToken) {
           this.handlers.onMoveToken(token.id, Number(finish.x.toFixed(4)), Number(finish.y.toFixed(4)));
         }
         this.renderTokens();
         this.paintLight(this.mapOf(this.viewedMap));
       }, COMBAT_STEP_MS);
+    }
+
+    /** Обрывает ход и перетаскивание: окно уходит из-за стола. */
+    cancelPending() {
+      if (this.walkTimer) {
+        clearInterval(this.walkTimer);
+        this.walkTimer = null;
+      }
+      this.dragState = null;
+      this.surfaceStroke = [];
     }
 
     /** Создаёт холст при первом обращении: он нужен только тому, кто рисует. */
@@ -2985,6 +3585,10 @@
       this.toolbar.innerHTML = '';
       const type = this.viewedMap;
       const map = this.mapOf(type);
+      if (this.menusName) {
+        this.menusName.textContent = map ? map.name : 'Карта не выбрана';
+        this.menusName.title = map ? map.name : '';
+      }
 
       // Во время рисования у холста своя панель инструментов.
       if (this.editing) {
@@ -3096,6 +3700,23 @@
       });
       this.toolbar.appendChild(gridButton);
 
+      // Настройка сетки за столом: те же поля, что в окне настроек, но рядом
+      // с картой. Кнопка-стрелка открывает меню, сама сетка включается рядом.
+      if (this.role === 'dm' || this.training) {
+        const gridMenuButton = el('button', 'btn btn--ghost map-grid-menu__toggle', '▾');
+        gridMenuButton.type = 'button';
+        gridMenuButton.title = 'Настроить сетку за столом: клетки по ширине, размер клетки и сдвиг';
+        gridMenuButton.classList.toggle('is-on', Boolean(this.gridMenu && !this.gridMenu.hidden));
+        gridMenuButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this.toggleGridMenu();
+        });
+        this.gridMenuButton = gridMenuButton;
+        this.toolbar.appendChild(gridMenuButton);
+      } else {
+        this.gridMenuButton = null;
+      }
+
       // Режим боя: фишки ходят по клеткам, а по клетке сразу видно, сколько
       // это шагов и футов. Включает мастер, а включается он сам при броске
       // порядка боя.
@@ -3117,6 +3738,23 @@
         if (this.handlers.onSetCombatMode) this.handlers.onSetCombatMode(next);
       });
       this.toolbar.appendChild(combatButton);
+
+      // Шаблоны заклинаний: мастер ставит, видят все. Кнопка рядом с боем,
+      // потому что пользуются ими в бою.
+      if (this.role === 'dm') {
+        const templateButton = el('button', 'btn btn--ghost map-template__toggle', 'Шаблон');
+        templateButton.type = 'button';
+        templateButton.title = 'Поставить шаблон заклинания: сфера, конус или линия';
+        templateButton.classList.toggle('is-on', Boolean(this.templateMenu && !this.templateMenu.hidden));
+        templateButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this.toggleTemplateMenu();
+        });
+        this.templateButton = templateButton;
+        this.toolbar.appendChild(templateButton);
+      } else {
+        this.templateButton = null;
+      }
 
       if (map && this.role === 'dm') {
         const activate = el('button', 'btn btn--ghost', this.activeMap === this.viewedMap ? '● Показана игрокам' : 'Показать игрокам');
@@ -3168,7 +3806,10 @@
         this.image.src = src;
         // Клетка считается от ширины подложки, а та станет известна только
         // после загрузки картинки — иначе сетка легла бы по старой карте.
-        this.image.onload = () => this.applyGrid();
+        this.image.onload = () => {
+          this.layoutSurface();
+          this.applyGrid();
+        };
         this.image.onerror = () => this.applyGrid();
       }
       this.layoutSurface();
@@ -3178,15 +3819,21 @@
       this.paintFog(map);
       this.paintSurface(map);
       this.paintWallOverlay(map);
+      this.paintTemplates(map);
     }
 
     renderTokens() {
       // Во время перетаскивания фишки слой не трогаем: иначе очистка снесла бы
       // ту самую фишку, которую сейчас тащат.
-      // Пока фишку тянут, слой не перерисовываем: очистка уничтожила бы её.
-      // Зависшее перетаскивание держало бы слой навсегда, поэтому состояние
-      // снимается и здесь: карта обязана оставаться живой при любом сбое.
-      if (this.dragState && !this.dragState.walk) return;
+      //
+      // Ход по клеткам тоже двигает узел напрямую, и перерисовка посреди хода
+      // отвязала бы его от таймера: фишка замерла бы на месте, пока идёт анимация.
+      if (this.dragState) {
+        if (!this.dragState.walk) return;
+        if (this.walkTimer) return;
+        // Таймер уже погас, а состояние осталось: иначе слой застыл бы навсегда.
+        this.dragState = null;
+      }
       const type = this.viewedMap;
       const activeMapId = (this.mapOf(type) || {}).id || '';
       // Показываем фишки той карты, что открыта. Фишка без mapId — из кампании,
@@ -3281,9 +3928,18 @@
       body.appendChild(circle);
       node.appendChild(body);
 
+      // Подписи лежат отдельным слоем и не участвуют в разметке фишки.
+      //
+      // Якорь фишки (token.x, token.y) обязан совпадать с центром кружка:
+      // по нему считается клетка фишки, начало маршрута хода и место удара
+      // мышью. Если подписи стоят в потоке, колонка растягивается, и якорь
+      // уезжает от кружка — тогда линия маршрута начинается выше фишки, а
+      // сама фишка встаёт не на ту клетку, куда её поставили.
+      const info = el('div', 'token__info');
+
       if (!token.nameHidden && !token.hideLabels) {
         const label = el('div', 'token__label', token.name);
-        node.appendChild(label);
+        info.appendChild(label);
       }
 
       // Состояния под фишкой видны всем: по ним и ориентируются, кого бить
@@ -3299,7 +3955,7 @@
         badges.title = conditions
           .map((id) => (DnD.CONDITIONS.find((entry) => entry.id === id) || {}).label || id)
           .join(', ');
-        node.appendChild(badges);
+        info.appendChild(badges);
       }
       // Рисунок состояния рисуется независимо от подписей: лоза под фишкой и
       // скрытая подпись — разные вещи, и состояние не должно пропадать вместе
@@ -3328,9 +3984,10 @@
         // Имя владельца — тоже имя, и скрытие подписи без скрытия подписи
         // хозяина оставило бы мастеру подсказку там, где он просил убрать всё.
         if (owner && !token.nameHidden && !token.hideLabels) {
-          node.appendChild(el('div', 'token__owner', owner.name));
+          info.appendChild(el('div', 'token__owner', owner.name));
         }
       }
+      if (info.childNodes.length) node.appendChild(info);
 
       node.addEventListener('contextmenu', (event) => {
         if (this.role !== 'dm') return;
@@ -3358,7 +4015,11 @@
             this.selectCombatToken(next);
           });
         } else {
-          node.addEventListener('pointerdown', (event) => this.startDrag(event, token));
+          node.addEventListener('pointerdown', (event) => {
+        // Пока включена линейка, фишка не хватает фишку за клик: он мерит.
+        if (this.measureMode) return;
+        this.startDrag(event, token);
+      });
         }
       } else if (this.role !== 'dm') {
         node.addEventListener('click', () => {

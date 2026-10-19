@@ -702,6 +702,78 @@
       assert(sheetHost.querySelectorAll('[data-skill]').length === 18, 'навыков');
     });
 
+    check('класс выбирают списком, а подкласс вписывают руками', () => {
+      const cls = sheetHost.querySelector('[data-field="charClass"]');
+      assert(cls && cls.tagName === 'SELECT', 'класс не выпадающий список');
+      const labels = [...cls.options].map((option) => option.value);
+      for (const item of window.DnD5e.CLASSES) {
+        assert(labels.includes(item.label), `в списке нет класса «${item.label}»`);
+      }
+      const sub = sheetHost.querySelector('[data-field="subclass"]');
+      assert(sub && sub.tagName === 'INPUT', 'подкласс не свободное поле ввода');
+    });
+
+    check('выбор класса подставляет его кость хитов', () => {
+      const cls = sheetHost.querySelector('[data-field="charClass"]');
+      const dice = sheetHost.querySelector('[data-field="hitDice"]');
+      const pick = (label) => {
+        cls.value = label;
+        cls.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      pick('Волшебник');
+      assert(dice.value === '1d6', `кость волшебника: ${dice.value}`);
+      pick('Варвар');
+      assert(dice.value === '1d12', `кость варвара: ${dice.value}`);
+      // Возвращаем воина: следующие проверки ждут его лист.
+      pick('Воин');
+      assert(dice.value === '1d10', `кость воина: ${dice.value}`);
+    });
+
+    check('кость хитов бросается прямо в листе и результат читается', () => {
+      const die = sheetHost.querySelector('.hit-die__die');
+      assert(die.textContent === 'd10', `на листе кость «${die.textContent}», а не d10`);
+      const roll = sheetHost.querySelector('.hit-die__roll');
+      assert(roll && !roll.disabled, 'бросок кости хитов недоступен');
+      roll.click();
+      const out = sheetHost.querySelector('.hit-die__out');
+      assert(out && !out.hidden, 'результат броска кости хитов не показан');
+      const total = Number(sheetHost.querySelector('.hit-die__value').textContent);
+      const detail = sheetHost.querySelector('.hit-die__detail').textContent;
+      const match = detail.match(/d10:\s*(\d+)\s*([+-]\d+)\s*Тел/);
+      assert(match, `результат не разбирается: ${detail}`);
+      assert.strictEqual(total, Number(match[1]) + Number(match[2]),
+        `итог не сходится с разбором «${detail}»: ${total}`);
+      assert(total >= 1 + Number(match[2]) && total <= 10 + Number(match[2]),
+        `итог вне диапазона кости: ${total}`);
+    });
+
+    check('мультикласс: строки классов, общий уровень и несколько костей хитов', () => {
+      sheetView.setSheet({
+        ...SAMPLE_SHEET,
+        charClass: 'Воин',
+        level: 5,
+        classes: [{ name: 'Воин', level: 5 }, { name: 'Волшебник', level: 3 }]
+      });
+      const rows = sheetHost.querySelectorAll('.class-row');
+      assert.strictEqual(rows.length, 2, `строк классов: ${rows.length}`);
+      assert(sheetHost.querySelector('.class-editor__sum').textContent.includes('8'),
+        'общий уровень мультикласса не показан');
+      assert(sheetHost.querySelector('[data-derived="profBonus"]').textContent === '+3',
+        'бонус мастерства не посчитан от общего уровня 8');
+      const pick = sheetHost.querySelector('.hit-die__pick');
+      assert(pick && !pick.hidden, 'нет выбора кости для мультикласса');
+      const options = [...pick.options].map((option) => option.value);
+      assert(options.includes('d10') && options.includes('d6'), `кости: ${options.join(', ')}`);
+      // Бросаем d6: разбор должен начинаться с неё, а не с d10.
+      pick.value = 'd6';
+      pick.dispatchEvent(new Event('change', { bubbles: true }));
+      sheetHost.querySelector('.hit-die__roll').click();
+      const detail = sheetHost.querySelector('.hit-die__detail').textContent;
+      assert(detail.startsWith('d6:'), `бросок выбрал не ту кость: ${detail}`);
+      // Возвращаем одноклассовый лист: дальше проверки ждут воина 5 уровня.
+      sheetView.setSheet(SAMPLE_SHEET);
+    });
+
     check('производные значения на листе считаются автоматически', () => {
       const derived = (key) => {
         const node = sheetHost.querySelector(`[data-derived="${key}"]`);
@@ -1367,6 +1439,53 @@
       assert.strictEqual(mapView.combatDistanceText(mapView.combatMeasure({ col: 1, row: 1 }, { col: 1, row: 1 })), 'здесь же');
     });
 
+    check('линейка измеряет расстояние и подписывает футы', () => {
+      mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
+      withRealMapSize(() => {
+        mapView.toggleMeasure();
+        assert(mapView.measureMode, 'линейка не включилась');
+        const rect = mapView.surface.getBoundingClientRect();
+        // Две клетки: 46 px картинки на клетку, подложка растянута вдвое.
+        const step = (rect.width / 400) * 46;
+        const x1 = rect.left + 40;
+        const y1 = rect.top + 40;
+        const x2 = x1 + step * 2;
+        mapView.surface.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, clientX: x1, clientY: y1
+        }));
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: x2, clientY: y1 }));
+        window.dispatchEvent(new PointerEvent('pointerup', {}));
+        assert(!mapView.measureLayer.hidden, 'линия линейки не показана');
+        const label = mapView.measureLabel.textContent;
+        assert(/10 фут/.test(label), `в подписи нет футов: ${label}`);
+        assert(/2 кл/.test(label), `в подписи нет клеток: ${label}`);
+        mapView.toggleMeasure();
+        assert(mapView.measureLayer.hidden, 'линейка не убралась');
+      });
+    });
+
+    check('мастер ставит шаблон сферы, и он остаётся на карте', () => {
+      mapView.render(bigMapState(MAP_STATE), { role: 'dm', playerId: 'dm' });
+      withRealMapSize(() => {
+        const sent = [];
+        mapView.handlers.onAddMapTemplate = (type, mapId, template) => sent.push({ type, mapId, template });
+        mapView.templateDraft = { kind: 'sphere', size: 20 };
+        const rect = mapView.surface.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        mapView.surface.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, clientX: x, clientY: y
+        }));
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: x + 80, clientY: y }));
+        window.dispatchEvent(new PointerEvent('pointerup', {}));
+        assert.strictEqual(sent.length, 1, `шаблон не ушёл на стол: ${sent.length}`);
+        assert.strictEqual(sent[0].template.kind, 'sphere');
+        assert.strictEqual(sent[0].template.size, 20);
+        assert(mapView.templateLayer.querySelector('.map-template--sphere'), 'сфера не нарисована');
+        delete mapView.handlers.onAddMapTemplate;
+      });
+    });
+
     check('в бою фишку выбирают нажатием и она перестаёт таскаться', () => {
       mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
       const node = mapHost.querySelector('[data-token-id="t1"]');
@@ -1398,7 +1517,7 @@
       assert(chatHost.textContent.includes('Готов'), 'реплика игрока пропала');
     });
 
-    check('наведение показывает клетку назначения, линию и расстояние', () => {
+    check('наведение показывает клетку назначения и расстояние', () => {
       withRealMapSize(() => {
         mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
         mapView.selectCombatToken('t1');
@@ -1418,29 +1537,20 @@
         })}`);
         assert(/\d+ шаг/.test(mapView.routeLabel.textContent), `подпись: ${mapView.routeLabel.textContent}`);
         assert(!mapView.cellMark.hidden, 'клетка назначения не подсвечена');
-        // Маршрут рисуется ломаной по центрам клеток: точек на одну больше,
-        // чем клеток пройдено, и поворачивает он ровно один раз.
-        const points = mapView.routeLine.getAttribute('points').split(' ');
-        assert(points.length >= 2, `маршрут не нарисован: ${points.length} точек`);
-        let turns = 0;
-        for (let i = 1; i < points.length - 1; i += 1) {
-          const before = points[i].split(',');
-          const current = points[i + 1].split(',');
-          if (before[0] !== current[0] && before[1] !== current[1]) turns += 1;
-        }
-        assert(turns <= 1, `маршрут поворачивает ${turns} раз, а должен один раз`);
+        // Линию маршрута убрали: она уезжала от фишки. Клетка и число шагов
+        // остаются, а линии на карте быть не должно.
+        assert(!mapView.routeLine, 'у карты всё ещё есть линия маршрута');
+        assert(!mapHost.querySelector('.map-route'), 'линия маршрута всё ещё рисуется');
         mapView.selectCombatToken(null);
       });
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
 
-    check('маршрут начинается с фишки, а не с центра её клетки', () => {
-      // Фишку ставили мышью, и она стоит внутри клетки не по центру. Линия,
-      // начавшаяся от центра клетки, выглядела так, будто маршрут выходит откуда
-      //-то рядом с фишкой.
+    check('кружок фишки стоит ровно на её координатах, а не смещён подписями', () => {
+      // Подписи и прочность лежат отдельным слоем и якорь не сдвигают. Иначе
+      // фишка встаёт не в ту клетку, куда её поставили, и клетка считается
+      // не под кружком.
       withRealMapSize(() => {
-        // Клетка 46 при карте 400x300: центр второй клетки по ширине и по
-        // высоте — это 0.2875 и 0.3458, а фишка стоит в 0.25 и 0.45.
         const off = {
           ...COMBAT_STATE,
           activeMap: 'world',
@@ -1451,25 +1561,39 @@
         };
         mapView.render(off, { role: 'dm', playerId: 'dm' });
         mapView.selectCombatToken(off.tokens[0].id);
-        const rect = mapView.surface.getBoundingClientRect();
-        mapView.surface.dispatchEvent(new PointerEvent('pointermove', new MapViewEvent(
-          rect, rect.left + ((4.5 * 46) / 400) * rect.width, rect.top + ((1.5 * 46) / 300) * rect.height
-        ).payload()));
-        const points = mapView.routeLine.getAttribute('points')
-          .split(' ')
-          .map((pair) => pair.split(',').map((value) => Number(value)));
-        assert.strictEqual(points[0][0], 250, `линия начинается не от фишки: ${JSON.stringify({
-          точки: mapView.routeLine.getAttribute('points'),
-          режим: mapView.combat.enabled,
-          выбрана: mapView.combat.tokenId,
-          фишка: mapView.combatToken() ? mapView.combatToken().id : null,
-          сетка: mapView.cellGeometry(),
-          цель: mapView.route,
-          редактор: mapView.editing
-        })}`);
-        assert.strictEqual(points[0][1], 450, `линия начинается не от фишки: y=${points[0][1]}`);
-        // Дальше путь идёт по центрам клеток, и вторая точка — центр её клетки.
-        assert.strictEqual(points[1][0], 287.5, `вторая точка не центр клетки: ${points[1][0]}`);
+        const tokenNode = mapHost.querySelector(`[data-token-id="${off.tokens[0].id}"]`);
+        const circleRect = tokenNode.querySelector('.token__circle').getBoundingClientRect();
+        const boxRect = mapView.surface.getBoundingClientRect();
+        const circleX = (circleRect.left + circleRect.width / 2 - boxRect.left) / boxRect.width;
+        const circleY = (circleRect.top + circleRect.height / 2 - boxRect.top) / boxRect.height;
+        assert(Math.abs(circleX - 0.25) < 0.02, `кружок фишки смещён по x: ${circleX}`);
+        assert(Math.abs(circleY - 0.45) < 0.02, `кружок фишки смещён по y: ${circleY}`);
+        mapView.selectCombatToken(null);
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('клетка фишки считается по нарисованному узлу, даже если координаты в снимке старые', () => {
+      // Во время хода по клеткам узел уже стоит в новой клетке, а token.x/y
+      // приходят с ответом стола позже. Шаги обязаны считаться от того места,
+      // где фишку видит человек.
+      withRealMapSize(() => {
+        const off = {
+          ...COMBAT_STATE,
+          activeMap: 'world',
+          maps: {
+            world: { items: [{ id: 'm-world', url: MAP_PNG, name: 'world.png' }], activeId: 'm-world' }
+          },
+          tokens: [{ ...MAP_STATE.tokens[0], x: 0.25, y: 0.45, conditions: [] }]
+        };
+        mapView.render(off, { role: 'dm', playerId: 'dm' });
+        mapView.selectCombatToken(off.tokens[0].id);
+        const node = mapHost.querySelector(`[data-token-id="${off.tokens[0].id}"]`);
+        node.style.left = '50%';
+        node.style.top = '60%';
+        const cell = mapView.tokenCell(off.tokens[0]);
+        assert.deepStrictEqual(cell, { col: 4, row: 3 },
+          `клетка взята не от узла: ${JSON.stringify(cell)}`);
         mapView.selectCombatToken(null);
       });
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
@@ -1602,6 +1726,14 @@
         assert(Object.keys(map.surface.cells).length === painted[0].cells.length,
           'на карте столько же клеток, сколько ушло на сервер');
         assert(!mapView.surfaceCanvas.hidden, 'слой поверхности не показан');
+        // Ластик — это пустая строка, а не null: проверка на falsy съедала его,
+        // и ластик молча ничего не делал.
+        mapView.setSurfaceTool('');
+        mapView.surface.dispatchEvent(at(2.5, 1.5));
+        mapView.surface.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        assert.strictEqual(painted.length, 2, 'стирание не ушло на сервер');
+        assert.deepStrictEqual(painted[1].cells, [[2, 1, '']], `стирание: ${JSON.stringify(painted[1].cells)}`);
+        assert(!map.surface.cells['2,1'], 'ластик не стёр клетку с карты');
         mapView.setSurfaceTool(null);
       });
       delete mapView.handlers.onPaintSurface;
@@ -1765,6 +1897,72 @@
       assert(gridHost.querySelector('.map-grid').hidden, 'сетка осталась включённой');
     });
 
+    check('сетку можно настроить прямо за столом', () => {
+      const host = document.createElement('div');
+      sandbox.appendChild(host);
+      let sent = null;
+      const view = new window.TableUI.MapView(host, { onSetGrid: (grid) => { sent = grid; } });
+      view.render({
+        ...MAP_STATE,
+        grid: { enabled: true, cell: 46, columns: 0, feetPerCell: 5, offsetX: 0, offsetY: 0 }
+      }, { role: 'dm', playerId: 'dm' });
+      const toggle = host.querySelector('.map-grid-menu__toggle');
+      assert(toggle, 'в тулбаре нет кнопки настройки сетки');
+      const menu = host.querySelector('.map-grid-menu');
+      assert(menu.hidden, 'меню сетки открыто без нажатия');
+      toggle.click();
+      assert(!menu.hidden, 'меню сетки не открылось по кнопке');
+      // Поля стоят на текущих значениях сетки, а не на пустых.
+      assert(menu.querySelector('[data-field="cell"]').value === '46', 'размер клетки не подставлен');
+      assert(menu.querySelector('[data-field="feetPerCell"]').value === '5', 'футы не подставлены');
+      // Правка числа клеток по ширине уходит на стол тем же полем, что и настройки.
+      const columns = menu.querySelector('[data-field="columns"]');
+      columns.value = '37.5';
+      columns.dispatchEvent(new Event('change', { bubbles: true }));
+      assert(sent && sent.columns === 37.5, `на стол ушло: ${JSON.stringify(sent)}`);
+      assert(sent.enabled === true, 'видимость сетки потерялась при правке');
+      toggle.click();
+      assert(menu.hidden, 'меню сетки не закрылось повторным нажатием');
+    });
+
+    check('кнопка боя показывает режим из состояния стола', () => {
+      const host = document.createElement('div');
+      sandbox.appendChild(host);
+      let requested = null;
+      const view = new window.TableUI.MapView(host, { onSetCombatMode: (value) => { requested = value; } });
+      view.render({ ...MAP_STATE, combat: { enabled: true } }, { role: 'dm', playerId: 'dm' });
+      const button = [...host.querySelectorAll('.map-toolbar button')]
+        .find((node) => node.textContent.startsWith('Бой'));
+      assert(button, 'в тулбаре нет кнопки боя');
+      assert(button.textContent.includes('вкл'), `бой идёт, а кнопка: ${button.textContent}`);
+      button.click();
+      assert(requested === false, `кнопка выключения боя запросила: ${requested}`);
+    });
+
+    check('клетка и сдвиг сетки масштабируются вместе с картой', () => {
+      // Картинка 400x300 показана как 800x600: клетка 46 px картинки должна
+      // занять 92 px экрана. Без множителя сетка рисовалась бы вдвое мельче
+      // карты, и шаги маршрута не совпадали бы с её клетками.
+      withRealMapSize(() => {
+        mapView.render({
+          ...bigMapState(MAP_STATE),
+          grid: { enabled: true, cell: 46, columns: 0, feetPerCell: 5, offsetX: 10, offsetY: 0 }
+        }, { role: 'dm', playerId: 'dm' });
+        const surface = mapView.surface;
+        assert.strictEqual(surface.style.getPropertyValue('--cell'), '92px',
+          `клетка на экране: ${surface.style.getPropertyValue('--cell')}`);
+        assert.strictEqual(surface.style.getPropertyValue('--grid-shift-x'), '20px',
+          `сдвиг на экране: ${surface.style.getPropertyValue('--grid-shift-x')}`);
+        const circle = mapHost.querySelector('[data-token-id="t1"] .token__circle');
+        assert.strictEqual(getComputedStyle(circle).width, '92px',
+          `фишка ${getComputedStyle(circle).width} при клетке 92px`);
+        const grid = mapHost.querySelector('.map-grid');
+        assert(getComputedStyle(grid).backgroundImage.includes('92px'),
+          `шаг сетки: ${getComputedStyle(grid).backgroundImage}`);
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
     /* ------------------------ несколько карт в одной вкладке */
 
     const multiHost = document.createElement('div');
@@ -1826,6 +2024,21 @@
       assert(remove, 'нет кнопки удаления карты');
       remove.click();
       assert(multiCalls.includes('delete:world:m2'), `удаление должно называть карту: ${multiCalls.join(', ')}`);
+    });
+
+    check('верхние меню карты сворачиваются, оставляя название карты', () => {
+      const toggle = multiHost.querySelector('.map-menus__toggle');
+      assert(toggle, 'нет кнопки сворачивания меню');
+      const toolbar = multiHost.querySelector('.map-toolbar');
+      const menusName = multiHost.querySelector('.map-menus__name');
+      assert(!multiHost.classList.contains('is-menus-collapsed'), 'меню свёрнуты ещё до нажатия');
+      assert(menusName.textContent.length > 0, 'в полосе не видно названия карты');
+      toggle.click();
+      assert(multiHost.classList.contains('is-menus-collapsed'), 'меню не свернулись');
+      assert(toggle.textContent.includes('Меню'), `надпись после сворачивания: ${toggle.textContent}`);
+      toggle.click();
+      assert(!multiHost.classList.contains('is-menus-collapsed'), 'меню не развернулись обратно');
+      assert(!toolbar.hidden, 'тулбар не вернулся после разворота');
     });
 
     /* ------------------------- приближение карты (личное для каждого) */
@@ -3204,14 +3417,19 @@
         .find((node) => node.querySelector('.field__label')
           && node.querySelector('.field__label').textContent === label);
       assert(field, `в листе нет поля «${label}»`);
-      const input = field.querySelector('input');
+      const input = field.querySelector('input, select, textarea');
       input.value = value;
       // Лист слушает именно input: change на текстовом поле не срабатывает.
       input.dispatchEvent(new Event('input', { bubbles: true }));
       return input;
     };
     fillField('Имя персонажа', 'Тордин');
-    fillField('Класс', 'Волшебник');
+    // Класс теперь первый в блоке «Классы»: поле ищется по data-field, а не по
+    // подписи, потому что строк класса может быть несколько.
+    const classSelect = editor.querySelector('[data-field="charClass"]');
+    assert(classSelect, 'в листе нет списка классов');
+    classSelect.value = 'Волшебник';
+    classSelect.dispatchEvent(new Event('input', { bubbles: true }));
     fillField('Раса', 'Дварф');
 
     check('правка листа сохраняет его на этом компьютере', () => {

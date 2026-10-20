@@ -199,11 +199,23 @@ async function createTableServer(options) {
 
   const broadcastMapUpdate = (type) => {
     const slot = room.maps[type];
-    io.emit('mapUpdated', {
+    // Мастеру уходит вкладка целиком: он готовит карты впрок и должен их видеть.
+    io.to('dm-sockets').emit('mapUpdated', {
       type,
       items: slot ? slot.items : [],
       activeId: slot ? slot.activeId : null,
-      activeMap: room.activeMap
+      activeMap: room.activeMap,
+      activeMapId: room.activeMapId
+    });
+    // Игроку — только показанные карты. Скрытая заготовка не должна утекать
+    // даже ссылкой на картинку: по ней он открыл бы будущую локацию.
+    const visible = room.mapSlotForViewer(type, false);
+    io.to('table').except('dm-sockets').emit('mapUpdated', {
+      type,
+      items: visible.items,
+      activeId: visible.activeId,
+      activeMap: room.activeMapId ? room.activeMap : null,
+      activeMapId: room.activeMapId
     });
   };
 
@@ -260,7 +272,10 @@ async function createTableServer(options) {
    */
   const emitToken = (event, token, payload) => {
     const data = payload || token;
-    if (token && token.hidden) {
+    // Скрытая фишка и фишка на непоказанной карте — заготовки мастера. Их
+    // положение, картинка и назначение игрокам не уходят: иначе карту они не
+    // увидят, а стоящего на ней монстра увидят.
+    if (token && !room.isTokenVisibleToPlayers(token)) {
       io.to('dm-sockets').emit(event, data);
       return;
     }
@@ -685,6 +700,10 @@ async function createTableServer(options) {
           id: newMapId(),
           url: `/files/${fileName}`,
           name: sanitizeText(payload && payload.name, MAP_NAME_MAX) || 'Карта',
+          // Новая карта — заготовка: мастер сначала готовит её, смотрит туман,
+          // расставляет фишки, и только кнопка «Показать игрокам» открывает её
+          // столу. Иначе загрузка следующей локации выдала бы сюрприз.
+          published: false,
           // Туман есть у каждой карты с момента появления: иначе свежая карта
           // отличалась бы от загруженной из кампании, а мастер нарисовал бы
           // туман поверх поля, которого в её форме нет. Так же и освещение:
@@ -699,8 +718,8 @@ async function createTableServer(options) {
           uploadedAt: new Date().toISOString()
         };
         slot.items.push(map);
+        // Мастер сразу видит новую карту, игроки — нет, пока он не покажет её.
         slot.activeId = map.id;
-        room.activeMap = type;
         markDirty();
         broadcastMapUpdate(type);
         onLog(`ДМ загрузил карту (${type}), всего в вкладке: ${slot.items.length}`);
@@ -717,9 +736,9 @@ async function createTableServer(options) {
       const slot = room.maps[type];
       const mapId = String((payload && payload.mapId) || '');
       if (!slot.items.some((item) => item.id === mapId)) return emitError(socket, 'Карта не найдена');
+      // Это выбор мастера, а не показ: игроки остаются на прежней карте, пока
+      // он не нажмёт «Показать игрокам».
       slot.activeId = mapId;
-      // Переключили карту во вкладке — её и показываем игрокам.
-      room.activeMap = type;
       markDirty();
       broadcastMapUpdate(type);
       onLog(`ДМ переключил карту (${type})`);
@@ -733,19 +752,78 @@ async function createTableServer(options) {
       const requested = payload && payload.mapId ? String(payload.mapId) : slot.activeId;
       const index = slot.items.findIndex((item) => item.id === requested);
       if (index < 0) return emitError(socket, 'Карта не найдена');
+      const wasPresented = room.activeMap === type && room.activeMapId === requested;
 
       slot.items.splice(index, 1);
       if (slot.activeId === requested) {
-        // Показываем соседнюю карту вкладки, а если их больше нет — вкладка пуста.
+        // Соседняя карта становится выбором мастера. Показывать её игрокам
+        // сразу не нужно: если это была открытая карта, будет отдельная ветка.
         const neighbour = slot.items[index] || slot.items[index - 1] || null;
         slot.activeId = neighbour ? neighbour.id : null;
       }
-      if (!slot.items.length && room.activeMap === type) {
-        room.activeMap = MAP_TYPES.find((other) => other !== type && room.maps[other].items.length) || null;
+
+      let otherType = null;
+      if (wasPresented) {
+        // Показываем только уже открытую карту: соседняя заготовка не должна
+        // попасть на стол из-за удаления, иначе подготовка снова утечёт.
+        const next = slot.items.find((item) => item.published !== false) || null;
+        if (next) {
+          slot.activeId = next.id;
+          room.activeMap = type;
+          room.activeMapId = next.id;
+        } else {
+          const fallbackType = MAP_TYPES.find((candidate) => candidate !== type
+            && room.maps[candidate].items.some((item) => item.published !== false));
+          if (fallbackType) {
+            const fallbackSlot = room.maps[fallbackType];
+            const fallback = fallbackSlot.items.find((item) => item.published !== false);
+            fallbackSlot.activeId = fallback.id;
+            room.activeMap = fallbackType;
+            room.activeMapId = fallback.id;
+            otherType = fallbackType;
+          } else {
+            room.activeMap = null;
+            room.activeMapId = null;
+          }
+        }
       }
+
       markDirty();
       broadcastMapUpdate(type);
+      if (otherType) broadcastMapUpdate(otherType);
       onLog(`ДМ удалил карту (${type}), осталось: ${slot.items.length}`);
+    });
+
+    /**
+     * Пинг по карте: «смотрите сюда».
+     *
+     * Это не объект кампании, а короткий жест. Сохранять его незачем: через
+     * пару секунд он исчезает у всех. Пинг разрешён только на карте, которую
+     * видят игроки, иначе он указывал бы в пустоту или выдавал заготовку.
+     */
+    socket.on('mapPing', (payload) => {
+      if (!requireJoined(socket)) return;
+      if (!payload || typeof payload !== 'object') return;
+      const type = String(payload.mapType || '');
+      const mapId = String(payload.mapId || '');
+      const x = Number(payload.x);
+      const y = Number(payload.y);
+      if (!MAP_TYPES.includes(type) || !mapId || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      if (room.activeMap !== type || room.activeMapId !== mapId) return;
+      // Мышь может дрожать, а палец на тачпаде — тем более. Частые пинги
+      // превращаются в мигание, поэтому один и тот же сокет не чаще 4 раз в секунду.
+      const now = Date.now();
+      if (now - (socket.data.lastPingAt || 0) < 250) return;
+      socket.data.lastPingAt = now;
+      io.to('table').emit('mapPing', {
+        mapType: type,
+        mapId,
+        x: clampNumber(x, 0, 1, 0.5),
+        y: clampNumber(y, 0, 1, 0.5),
+        playerId: socket.data.playerId,
+        name: socket.data.name,
+        role: socket.data.role
+      });
     });
 
 socket.on('setGrid', (payload) => {
@@ -769,10 +847,26 @@ socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       const type = payload && payload.type;
       if (!MAP_TYPES.includes(type)) return emitError(socket, 'Неизвестный тип карты');
-      if (!room.maps[type].items.length) return emitError(socket, 'В этой вкладке ещё нет карт');
+      const slot = room.maps[type];
+      const mapId = String((payload && payload.mapId) || slot.activeId || '');
+      const item = slot.items.find((entry) => entry.id === mapId);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const wasPublished = item.published !== false;
+      // Показ — единственное действие, которое открывает карту игрокам.
+      item.published = true;
+      slot.activeId = mapId;
       room.activeMap = type;
+      room.activeMapId = mapId;
       markDirty();
       broadcastMapUpdate(type);
+      if (!wasPublished) {
+        // На подготовленной карте могли стоять фишки. Игроки их не получали,
+        // значит, теперь нужно прислать: карта и фишки открываются вместе.
+        for (const token of room.tokens) {
+          if (token.mapType === type && token.mapId === mapId) emitToken('tokenCreated', token);
+        }
+      }
+      onLog(`ДМ показал игрокам карту (${type})`);
     });
 
     /* ------------------------------------------------------------------ *
@@ -1144,7 +1238,7 @@ socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       const token = findToken(payload && payload.tokenId);
       if (!token) return emitError(socket, 'Фишка не найдена');
-      room.setTokenConditions(token, payload && payload.conditions);
+      room.setTokenConditions(token, payload && payload.conditions, payload && payload.conditionDurations);
       markDirty();
       emitToken('tokenUpdated', token);
     });
@@ -1312,7 +1406,7 @@ socket.on('setGrid', (payload) => {
         // мастера они не знают и знать не должны.
         io.to('dm-sockets').emit('tokensUpdated', { tokens: group });
         const visible = group
-          .filter((token) => !token.hidden)
+          .filter((token) => room.isTokenVisibleToPlayers(token))
           .map((token) => room.tokenForViewer(token, false));
         if (visible.length) io.except('dm-sockets').emit('tokensUpdated', { tokens: visible });
         onLog(`Картинка «${wanted}» назначена фишкам: ${group.length} шт.`);
@@ -1382,6 +1476,39 @@ socket.on('setGrid', (payload) => {
       // Позиция меняется часто: рассылаем без истории и обновляем только это поле.
       // Заготовка мастера двигается молча: игрокам её координаты не нужны.
       emitToken('tokenMoved', token, { tokenId: token.id, x, y });
+    });
+
+    /**
+     * Перенос фишки на карту, которую видят игроки.
+     *
+     * Мастер готовит карту и фишки на ней впрок, а в нужный момент переносит
+     * участников на показанную карту. Фишка встаёт в центр: старые координаты
+     * относятся к другой картинке и на новой ничего не значат.
+     */
+    socket.on('moveTokenToActiveMap', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      if (!room.activeMap || !room.activeMapId) {
+        return emitError(socket, 'Сначала покажите карту игрокам');
+      }
+      if (!room.isMapPublished(room.activeMap, room.activeMapId)) {
+        return emitError(socket, 'Эта карта ещё не показана игрокам');
+      }
+      if (token.mapType === room.activeMap
+        && (!token.mapId || token.mapId === room.activeMapId)) {
+        return emitError(socket, 'Фишка уже на этой карте');
+      }
+      token.mapType = room.activeMap;
+      token.mapId = room.activeMapId;
+      token.x = 0.5;
+      token.y = 0.5;
+      markDirty();
+      // tokenCreated, а не tokenMoved: у игрока фишка появляется на другой
+      // карте, и одного изменения координат ему мало. Обработчик заменяет
+      // запись по id, поэтому дубля не будет.
+      emitToken('tokenCreated', token);
+      onLog(`ДМ перенёс фишку «${token.name}» на показанную карту`);
     });
 
     socket.on('deleteToken', (payload) => {
@@ -1471,8 +1598,12 @@ socket.on('setGrid', (payload) => {
 
     socket.on('initiativeTurn', (payload) => {
       if (!requireDm(socket)) return;
+      const before = room.initiative.turnId;
       if (!room.setInitiativeTurn(payload && payload.id)) {
         return emitError(socket, 'Участник боя не найден');
+      }
+      if (before !== room.initiative.turnId) {
+        for (const token of room.tickConditionsForCurrentTurn()) emitToken('tokenUpdated', token);
       }
       markDirty();
       emitInitiative();
@@ -1483,6 +1614,7 @@ socket.on('setGrid', (payload) => {
       if (!room.stepInitiativeTurn(Number(payload && payload.dir))) {
         return emitError(socket, 'Список боя пуст');
       }
+      for (const token of room.tickConditionsForCurrentTurn()) emitToken('tokenUpdated', token);
       markDirty();
       emitInitiative();
     });

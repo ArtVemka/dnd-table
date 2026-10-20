@@ -195,9 +195,11 @@
    * @param {object[]} players список участников стола
    * @param {object} handlers те же обработчики, что и у панели
    * @param {Function} close закрыть меню перед действием
+   * @param {{activeMap?: string|null, activeMapId?: string|null, canTransfer?: boolean}} [options]
+   *   карта, которую видят игроки: нужна для переноса фишки
    * @returns {HTMLElement}
    */
-  function buildTokenMenu(token, players, handlers, close) {
+  function buildTokenMenu(token, players, handlers, close, options = {}) {
     const menu = el('div', 'token-menu');
 
     const rename = el('button', 'token-menu__item', 'Переименовать');
@@ -266,6 +268,24 @@
     });
     assign.appendChild(select);
     menu.appendChild(assign);
+
+    // Перенос на показанную карту: заготовку можно ставить на любую вкладку,
+    // а в момент сцены перевести на ту, которую уже видят игроки.
+    if (options.canTransfer && options.activeMapId) {
+      const onActive = token.mapType === options.activeMap
+        && (!token.mapId || token.mapId === options.activeMapId);
+      const transfer = el('button', 'token-menu__item', 'На карту игроков');
+      transfer.type = 'button';
+      transfer.disabled = onActive;
+      transfer.title = onActive
+        ? 'Фишка уже на карте, которую видят игроки'
+        : 'Перенести фишку в центр карты, которую видят игроки';
+      transfer.addEventListener('click', () => {
+        close();
+        if (handlers.onMoveTokenToActive) handlers.onMoveTokenToActive(token.id);
+      });
+      menu.appendChild(transfer);
+    }
 
     const visibility = el('button', 'token-menu__item',
       token.hidden ? 'Показать игрокам' : 'Скрыть от игроков');
@@ -924,12 +944,19 @@
       this.myPlayerId = null;
       this.maps = { world: null, battle: null, sketch: null };
       this.activeMap = null;
+      // Карта, которую видят игроки. Может отличаться от activeId выбранной
+      // вкладки: мастер листает заготовки, не показывая их столу.
+      this.activeMapId = null;
       this.previousActiveMap = null;
       this.viewedMap = null;
       this.playerPeek = null;
       this.tokens = [];
       this.players = [];
       this.grid = { enabled: false, cell: DnD.GRID.defaultCell };
+      // Что уже нарисовано в слое фишек: те же объекты и та же подпись
+      // означают, что пересобирать DOM не нужно.
+      this.renderedTokens = null;
+      this.tokenSignature = null;
       this.editing = false;
       this.editor = null;
       /** Приближение карты — личное для каждого клиента, у других не меняется. */
@@ -988,6 +1015,9 @@
       this.measureMode = false;
       this.measureStart = null;
       this.measureEnd = null;
+      /** Пинг: включён ли режим и таймеры уже показанных меток. */
+      this.pingMode = false;
+      this.pingTimers = new Set();
       /** Выбранный шаблон для постановки и его предпросмотр при протяжке. */
       this.templateDraft = null;
       this.templatePreview = null;
@@ -1318,6 +1348,13 @@
       surface.appendChild(this.fogCanvas);
       this.fogContext = this.fogCanvas.getContext('2d');
 
+      // Пинги лежат выше тумана: это не часть карты, а короткий жест «сюда».
+      // Слой внутри surface, поэтому метка едет вместе с приближением.
+      const pingLayer = el('div', 'map-pings');
+      pingLayer.setAttribute('aria-hidden', 'true');
+      surface.appendChild(pingLayer);
+      this.pingLayer = pingLayer;
+
       const empty = el('div', 'map-empty');
       // Водяной знак: гранёный куб. Он же и герб игры, и подсказка, что
       // стол пуст и ждёт карту. Цвет берётся из currentColor, поэтому знак
@@ -1338,6 +1375,43 @@
 
       stage.appendChild(surface);
       stage.appendChild(empty);
+
+      // Тематический орнамент висит на верхней кромке карты. Он один на стол,
+      // поэтому кнопки остаются спокойными. Позиция курсора уходит в CSS:
+      // лоза тянется в сторону мыши, но сама по себе не качается.
+      const decor = el('div', 'map-decor');
+      decor.setAttribute('aria-hidden', 'true');
+      const strand = el('span', 'map-decor__strand');
+      strand.appendChild(el('span', 'map-decor__mark'));
+      decor.appendChild(strand);
+      this.decor = decor;
+      stage.appendChild(decor);
+
+      // Кромка карты не меняется на каждом движении мыши, поэтому меряем её
+      // один раз и обновляем после изменения размера. Иначе pointermove
+      // заставлял бы браузер считать геометрию на каждое событие.
+      let decorRect = null;
+      const refreshDecorRect = () => {
+        decorRect = stage.getBoundingClientRect();
+      };
+      if (typeof ResizeObserver === 'function') {
+        const observer = new ResizeObserver(refreshDecorRect);
+        observer.observe(stage);
+        this.decorRectObserver = observer;
+      } else {
+        window.addEventListener('resize', refreshDecorRect, { passive: true });
+      }
+      stage.addEventListener('pointerenter', refreshDecorRect, { passive: true });
+      stage.addEventListener('pointermove', (event) => {
+        if (!decorRect || !decorRect.width || !decorRect.height) refreshDecorRect();
+        if (!decorRect || !decorRect.width || !decorRect.height) return;
+        const x = Math.max(0, Math.min(1, (event.clientX - decorRect.left) / decorRect.width));
+        decor.style.setProperty('--pointer-x', x.toFixed(3));
+      }, { passive: true });
+      stage.addEventListener('pointerleave', () => {
+        decorRect = null;
+        decor.style.setProperty('--pointer-x', '0.5');
+      }, { passive: true });
 
       // Холст для рисования карты: появляется вместо карты, когда ДМ рисует.
       const editorHost = el('div', 'sketch-editor');
@@ -1394,6 +1468,30 @@
       zoomBar.appendChild(zoomIn);
       zoomBar.appendChild(zoomReset);
       zoomBar.appendChild(measureButton);
+
+      // Пинг нужен и игроку: «смотрите сюда» за столом звучит чаще, чем
+      // «померим расстояние». Кнопка включает режим, Alt+клик работает без него.
+      const pingButton = el('button', 'map-zoom__btn map-zoom__btn--ping');
+      pingButton.type = 'button';
+      pingButton.title = 'Пинг по карте (Alt+клик)';
+      const pingIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      pingIcon.setAttribute('viewBox', '0 0 16 16');
+      pingIcon.setAttribute('class', 'map-zoom__icon');
+      pingIcon.setAttribute('aria-hidden', 'true');
+      for (const radius of [2.4, 5.4]) {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', '8');
+        circle.setAttribute('cy', '8');
+        circle.setAttribute('r', String(radius));
+        pingIcon.appendChild(circle);
+      }
+      pingButton.appendChild(pingIcon);
+      pingButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.togglePing();
+      });
+      this.pingButton = pingButton;
+      zoomBar.appendChild(pingButton);
       stage.appendChild(zoomBar);
 
       stage.addEventListener('pointerdown', (event) => this.startPan(event));
@@ -1482,9 +1580,33 @@
         window.addEventListener('pointerup', up);
       });
 
+      // Пинг забирает нажатие раньше панорамирования и фишек: иначе Alt+клик
+      // по фишке начинал бы её тащить, а не показывал точку. В режиме кистей
+      // Alt не перехватывается, чтобы не мешать туману, свету и стенам.
+      stage.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || this.editing) return;
+        if (!(event.target instanceof Element)) return;
+        if (event.target.closest('.map-zoom, .map-badge, .map-decor')) return;
+        const masterTool = this.fogMode || this.surfaceTool !== null || this.drawMode
+          || this.measureMode || this.templateDraft;
+        const wantPing = this.pingMode || (event.altKey && !masterTool);
+        if (!wantPing) return;
+        if (!this.canPing()) {
+          if (this.pingMode && this.handlers.onNotice) {
+            this.handlers.onNotice('Пинг доступен на карте, которую видят игроки');
+          }
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        this.pingAt(event);
+      }, true);
+
       // Esc гасит линейку: после замера хочется сразу двигать фишки.
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && this.measureMode) this.toggleMeasure();
+        if (event.key !== 'Escape') return;
+        if (this.pingMode) this.setPingMode(false);
+        if (this.measureMode) this.toggleMeasure();
       });
 
       // Кисть тумана живёт на самой подложке: в режиме тумана указатель
@@ -2804,6 +2926,7 @@
       }
       this.previousActiveMap = this.activeMap;
       this.activeMap = source.activeMap || null;
+      this.activeMapId = source.activeMapId || null;
       this.tokens = source.tokens || [];
       this.players = source.players || [];
       if (source.grid && typeof source.grid === 'object') {
@@ -2871,7 +2994,9 @@
       // При смене карты сдвиг вида сбрасываем: иначе новая карта открывается
       // сдвинутой в сторону. Приближение остаётся — оно личное дело каждого.
       if (this.viewedMap !== previousViewed) this.pan = { x: 0, y: 0 };
+      const previousMapId = this.currentMapId;
       this.currentMapId = (this.mapOf(this.viewedMap) || {}).id || null;
+      if (this.viewedMap !== previousViewed || this.currentMapId !== previousMapId) this.clearPings();
 
       if (this.editing) {
         this.badge.hidden = true;
@@ -2884,6 +3009,56 @@
 
       this.renderToolbar();
       this.renderBody();
+      this.updatePingAvailability();
+    }
+
+    /**
+     * Обновляет только фишки, не трогая карту, сетку и слои.
+     *
+     * Сервер присылает tokenCreated/tokenUpdated/tokenHidden на каждое
+     * изменение фишки, и полная перерисовка карты тут не нужна: подложка,
+     * туман, свет и стены не менялись. Это заметно на больших картах, где
+     * paintFog и paintLight пересобирают холсты.
+     * @param {object} [state] снимок состояния стола
+     * @param {{role: string, playerId: string}} [ctx]
+     */
+    refreshTokens(state, ctx) {
+      if (state) this.lastState = state;
+      if (ctx) this.lastCtx = ctx;
+      const source = this.lastState || {};
+      const context = this.lastCtx || {};
+
+      this.role = context.role || this.role;
+      this.myPlayerId = context.playerId || this.myPlayerId;
+      this.training = Boolean(context.training);
+      this.tokens = source.tokens || [];
+      this.players = source.players || [];
+      this.renderTokens();
+      this.updatePingAvailability();
+    }
+
+    /**
+     * Переключает режим боя без перерисовки карты и остальных панелей.
+     * Меняются только кнопка в панели карты и поведение фишек.
+     * @param {object} [state] снимок состояния стола
+     * @param {{role: string, playerId: string}} [ctx]
+     */
+    refreshCombat(state, ctx) {
+      if (state) this.lastState = state;
+      if (ctx) this.lastCtx = ctx;
+      const source = this.lastState || {};
+      const context = this.lastCtx || {};
+
+      this.role = context.role || this.role;
+      this.myPlayerId = context.playerId || this.myPlayerId;
+      const enabled = Boolean(source.combat && source.combat.enabled);
+      if (enabled !== this.combat.enabled) {
+        this.combat.enabled = enabled;
+        if (!enabled) this.combat.tokenId = null;
+        if (this.dragState && !this.dragState.walk) this.dragState = null;
+      }
+      this.renderToolbar();
+      this.renderTokens();
     }
 
     /** Применяет настройки сетки стола к карте. */
@@ -3215,6 +3390,105 @@
       this.measureStart = null;
       this.measureEnd = null;
       if (this.measureLayer) this.measureLayer.hidden = true;
+    }
+
+    /**
+     * Можно ли пинговать: только на карте, которую сейчас видят игроки.
+     *
+     * Пинг на скрытой заготовке не показал бы ничего, кроме её существования.
+     * В тренировочном столе других участников нет, поэтому кнопка выключена.
+     * @returns {boolean}
+     */
+    canPing() {
+      return Boolean(
+        !this.training
+        && this.currentMapId
+        && this.activeMap
+        && this.activeMap === this.viewedMap
+        && this.activeMapId === this.currentMapId
+      );
+    }
+
+    /** Включает и выключает режим пинга. */
+    togglePing() {
+      if (!this.canPing()) {
+        if (this.handlers.onNotice) {
+          this.handlers.onNotice('Пинг доступен на карте, которую видят игроки');
+        }
+        return;
+      }
+      if (!this.pingMode && this.measureMode) this.toggleMeasure();
+      this.setPingMode(!this.pingMode);
+    }
+
+    /** @param {boolean} value */
+    setPingMode(value) {
+      this.pingMode = Boolean(value) && this.canPing();
+      if (this.surface) this.surface.classList.toggle('is-pinging', this.pingMode);
+      if (this.pingButton) {
+        this.pingButton.classList.toggle('is-on', this.pingMode);
+        this.pingButton.setAttribute('aria-pressed', this.pingMode ? 'true' : 'false');
+        this.pingButton.title = this.pingMode
+          ? 'Пинг включён: нажмите на карту'
+          : 'Пинг по карте (Alt+клик)';
+      }
+    }
+
+    /** Обновляет доступность кнопки пинга при смене карты. */
+    updatePingAvailability() {
+      if (!this.pingButton) return;
+      const can = this.canPing();
+      this.pingButton.disabled = !can;
+      this.pingButton.title = can
+        ? (this.pingMode ? 'Пинг включён: нажмите на карту' : 'Пинг по карте (Alt+клик)')
+        : 'Пинг доступен на карте, которую видят игроки';
+      if (!can && this.pingMode) this.setPingMode(false);
+    }
+
+    /** Отправляет пинг в точке, где нажали. @param {PointerEvent} event */
+    pingAt(event) {
+      if (!this.canPing() || !this.handlers.onPing) return;
+      const rect = this.surface.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      if (event.clientX < rect.left || event.clientX > rect.right
+        || event.clientY < rect.top || event.clientY > rect.bottom) return;
+      const point = this.mapPoint(event);
+      this.handlers.onPing(this.viewedMap, this.currentMapId, point.x, point.y);
+    }
+
+    /**
+     * Показывает пинг, пришедший с сервера. Метка живёт пару секунд и
+     * исчезает сама, в кампанию не попадает.
+     * @param {{mapType: string, mapId: string, x: number, y: number, name?: string, role?: string}} ping
+     */
+    showPing(ping) {
+      if (!ping || !this.pingLayer) return;
+      if (ping.mapType !== this.viewedMap || ping.mapId !== this.currentMapId) return;
+      const x = Math.max(0, Math.min(1, Number(ping.x)));
+      const y = Math.max(0, Math.min(1, Number(ping.y)));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const node = el('div', 'map-ping');
+      node.classList.toggle('map-ping--dm', ping.role === 'dm');
+      node.style.left = `${x * 100}%`;
+      node.style.top = `${y * 100}%`;
+      node.appendChild(el('span', 'map-ping__ring'));
+      node.appendChild(el('span', 'map-ping__dot'));
+      const name = el('span', 'map-ping__name');
+      name.textContent = ping.name || (ping.role === 'dm' ? 'Мастер' : 'Игрок');
+      node.appendChild(name);
+      this.pingLayer.appendChild(node);
+      const timer = setTimeout(() => {
+        node.remove();
+        this.pingTimers.delete(timer);
+      }, 2400);
+      this.pingTimers.add(timer);
+    }
+
+    /** Убирает все пинги, например при переходе на другую карту. */
+    clearPings() {
+      for (const timer of this.pingTimers) clearTimeout(timer);
+      this.pingTimers.clear();
+      if (this.pingLayer) this.pingLayer.replaceChildren();
     }
 
     /** Рисует линию линейки и подпись с футами по сетке. */
@@ -3556,6 +3830,7 @@
       this.editing = true;
       this.surface.hidden = true;
       this.empty.hidden = true;
+      if (this.decor) this.decor.hidden = true;
       this.editorHost.hidden = false;
       this.renderToolbar();
 
@@ -3576,6 +3851,7 @@
     closeEditor() {
       if (!this.editing) return;
       this.editing = false;
+      if (this.decor) this.decor.hidden = false;
       this.editorHost.hidden = true;
       this.renderToolbar();
       this.renderBody();
@@ -3648,7 +3924,10 @@
 
         const list = el('select', 'select map-toolbar__list');
         for (const item of slot.items) {
-          const option = el('option', null, item.name || 'Карта');
+          // Мастеру видно, какая из карт вкладки уже стоит перед игроками,
+          // а какая ещё заготовка.
+          const mark = item.id === this.activeMapId ? ' · показана' : '';
+          const option = el('option', null, `${item.name || 'Карта'}${mark}`);
           option.value = item.id;
           option.selected = item.id === (map && map.id);
           list.appendChild(option);
@@ -3757,11 +4036,16 @@
       }
 
       if (map && this.role === 'dm') {
-        const activate = el('button', 'btn btn--ghost', this.activeMap === this.viewedMap ? '● Показана игрокам' : 'Показать игрокам');
+        const shown = this.activeMap === this.viewedMap && this.activeMapId === map.id;
+        const activate = el('button', 'btn btn--ghost',
+          shown ? '● Показана игрокам' : 'Показать игрокам');
         activate.type = 'button';
-        activate.disabled = this.activeMap === this.viewedMap;
+        activate.disabled = shown;
+        activate.title = shown
+          ? 'Эту карту сейчас видят игроки'
+          : 'Показать эту карту всем игрокам';
         activate.addEventListener('click', () => {
-          if (this.handlers.onSetActive) this.handlers.onSetActive(this.viewedMap);
+          if (this.handlers.onSetActive) this.handlers.onSetActive(this.viewedMap, map.id);
         });
         this.toolbar.appendChild(activate);
 
@@ -3790,6 +4074,8 @@
           ? 'Рисунок пока пуст: нажмите «Нарисовать карту» или загрузите изображение'
           : 'Карта ещё не загружена ДМ';
         this.tokenLayer.innerHTML = '';
+        this.renderedTokens = null;
+        this.tokenSignature = null;
         // Пустая карта: слои света и стен гасим явно, иначе они остались бы
         // висеть от прошлой карты, пока новая грузится.
         this.paintLight(null);
@@ -3822,6 +4108,48 @@
       this.paintTemplates(map);
     }
 
+    /**
+     * Подпись всего, что влияет на вид слоя фишек.
+     *
+     * Сравниваем не только данные фишек, но и ссылки на объекты: если сервер
+     * прислал новую фишку с теми же полями, обработчики на старом узле не
+     * должны остаться с устаревшим объектом.
+     * @param {object[]} tokens
+     * @param {string} activeMapId
+     * @returns {string}
+     */
+    tokenSignatureFor(tokens, activeMapId) {
+      const parts = [
+        this.role || '',
+        this.myPlayerId || '',
+        this.training ? 1 : 0,
+        this.viewedMap || '',
+        activeMapId,
+        this.combat.enabled ? 1 : 0,
+        this.combat.tokenId || ''
+      ];
+      for (const token of tokens) {
+        parts.push(
+          token.id,
+          token.x,
+          token.y,
+          token.name || '',
+          token.nameHidden ? 1 : 0,
+          token.hideLabels ? 1 : 0,
+          token.imageUrl || '',
+          token.color || '',
+          token.maxHp || 0,
+          token.hp === undefined ? '' : token.hp,
+          token.assignedPlayerId || '',
+          token.hidden ? 1 : 0,
+          (token.conditions || []).join(','),
+          token.conditionDurations ? JSON.stringify(token.conditionDurations) : ''
+        );
+      }
+      for (const player of this.players) parts.push(player.playerId, player.name || '');
+      return JSON.stringify(parts);
+    }
+
     renderTokens() {
       // Во время перетаскивания фишки слой не трогаем: иначе очистка снесла бы
       // ту самую фишку, которую сейчас тащат.
@@ -3847,13 +4175,29 @@
         if (token.hidden && this.role !== 'dm') return false;
         return token.mapType === type && (!token.mapId || !activeMapId || token.mapId === activeMapId);
       });
-      this.tokenLayer.innerHTML = '';
-
+      // Пересборка слоя сбрасывает выделение и заново вешает обработчики на
+      // каждую фишку. Если с прошлого раза не изменилось ни одного видимого
+      // поля, достаточно перерисовать маршрут.
+      const sameObjects = this.renderedTokens
+        && this.renderedTokens.length === tokens.length
+        && tokens.every((token, index) => token === this.renderedTokens[index]);
+      const signature = this.tokenSignatureFor(tokens, activeMapId);
+      if (sameObjects && signature === this.tokenSignature) {
+        this.paintRoute();
+        return;
+      }
+      this.renderedTokens = tokens.slice();
+      this.tokenSignature = signature;
+      // Собираем слой одной вставкой: appendChild в цикле заставляет браузер
+      // пересчитывать раскладку после каждой фишки, а на большой карте их
+      // бывает несколько десятков.
+      const fragment = document.createDocumentFragment();
       for (const token of tokens) {
         const node = this.buildToken(token);
         if (token.id === this.combat.tokenId) node.classList.add('token--combat');
-        this.tokenLayer.appendChild(node);
+        fragment.appendChild(node);
       }
+      this.tokenLayer.replaceChildren(fragment);
       // Выбранная фишка могла исчезнуть: её удалили, скрыли или перевели на
       // другую карту. Тогда маршрут был бы от фишки, которой на карте нет.
       if (this.combat.tokenId && !tokens.some((token) => token.id === this.combat.tokenId)) {
@@ -3945,16 +4289,24 @@
       // Состояния под фишкой видны всем: по ним и ориентируются, кого бить
       // можно, а кого нельзя.
       const conditions = Array.isArray(token.conditions) ? token.conditions : [];
+      const durations = token.conditionDurations && typeof token.conditionDurations === 'object'
+        ? token.conditionDurations
+        : {};
+      const conditionText = (id) => {
+        const item = DnD.CONDITIONS.find((entry) => entry.id === id);
+        const label = (item && item.label) || id;
+        const rounds = Number(durations[id]) || 0;
+        return rounds > 0 ? `${label}, ${rounds} р.` : label;
+      };
       if (conditions.length && !token.hideLabels) {
         const badges = el('div', 'token__conditions');
         for (const id of conditions) {
           const item = DnD.CONDITIONS.find((entry) => entry.id === id);
           if (!item) continue;
-          badges.appendChild(el('span', 'token__condition', item.short));
+          const rounds = Number(durations[id]) || 0;
+          badges.appendChild(el('span', 'token__condition', rounds > 0 ? `${item.short} ${rounds}` : item.short));
         }
-        badges.title = conditions
-          .map((id) => (DnD.CONDITIONS.find((entry) => entry.id === id) || {}).label || id)
-          .join(', ');
+        badges.title = conditions.map(conditionText).join(', ');
         info.appendChild(badges);
       }
       // Рисунок состояния рисуется независимо от подписей: лоза под фишкой и
@@ -3971,9 +4323,7 @@
         for (const effect of effects) {
           body.appendChild(el('div', `token__fx token__fx--${effect}`));
         }
-        node.title = conditions
-          .map((id) => (DnD.CONDITIONS.find((entry) => entry.id === id) || {}).label || id)
-          .join(', ');
+        node.title = conditions.map(conditionText).join(', ');
       }
       // Невидимую фишку видно только мастеру и полупрозрачно: так её не спутать
       // со снятой картинкой.
@@ -4040,7 +4390,11 @@
 
     showTokenMenu(token, clientX, clientY) {
       placeTokenMenu(
-        buildTokenMenu(token, this.players, this.handlers, () => this.closeMenu()),
+        buildTokenMenu(token, this.players, this.handlers, () => this.closeMenu(), {
+          activeMap: this.activeMap,
+          activeMapId: this.activeMapId,
+          canTransfer: this.role === 'dm'
+        }),
         clientX,
         clientY,
         this
@@ -4506,15 +4860,25 @@
      *   историей, и иначе подсветка молча пропала бы после переподключения.
      */
     renderAll(history, query) {
-      this.log.innerHTML = '';
-      for (const message of history) this.append(message, false);
+      // Собираем ленту в фрагмент и вставляем один раз: appendChild в цикле
+      // заставляет браузер пересчитывать раскладку на каждую строку. Заодно
+      // не гоняем поиск по всей ленте после каждого сообщения.
+      const fragment = document.createDocumentFragment();
+      for (const message of history) this.append(message, false, fragment);
+      this.log.replaceChildren(fragment);
+      while (this.log.childElementCount > 300) this.log.removeChild(this.log.firstChild);
       if (this.searchInput && query !== undefined) this.searchInput.value = query;
       this.setQuery(query !== undefined ? query : (this.searchInput ? this.searchInput.value : ''));
       this.scrollToEnd();
     }
 
-    /** @param {object} message */
-    append(message, scroll = true) {
+    /**
+     * @param {object} message
+     * @param {boolean} [scroll] прокрутить ленту к новому сообщению
+     * @param {Node} [parent] куда вставлять строку; при перерисовке это
+     *   фрагмент, а не живая лента
+     */
+    append(message, scroll = true, parent = this.log) {
       const row = el('div', 'chat__msg');
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
       if (message.isRoll) row.classList.add('chat__msg--roll');
@@ -4523,8 +4887,8 @@
       if (message.system) {
         const system = el('div', 'chat__msg chat__msg--system');
         system.appendChild(el('div', 'chat__system', message.text));
-        this.log.appendChild(system);
-        if (scroll) this.scrollToEnd();
+        parent.appendChild(system);
+        if (parent === this.log && scroll) this.scrollToEnd();
         return;
       }
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
@@ -4542,7 +4906,8 @@
       head.appendChild(el('span', 'chat__time', formatTime(message.time)));
       row.appendChild(head);
       row.appendChild(el('div', 'chat__text', message.isRoll ? `🎲 ${message.text}` : message.text));
-      this.log.appendChild(row);
+      parent.appendChild(row);
+      if (parent !== this.log) return;
       if (this.log.childElementCount > 300) this.log.removeChild(this.log.firstChild);
       // Новое сообщение должно попасть под текущий запрос: чат идёт во время
       // поиска, и иначе находка молча переставала бы совпадать с лентой.
@@ -4563,6 +4928,14 @@
     constructor(root, handlers = {}) {
       this.root = root;
       this.handlers = handlers;
+      this.rolling = false;
+      this.pendingResult = null;
+      this.rollTimer = null;
+      this.rollWatchdog = null;
+      this.rollStartedAt = 0;
+      // Минимум, на который плашка задерживает результат: иначе ответ сервера
+      // приходит раньше, чем глаз успевает заметить бросок.
+      this.minRollMs = 560;
       this.build();
     }
 
@@ -4673,6 +5046,7 @@
       // нажатием.
       if (this.input && !options.keepFormula) this.input.value = '';
       this.showHint('');
+      this.startRolling(parsed.normalized);
       if (this.handlers.onRoll) {
         this.handlers.onRoll(parsed.normalized, {
           hidden: this.canRollHidden() && Boolean(this.hiddenBox && this.hiddenBox.checked)
@@ -4700,13 +5074,16 @@
       if (!this.hint) return;
       this.hint.textContent = text || '';
       this.hint.classList.toggle('is-error', Boolean(text));
+      if (text && this.rolling) this.finishRolling();
     }
 
     /** @param {object[]} history */
     renderAll(history) {
       this.updateHiddenAvailability();
-      this.history.innerHTML = '';
-      for (const roll of history) this.appendRow(roll);
+      const fragment = document.createDocumentFragment();
+      for (const roll of history) this.appendRow(roll, fragment);
+      this.history.replaceChildren(fragment);
+      while (this.history.childElementCount > 200) this.history.removeChild(this.history.firstChild);
       this.scrollToEnd();
     }
 
@@ -4746,7 +5123,70 @@
     append(roll) {
       this.appendRow(roll);
       this.scrollToEnd();
+      // Пока кость крутится, результат ждёт своей очереди: плашка не должна
+      // мигнуть числом раньше, чем закончится бросок.
+      if (this.rolling) {
+        this.pendingResult = roll;
+        if (Date.now() - this.rollStartedAt >= this.minRollMs) this.finishRolling();
+        return;
+      }
+      this.showLast(roll);
+    }
+
+    /**
+     * Начинает анимацию броска. Плашка показывает формулу и крутящуюся кость,
+     * а прежний результат убирает: иначе было бы непонятно, что бросок идёт.
+     * @param {string} formula
+     */
+    startRolling(formula) {
+      if (!this.last) return;
+      this.rolling = true;
+      this.pendingResult = null;
+      this.rollStartedAt = Date.now();
+      clearTimeout(this.rollTimer);
+      clearTimeout(this.rollWatchdog);
       this.last.hidden = false;
+      this.last.classList.remove('is-rolling');
+      this.last.classList.add('is-tumbling');
+      this.last.innerHTML = '';
+      this.last.appendChild(el('span', 'dice__last-text', `Бросаем ${formula}…`));
+      const tumbler = el('span', 'dice__tumbler');
+      tumbler.appendChild(el('span', 'dice__tumbler-die', 'd20'));
+      this.last.appendChild(tumbler);
+      // Перезапуск анимации: без перечитывания класса она не начнётся снова.
+      void this.last.offsetWidth;
+      this.rollTimer = setTimeout(() => this.finishRolling(), this.minRollMs);
+      // Если ответа нет вовсе, «Бросаем…» не должно висеть вечно.
+      this.rollWatchdog = setTimeout(() => this.finishRolling(), 4000);
+    }
+
+    /** Завершает анимацию и показывает последний пришедший результат. */
+    finishRolling() {
+      clearTimeout(this.rollTimer);
+      clearTimeout(this.rollWatchdog);
+      this.rollTimer = null;
+      this.rollWatchdog = null;
+      if (!this.last) return;
+      this.rolling = false;
+      this.last.classList.remove('is-tumbling');
+      const roll = this.pendingResult;
+      this.pendingResult = null;
+      if (roll) {
+        this.showLast(roll);
+      } else if (!this.last.querySelector('.dice__last-value')) {
+        // Бросок отклонён или ответ не пришёл: пустая плашка не нужна.
+        this.last.hidden = true;
+        this.last.innerHTML = '';
+      }
+    }
+
+    /**
+     * Показывает результат броска и запускает посадку кости.
+     * @param {object} roll
+     */
+    showLast(roll) {
+      this.last.hidden = false;
+      this.last.classList.remove('is-tumbling');
       this.last.innerHTML = '';
       this.last.appendChild(el('span', 'dice__last-text', `${roll.playerName} бросил ${this.rollLabel(roll)}:`));
       const known = this.showsResult(roll);
@@ -4763,19 +5203,26 @@
       setTimeout(() => this.last.classList.remove('is-rolling'), 700);
     }
 
-    appendRow(roll) {
+    /**
+     * @param {object} roll
+     * @param {Node} [parent] куда вставлять строку; при перерисовке это
+     *   фрагмент, а не живая история
+     */
+    appendRow(roll, parent = this.history) {
       const row = el('div', 'dice__row');
       row.appendChild(el('span', 'dice__row-name', roll.playerName));
       const known = this.showsResult(roll);
       const label = el('span', 'dice__row-die', this.rollLabel(roll));
-      // Отсутствие числа, а не флаг hidden: иначе мастер не видел бы числа
-      // собственного тайного броска.
+      // Скрытость результата, а не флаг hidden: поле показывается по той же
+      // причине, по которой скрыт результат.
       if (!known) label.classList.add('is-secret');
       row.appendChild(label);
       row.appendChild(el('span', 'dice__row-result', known ? String(roll.result) : '?'));
       row.appendChild(el('span', 'dice__row-time', formatTime(roll.time)));
-      this.history.appendChild(row);
-      if (this.history.childElementCount > 200) this.history.removeChild(this.history.firstChild);
+      parent.appendChild(row);
+      if (parent === this.history && this.history.childElementCount > 200) {
+        this.history.removeChild(this.history.firstChild);
+      }
     }
 
     scrollToEnd() {
@@ -5165,9 +5612,13 @@
     constructor(root, handlers = {}) {
       this.root = root;
       this.handlers = handlers;
-      /** Поиск и фильтры живут в панели, а не в контроллере: ими пользуется
-       *  только мастер и только здесь, а в снимок состояния они попадать не
-       *  должны. Пустая строка означает «все фишки». */
+      // Карта, которую видят игроки: список фишек открывает то же меню, что и
+      // карта, и перенос из него должен вести туда же.
+      this.activeMapInfo = handlers.activeMapInfo || (() => ({}));
+      this.isDm = false;
+      /** Фишки в текущем списке, а не в кампании: фильтр и поиск
+       *  только по ним, и снизу видно, сколько всего показано из
+       *  найденного. Здесь же хранится <выбранная>. */
       this.query = '';
       this.filter = 'all';
       this.tokens = [];
@@ -5336,6 +5787,7 @@
     render(tokens, players, ctx) {
       const training = Boolean(ctx.training);
       const isDm = ctx.role === 'dm';
+      this.isDm = isDm;
       this.tokens = tokens || [];
       this.players = players || [];
       this.searchBox.hidden = !(isDm && this.tokens.length > 3);
@@ -5520,8 +5972,13 @@
     }
 
     showTokenMenu(token, clientX, clientY) {
+      const info = this.activeMapInfo() || {};
       placeTokenMenu(
-        buildTokenMenu(token, this.players, this.handlers, () => this.closeMenu()),
+        buildTokenMenu(token, this.players, this.handlers, () => this.closeMenu(), {
+          activeMap: info.activeMap,
+          activeMapId: info.activeMapId,
+          canTransfer: this.isDm
+        }),
         clientX,
         clientY,
         this
@@ -5611,22 +6068,75 @@
       // Текущий выбор живёт здесь, а не перечитывается из фишки: пока сервер не
       // ответил и панель не перерисовалась, второй клик обязан видеть первый.
       const selected = new Set(active);
+      const durations = {};
+      if (token.conditionDurations && typeof token.conditionDurations === 'object') {
+        for (const id of active) {
+          const rounds = DnD.clampNumber(token.conditionDurations[id], 0, 99, 0);
+          if (rounds > 0) durations[id] = rounds;
+        }
+      }
       const box = el('div', 'token-conditions');
-      const names = active
-        .map((id) => (DnD.CONDITIONS.find((item) => item.id === id) || {}).label || id)
-        .join(', ');
-
       const head = el('button', 'token-conditions__head');
       head.type = 'button';
-      head.classList.toggle('is-empty', !names);
-      head.textContent = names || 'состояния';
-      head.title = names ? `Состояния: ${names}` : 'Задать состояния';
       head.addEventListener('click', () => {
         box.classList.toggle('is-open');
       });
+
+      const syncHead = () => {
+        const names = [...selected]
+          .map((id) => DnD.CONDITIONS.find((item) => item.id === id))
+          .filter(Boolean)
+          .map((item) => {
+            const rounds = Number(durations[item.id]) || 0;
+            return rounds > 0 ? `${item.label} · ${rounds} р.` : item.label;
+          })
+          .join(', ');
+        head.classList.toggle('is-empty', !names);
+        head.textContent = names || 'состояния';
+        head.title = names ? `Состояния: ${names}` : 'Задать состояния';
+      };
+      syncHead();
       box.appendChild(head);
 
+      const body = el('div', 'token-conditions__body');
       const grid = el('div', 'token-conditions__grid');
+      const send = () => {
+        if (this.handlers.onSetTokenConditions) {
+          this.handlers.onSetTokenConditions(token.id, [...selected], { ...durations });
+        }
+      };
+
+      const durationBox = el('div', 'token-conditions__durations');
+      const renderDurations = () => {
+        durationBox.replaceChildren();
+        const items = [...selected]
+          .map((id) => DnD.CONDITIONS.find((item) => item.id === id))
+          .filter(Boolean);
+        durationBox.hidden = !items.length;
+        for (const item of items) {
+          const row = el('label', 'token-conditions__rounds');
+          row.appendChild(el('span', 'token-conditions__rounds-name', item.label));
+          const input = document.createElement('input');
+          input.type = 'number';
+          input.className = 'input token-conditions__rounds-input';
+          input.min = '0';
+          input.max = '99';
+          input.value = String(durations[item.id] || 0);
+          input.title = 'Сколько раундов действует состояние. 0: до снятия вручную';
+          input.addEventListener('change', () => {
+            const value = DnD.clampNumber(input.value, 0, 99, 0);
+            input.value = String(value);
+            if (value > 0) durations[item.id] = value;
+            else delete durations[item.id];
+            syncHead();
+            send();
+          });
+          row.appendChild(input);
+          row.appendChild(el('span', 'token-conditions__rounds-unit', 'раунд.'));
+          durationBox.appendChild(row);
+        }
+      };
+
       for (const item of DnD.CONDITIONS) {
         const chip = el('button', 'token-conditions__chip', item.label);
         chip.type = 'button';
@@ -5638,17 +6148,26 @@
           // Список собирается целиком: сервер ждёт именно перечень, а не
           // «добавь одно», иначе снятие состояния пришлось бы отдельным
           // событием.
-          if (selected.has(item.id)) selected.delete(item.id);
-          else selected.add(item.id);
+          if (selected.has(item.id)) {
+            selected.delete(item.id);
+            delete durations[item.id];
+          } else {
+            selected.add(item.id);
+          }
           chip.classList.toggle('is-on', selected.has(item.id));
           chip.setAttribute('aria-pressed', selected.has(item.id) ? 'true' : 'false');
-          if (this.handlers.onSetTokenConditions) {
-            this.handlers.onSetTokenConditions(token.id, [...selected]);
-          }
+          renderDurations();
+          syncHead();
+          send();
         });
         grid.appendChild(chip);
       }
-      box.appendChild(grid);
+      body.appendChild(grid);
+      body.appendChild(durationBox);
+      body.appendChild(el('div', 'token-conditions__note',
+        'Раунды уменьшаются в начале хода фишки. 0: до снятия вручную.'));
+      box.appendChild(body);
+      renderDurations();
       return box;
     }
 

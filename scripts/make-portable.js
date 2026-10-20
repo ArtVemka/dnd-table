@@ -315,6 +315,35 @@ function dataNote() {
   fs.writeFileSync(path.join(releaseApp, 'data', 'ЧТО ЗДЕСЬ.txt'), DATA_NOTE, 'utf8');
 }
 
+/**
+ * Оставляет только нужные локали Chromium.
+ *
+ * Интерфейс игры русский, а en-US нужен как запасной язык для системных
+ * элементов Electron. Остальные пятьдесят с лишним .pak весят десятки
+ * мегабайт и в портативной сборке не используются.
+ * @returns {{removed: number, freed: number}}
+ */
+function pruneLocales() {
+  const dir = path.join(releaseApp, 'locales');
+  if (!fs.existsSync(dir)) return { removed: 0, freed: 0 };
+  const keep = new Set(['en-US.pak', 'ru.pak']);
+  let removed = 0;
+  let freed = 0;
+  for (const name of fs.readdirSync(dir)) {
+    if (keep.has(name)) continue;
+    const file = path.join(dir, name);
+    try {
+      const stat = fs.statSync(file);
+      fs.rmSync(file, { force: true });
+      removed += 1;
+      freed += stat.size;
+    } catch {
+      // Файл занят или уже удалён: сборка не должна падать из-за локали.
+    }
+  }
+  return { removed, freed };
+}
+
 /** Синхронная пауза: сборка — последовательный скрипт, async здесь не нужен. */
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -445,6 +474,7 @@ function main() {
 
   const copied = copyApp();
   preparePortableBits();
+  const locales = pruneLocales();
   makeZip();
 
   const exeName = findExe(releaseApp);
@@ -457,6 +487,9 @@ function main() {
   console.log(`  Игра:   ${path.join(releaseApp, exeName)}`);
   console.log(`  Архив:  ${zipPath} (${zipSize} МБ)`);
   console.log(`  Данные: ${path.join(releaseApp, 'data')} — поедут вместе с папкой`);
+  if (locales.removed) {
+    console.log(`  Языки:   оставлено 2, удалено ${locales.removed} (${(locales.freed / 1048576).toFixed(1)} МБ)`);
+  }
   if (campaignsBefore) {
     console.log(`          ваши кампании сохранены: ${campaignsBefore} шт. (папка data не очищается)`);
   }

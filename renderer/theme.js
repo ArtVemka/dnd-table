@@ -18,7 +18,8 @@
     { id: 'les', label: 'Лес' },
     { id: 'magiya', label: 'Магия' },
     { id: 'okean', label: 'Океан' },
-    { id: 'traktir', label: 'Трактир' }
+    { id: 'traktir', label: 'Трактир' },
+    { id: 'par', label: 'Стимпанк' }
   ];
 
   const KNOWN = THEMES.map((theme) => theme.id);

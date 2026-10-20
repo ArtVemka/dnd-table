@@ -71,7 +71,7 @@ check('смысловые роли объявлены и используютс�
 
 check('у каждой темы есть свой --info', () => {
   const tokens = fs.readFileSync(path.join(dir, '01-tokens.css'), 'utf8');
-  for (const theme of ['standart', 'les', 'magiya', 'okean', 'traktir']) {
+  for (const theme of ['standart', 'les', 'magiya', 'okean', 'traktir', 'par']) {
     const block = tokens.match(new RegExp(`\\[data-theme='${theme}'\\][^{]*\\{([\\s\\S]*?)\\}`));
     if (!block) throw new Error('нет блока темы ' + theme);
     if (!/--info\s*:/.test(block[1])) throw new Error('в теме ' + theme + ' нет --info');

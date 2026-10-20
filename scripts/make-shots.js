@@ -13,7 +13,7 @@ const { app, BrowserWindow } = require('electron');
 
 const root = path.join(__dirname, '..');
 const outDir = process.argv[2] || path.join(root, 'shots');
-const THEMES = ['standart', 'les', 'magiya', 'okean', 'traktir'];
+const THEMES = ['standart', 'les', 'magiya', 'okean', 'traktir', 'par'];
 
 /** Данные для показа стола: слева участники, справа чат, в центре карта. */
 const TABLE_FIXTURE = `

@@ -630,6 +630,7 @@ let chosenSheetId = null;
         sheets: state.sheets || {},
         maps: normalizeMapSlots(state.maps),
         activeMap: state.activeMap || null,
+        activeMapId: state.activeMapId || null,
         grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
         tokens: state.tokens || [],
         initiative: state.initiative || { entries: [], turnId: null, round: 1 },
@@ -683,7 +684,10 @@ let chosenSheetId = null;
       // Список выбора в панели боя собран из игроков и фишек: новый участник
       // должен появиться в нём сразу.
       renderInitiativePanel();
-      mapView.render(app.room, viewer());
+      // Игроки влияют только на подписи и владельцев фишек, карта и слои не
+      // меняются. Полная перерисовка карты тут пересобирала бы туман и свет
+      // на каждое подключение или смену портрета.
+      mapView.refreshTokens(app.room, viewer());
       updateTableHeader();
       // Мастер видит, что кто-то дошёл до стола, по списку участников.
       if (app.role === 'dm' && app.p2p.running) {
@@ -712,14 +716,17 @@ let chosenSheetId = null;
       if (app.role === 'dm' && app.viewedSheetPlayerId === playerId) refreshSheetView(true);
     });
 
-    socket.on('mapUpdated', ({ type, items, activeId, activeMap }) => {
+    socket.on('mapUpdated', ({ type, items, activeId, activeMap, activeMapId }) => {
       // Карты вкладки приходят списком: ДМ может держать во вкладке несколько
-      // локаций и переключаться между ними, ничего не теряя.
+      // локаций и переключаться между ними, ничего не теряя. Игроку сервер
+      // присылает только показанные карты, поэтому скрытая заготовка сюда не
+      // попадает даже ссылкой на картинку.
       app.room.maps[type] = {
         items: Array.isArray(items) ? items : [],
         activeId: activeId || null
       };
       app.room.activeMap = activeMap;
+      app.room.activeMapId = activeMapId || null;
       mapView.render(app.room, viewer());
       // Панель поверхности считает клетки по карте, а карта меняется и после
       // мазка, и после чужой правки: без пересчёта счётчик и кнопка очистки
@@ -740,7 +747,7 @@ let chosenSheetId = null;
       const index = app.room.tokens.findIndex((item) => item.id === token.id);
       if (index >= 0) app.room.tokens[index] = token;
       else app.room.tokens.push(token);
-      mapView.render(app.room, viewer());
+      mapView.refreshTokens(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
       // Список выбора в порядке боя наполняется фишками: без перерисовки новая
       // фишка появлялась бы там только после следующего события.
@@ -751,10 +758,9 @@ let chosenSheetId = null;
       const index = app.room.tokens.findIndex((item) => item.id === token.id);
       if (index >= 0) app.room.tokens[index] = token;
       else app.room.tokens.push(token);
-      mapView.render(app.room, viewer());
+      mapView.refreshTokens(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
       renderInitiativePanel();
-      renderAdventurePanel();
     });
 
     // Массовая картинка приходит пачкой: перерисовываем всё один раз, а не
@@ -764,10 +770,9 @@ let chosenSheetId = null;
       const byId = new Map(app.room.tokens.map((token) => [token.id, token]));
       for (const token of tokens) byId.set(token.id, token);
       app.room.tokens = [...byId.values()];
-      mapView.render(app.room, viewer());
+      mapView.refreshTokens(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
       renderInitiativePanel();
-      renderAdventurePanel();
     });
 
     // Массовая картинка в справочнике: сервер присылает обновлённое приключение,
@@ -781,9 +786,14 @@ let chosenSheetId = null;
       mapView.applyTokenMove(tokenId, x, y);
     });
 
+    // Пинг живёт пару секунд и никуда не сохраняется: это жест, а не объект.
+    socket.on('mapPing', (ping) => {
+      mapView.showPing(ping);
+    });
+
     socket.on('tokenDeleted', ({ tokenId }) => {
       app.room.tokens = app.room.tokens.filter((token) => token.id !== tokenId);
-      mapView.render(app.room, viewer());
+      mapView.refreshTokens(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
       renderInitiativePanel();
     });
@@ -799,7 +809,7 @@ let chosenSheetId = null;
       const token = app.room.tokens.find((item) => item.id === tokenId);
       if (!token) return;
       token.hidden = Boolean(hidden);
-      mapView.render(app.room, viewer());
+      mapView.refreshTokens(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
     });
 
@@ -824,7 +834,10 @@ let chosenSheetId = null;
     socket.on('combatMode', (combat) => {
       const wasEnabled = Boolean(app.room.combat && app.room.combat.enabled);
       app.room.combat = combat || { enabled: false };
-      renderAll();
+      // Режим боя меняет только кнопку карты и поведение фишек. Полный
+      // renderAll пересобирал бы чат, историю бросков и лист персонажа,
+      // которые от боя не зависят.
+      mapView.refreshCombat(app.room, viewer());
       // Сразу говорим, что делать дальше: без подсказки включённый режим боя
       // выглядит как пустая кнопка, потому что сам по себе он ничего не меняет.
       if (app.room.combat.enabled && !wasEnabled) {
@@ -999,7 +1012,7 @@ let chosenSheetId = null;
         // по file://, поэтому подставляем адрес стола, иначе браузер искал бы
         // файл в корне диска.
         resolveUrl: (url) => assetUrl(url),
-        onSetActive: (type) => emit('setActiveMap', { type }),
+        onSetActive: (type, mapId) => emit('setActiveMap', { type, mapId }),
         onDelete: async (type, mapId) => {
           const slot = app.room.maps[type] || { items: [] };
           const map = (slot.items || []).find((item) => item.id === mapId);
@@ -1021,6 +1034,11 @@ let chosenSheetId = null;
         },
         onSelectMap: (type, mapId) => emit('selectMap', { type, mapId }),
         onMoveToken: (tokenId, x, y) => emit('moveToken', { tokenId, x, y }),
+        // Пинг: короткий жест «смотрите сюда». Сервер не хранит его в кампании.
+        onPing: (mapType, mapId, x, y) => emit('mapPing', { mapType, mapId, x, y }),
+        // Перенос фишки на карту, которую уже видят игроки: мастер готовит
+        // следующую сцену и в нужный момент переводит на неё участников.
+        onMoveTokenToActive: (tokenId) => emit('moveTokenToActiveMap', { tokenId }),
         onNotice: (message) => toast(message),
         onToggleGrid: (enabled) => emit('setGrid', {
           enabled,
@@ -1132,14 +1150,13 @@ let chosenSheetId = null;
     if (!tokenPanel) {
       tokenPanel = new TokenPanel($('#tab-tokens'), {
         // Прочность необязательна: пустое поле — фишка-метка без здоровья.
-        onCreate: (name, maxHp) => emit('createToken', {
-        name,
-        maxHp,
-        mapType: app.room.activeMap || 'battle',
-        // Привязываем к открытой карте: вкладка умеет держать несколько карт,
-        // и фишка должна жить на той, где её создали.
-        mapId: activeMapId()
-      }),
+        onCreate: (name, maxHp) => {
+          // Фишка создаётся на той карте, которую мастер сейчас открыл, а не
+          // на показанной: иначе заготовку нельзя было бы обставить заранее.
+          const mapType = (mapView && mapView.viewedMap) || app.room.activeMap || 'battle';
+          const mapId = (mapView && mapView.currentMapId) || activeMapId();
+          emit('createToken', { name, maxHp, mapType, mapId });
+        },
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
         // Свет фишки: факел в руке. Дальность в футах, как в правилах.
         onSetTokenLight: (tokenId, radius, color) => emit('setTokenLight', { tokenId, radius, color }),
@@ -1154,7 +1171,11 @@ let chosenSheetId = null;
         // правки одного числа за столом разошлись бы.
         onSetTokenHp: (tokenId, hp) => emit('setTokenHp', { tokenId, hp }),
         // Состояния ведёт мастер, но видны они всем.
-        onSetTokenConditions: (tokenId, conditions) => emit('setTokenConditions', { tokenId, conditions }),
+        onSetTokenConditions: (tokenId, conditions, conditionDurations) => emit('setTokenConditions', {
+          tokenId,
+          conditions,
+          conditionDurations
+        }),
         // Скрытость решает только мастер, но сервер всё равно проверяет.
         // Обработчики нужны и здесь, и в карте: правый клик по фишке и кнопки
         // в списке должны делать одно и то же.
@@ -1163,6 +1184,10 @@ let chosenSheetId = null;
         onToggleTokenLabelsHidden: (tokenId, hidden) => emit('setTokenLabelsHidden', { tokenId, hidden }),
         onSetTokenLight: (tokenId, radius, color) => emit('setTokenLight', { tokenId, radius, color }),
         onSetAllTokensHidden: (hidden) => emit('setAllTokensHidden', { hidden }),
+        // Перенос из списка фишек делает то же, что правый клик по фишке на
+        // карте: освобождает заготовку от привязки к старой локации.
+        onMoveTokenToActive: (tokenId) => emit('moveTokenToActiveMap', { tokenId }),
+        activeMapInfo: () => ({ activeMap: app.room.activeMap, activeMapId: app.room.activeMapId }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
           if (result.canceled) return;
@@ -1310,6 +1335,9 @@ let chosenSheetId = null;
    * @returns {string}
    */
   function activeMapId() {
+    // Сервер присылает карту, которую видят игроки. В тренировочном столе
+    // такого поля нет: там показ и выбор совпадают, поэтому берём activeId.
+    if (app.room.activeMapId) return app.room.activeMapId;
     const type = app.room.activeMap || 'world';
     const slot = (app.room.maps || {})[type] || { items: [] };
     const active = (slot.items || []).find((item) => item.id === slot.activeId) || slot.items[0];

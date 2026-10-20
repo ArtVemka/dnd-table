@@ -238,6 +238,32 @@
   --info: #6f8ab9;
 }
 
+/* Стимпанк: уголь, латунь и медная патина. */
+[data-theme='par'] {
+  --bg: #14100b;
+  --bg-deep: #090705;
+  --surface: #1c1710;
+  --surface-2: #272016;
+  --surface-3: #342a1c;
+  --border: #4b3a23;
+  --border-strong: #6f5330;
+  --text: #f0e3c8;
+  --text-dim: #ccb68d;
+  --muted: #9c8561;
+  --accent: #c98a3c;
+  --accent-hover: #e3a552;
+  --accent-soft: rgba(201, 138, 60, 0.18);
+  --gold: #e0b45a;
+  --danger: #c14f38;
+  --ok: #6fae8f;
+  --sheen: rgba(255, 220, 160, 0.07);
+  --hairline: rgba(255, 220, 160, 0.1);
+  --ring: rgba(224, 180, 90, 0.5);
+  --wash: rgba(224, 180, 90, 0.08);
+  /* Медная патина: роль игрока, связи, тренировочный стол. */
+  --info: #64a6a0;
+}
+
 :root {
   --radius: 12px;
   --radius-sm: 8px;
@@ -389,6 +415,22 @@
   --title-weight: 700;
   --title-tracking: 0.07em;
   --atmosphere: traktir;
+}
+
+/* Стимпанк: латунная пластина с заклёпками, пар и медленный ход машины. */
+[data-theme='par'] {
+  --frame: 2px solid;
+  --frame-inner: 0 0 0 3px rgba(201, 138, 60, 0.12);
+  --corner: 10px;
+  --glow: rgba(224, 168, 70, 0.45);
+  --panel-shadow: 0 14px 34px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(224, 168, 70, 0.08);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --title-glow: 0 0 14px rgba(224, 168, 70, 0.35);
+  --title-shadow: 0 2px 5px rgba(0, 0, 0, 0.8);
+  --title-weight: 700;
+  --title-tracking: 0.09em;
+  --atmosphere: par;
 }
 
 * {

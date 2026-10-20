@@ -305,6 +305,30 @@
       hitOut.appendChild(this.hitDieDetail);
       this.hitDieOut = hitOut;
       hit.appendChild(hitOut);
+
+      // Отдых: короткий тратит одну кость хитов, долгий возвращает здоровье,
+      // ячейки и половину костей. Считается в листе: это его же ресурсы, а не
+      // общий бой. Счётчик костей хранится в кампании вместе с листом.
+      const rest = el('div', 'hit-die__rest');
+      this.hitDiePool = el('div', 'hit-die__pool', '');
+      rest.appendChild(this.hitDiePool);
+      const restActions = el('div', 'hit-die__rest-actions');
+      const spendDie = el('button', 'btn btn--ghost btn--tiny hit-die__spend', 'Потратить кость');
+      spendDie.type = 'button';
+      spendDie.title = 'Короткий отдых: потратить кость хитов и восстановить здоровье';
+      spendDie.addEventListener('click', () => this.spendHitDie());
+      restActions.appendChild(spendDie);
+      this.hitDieSpend = spendDie;
+      const longRest = el('button', 'btn btn--accent btn--tiny hit-die__long-rest', 'Долгий отдых');
+      longRest.type = 'button';
+      longRest.title = 'Восстановить хиты, ячейки заклинаний и половину костей хитов';
+      longRest.addEventListener('click', () => this.takeLongRest());
+      restActions.appendChild(longRest);
+      this.hitDieLongRest = longRest;
+      rest.appendChild(restActions);
+      rest.appendChild(el('div', 'hit-die__rest-note',
+        'Короткий: одна кость. Долгий: хиты, ячейки и половина костей.'));
+      hit.appendChild(rest);
       combat.appendChild(hit);
 
       // Спасброски смерти. Показываются, когда хиты на нуле: раньше этого они
@@ -783,9 +807,10 @@ const slotLevel = (value, fallback) => DnD.clampNumber(value, 0, DnD.LIMITS.maxS
 sheet.spellSlotsUsed = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
   current.spellSlotsUsed ? current.spellSlotsUsed[index] : 0, 0
 ));
-sheet.spellSlotsMax = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
+ sheet.spellSlotsMax = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
   current.spellSlotsMax ? current.spellSlotsMax[index] : 0, 0
 ));
+sheet.hitDiceSpent = DnD.clampNumber(current.hitDiceSpent, 0, DnD.LIMITS.maxLevel, 0);
 
       for (const input of this.inputs) {
         const name = input.dataset.field;
@@ -896,6 +921,26 @@ sheet.spellSlotsMax = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
         this.hitDieDie.textContent = '—';
       }
       const sides = selected ? selected.sides : null;
+      const total = pool.reduce((sum, item) => sum + item.count, 0);
+      const spent = DnD.clampNumber(this.sheet && this.sheet.hitDiceSpent, 0, total, 0);
+      const remaining = Math.max(0, total - spent);
+      const hp = Number(this.sheet && this.sheet.hp) || 0;
+      const maxHp = Number(this.sheet && this.sheet.maxHp) || 0;
+      if (this.hitDiePool) {
+        this.hitDiePool.textContent = total
+          ? `Кости хитов: ${remaining} из ${total}`
+          : 'Кости хитов: нет';
+        this.hitDiePool.title = total ? `Потрачено: ${spent}` : 'Выберите класс с костью хитов';
+      }
+      if (this.hitDieSpend) {
+        this.hitDieSpend.disabled = this.readOnly || !sides || remaining <= 0 || hp >= maxHp;
+        this.hitDieSpend.title = remaining <= 0
+          ? 'Костей хитов не осталось'
+          : (hp >= maxHp
+            ? 'Здоровье уже полное'
+            : 'Короткий отдых: потратить кость хитов и восстановить здоровье');
+      }
+      if (this.hitDieLongRest) this.hitDieLongRest.disabled = this.readOnly;
       if (this.hitDieRoll) {
         this.hitDieRoll.disabled = this.readOnly || !sides;
         this.hitDieRoll.title = sides
@@ -920,6 +965,53 @@ sheet.spellSlotsMax = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
       this.hitDieOut.classList.remove('is-pop');
       void this.hitDieOut.offsetWidth;
       this.hitDieOut.classList.add('is-pop');
+    }
+
+    /** Короткий отдых: тратит одну кость и лечит на её результат. */
+    spendHitDie() {
+      if (this.readOnly || !this.handlers.onChange) return;
+      const sheet = this.collect();
+      const pool = DnD.hitDicePool({ classes: this.currentClasses(), hitDice: sheet.hitDice });
+      const total = pool.reduce((sum, item) => sum + item.count, 0);
+      const spent = DnD.clampNumber(sheet.hitDiceSpent, 0, total, 0);
+      const sides = DnD.hitDieSides(this.hitDieSelected || sheet.hitDice);
+      const hp = Number(sheet.hp) || 0;
+      const maxHp = Number(sheet.maxHp) || 0;
+      if (!sides || spent >= total || hp >= maxHp) return;
+      const roll = secureDie(sides);
+      const con = this.derived && Number.isFinite(this.derived.modifiers.con)
+        ? this.derived.modifiers.con
+        : 0;
+      const heal = Math.max(0, roll + con);
+      sheet.hp = Math.min(maxHp, hp + heal);
+      sheet.hitDiceSpent = spent + 1;
+      this.setSheet(sheet);
+      this.refresh();
+      this.hitDieValue.textContent = String(heal);
+      this.hitDieDetail.textContent = `d${sides}: ${roll} ${DnD.formatModifier(con)} Тел, кость ${spent + 1} из ${total}`;
+      this.hitDieOut.hidden = false;
+      this.hitDieOut.classList.remove('is-pop');
+      void this.hitDieOut.offsetWidth;
+      this.hitDieOut.classList.add('is-pop');
+    }
+
+    /** Долгий отдых: полное здоровье, ячейки и половина костей хитов. */
+    takeLongRest() {
+      if (this.readOnly || !this.handlers.onChange) return;
+      const sheet = this.collect();
+      const pool = DnD.hitDicePool({ classes: this.currentClasses(), hitDice: sheet.hitDice });
+      const total = pool.reduce((sum, item) => sum + item.count, 0);
+      const spent = DnD.clampNumber(sheet.hitDiceSpent, 0, total, 0);
+      const restore = Math.min(spent, Math.max(1, Math.floor(total / 2)));
+      sheet.hp = sheet.maxHp;
+      sheet.tempHp = 0;
+      sheet.deathSavesSuccesses = 0;
+      sheet.deathSavesFailures = 0;
+      sheet.spellSlotsUsed = DnD.SPELL_SLOT_LEVELS.map(() => 0);
+      sheet.hitDiceSpent = Math.max(0, spent - restore);
+      this.setSheet(sheet);
+      this.refresh();
+      this.hitDieOut.hidden = true;
     }
 
     paintDerived() {

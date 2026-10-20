@@ -534,6 +534,15 @@
   background: var(--surface-3);
 }
 
+.token-menu__item:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.token-menu__item:disabled:hover {
+  background: transparent;
+}
+
 .token-menu__item--danger {
   color: var(--danger-text);
 }

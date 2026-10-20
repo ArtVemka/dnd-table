@@ -228,6 +228,101 @@
   color: var(--text);
 }
 
+.map-zoom__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.map-zoom__btn.is-on {
+  background: var(--accent-soft);
+  color: var(--gold);
+}
+
+.map-zoom__icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+
+.map-surface.is-pinging {
+  cursor: crosshair;
+}
+
+/* Пинг: короткая метка поверх карты. Слой лежит внутри подложки, поэтому
+   кольцо и имя едут вместе с приближением, а не остаются в экранных координатах. */
+.map-pings {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.map-ping {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.map-ping__ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px;
+  border: 2px solid var(--gold);
+  border-radius: 50%;
+  animation: map-ping-pulse 1.8s ease-out forwards;
+}
+
+.map-ping__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 10px var(--accent);
+}
+
+.map-ping__name {
+  margin-top: 8px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--scrim);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.map-ping--dm .map-ping__ring {
+  border-color: var(--accent);
+}
+
+.map-ping--dm .map-ping__dot {
+  background: var(--accent);
+}
+
+@keyframes map-ping-pulse {
+  0% {
+    opacity: 1;
+    transform: scale(0.35);
+  }
+  70% {
+    opacity: 0.65;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(4);
+  }
+}
+
 .map-zoom__btn--reset {
   font-size: 13px;
 }

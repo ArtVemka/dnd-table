@@ -65,7 +65,7 @@ async function waitFor(fn, label, timeout = 4000) {
 const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
-  'tokensUpdated',
+  'tokensUpdated', 'mapPing',
   'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated'
 ];
 
@@ -286,7 +286,7 @@ async function main() {
     saveProficiencies: { str: true, con: true },
     skillProficiencies: { athletics: true, perception: false },
     skillExpertise: { athletics: true, stealth: true },
-    hp: 44, maxHp: 44, tempHp: 0, hitDice: '1d10',
+    hp: 44, maxHp: 44, tempHp: 0, hitDice: '1d10', hitDiceSpent: 2,
     armorClass: 18, initiativeMisc: 0, speed: 25,
     attacks: 'Боевой топор +7, 1d8+3',
     equipment: 'Кольчуга, щит',
@@ -301,6 +301,7 @@ async function main() {
     assert.strictEqual(saved.sheet.level, 5);
     assert.strictEqual(saved.sheet.abilities.str, 17);
     assert.strictEqual(saved.sheet.hitDice, '1d10');
+    assert.strictEqual(saved.sheet.hitDiceSpent, 2);
     assert.strictEqual(saved.sheet.subclass, 'Мастер войны');
     assert.strictEqual(saved.sheet.armorClass, 18);
     assert.strictEqual(saved.sheet.proficiencyBonusManual, null);
@@ -389,12 +390,67 @@ async function main() {
     () => dm.log.mapUpdated.find((item) => item.type === 'world' && item.items && item.items.length),
     'общая карта'
   );
-  check('ДМ загружает общую карту, клиенты получают список карт вкладки', () => {
+  check('ДМ загружает карту как заготовку, игрок её пока не получает', () => {
     assert.strictEqual(worldMap.items.length, 1);
     assert.match(worldMap.items[0].url, /^\/files\/.+\.png$/);
     assert.strictEqual(worldMap.items[0].name, 'world.png');
-    assert.strictEqual(worldMap.activeId, worldMap.items[0].id);
-    assert.strictEqual(worldMap.activeMap, 'world');
+    assert.strictEqual(worldMap.items[0].published, false, 'новая карта должна быть заготовкой');
+    assert.strictEqual(worldMap.activeId, worldMap.items[0].id, 'мастер сразу видит новую карту');
+    assert.strictEqual(worldMap.activeMap, null, 'загрузка не должна переключать показ');
+    assert.strictEqual(worldMap.activeMapId, null);
+  });
+  const worldHiddenForPlayer = await waitFor(
+    () => p1.log.mapUpdated.filter((item) => item.type === 'world').pop(),
+    'вкладка карт у игрока после загрузки'
+  );
+  check('скрытая заготовка не уходит игроку даже ссылкой', () => {
+    assert.strictEqual(worldHiddenForPlayer.items.length, 0);
+    assert.strictEqual(worldHiddenForPlayer.activeMap, null);
+  });
+
+  p1.log.mapUpdated.length = 0;
+  emit(dm, 'setActiveMap', { type: 'world', mapId: worldMap.items[0].id });
+  const worldShown = await waitFor(
+    () => p1.log.mapUpdated.find((item) => item.type === 'world'
+      && item.activeMapId === worldMap.items[0].id && item.items.length),
+    'показ общей карты игрокам'
+  );
+  check('кнопка «Показать игрокам» открывает карту всему столу', () => {
+    assert.strictEqual(worldShown.items.length, 1);
+    assert.strictEqual(worldShown.items[0].published, true);
+    assert.strictEqual(worldShown.activeId, worldMap.items[0].id);
+    assert.strictEqual(room.activeMap, 'world');
+    assert.strictEqual(room.activeMapId, worldMap.items[0].id);
+  });
+
+  p1.log.mapPing.length = 0;
+  emit(p1, 'mapPing', {
+    mapType: 'world',
+    mapId: worldMap.items[0].id,
+    x: 0.25,
+    y: 0.75
+  });
+  const ping = await waitFor(() => p1.log.mapPing[0], 'пинг по карте');
+  check('пинг уходит всему столу и не сохраняется', () => {
+    assert.strictEqual(ping.mapType, 'world');
+    assert.strictEqual(ping.mapId, worldMap.items[0].id);
+    assert.strictEqual(ping.x, 0.25);
+    assert.strictEqual(ping.y, 0.75);
+    assert.strictEqual(ping.role, 'player');
+    assert.strictEqual(ping.name, 'Артём');
+    assert.ok(!Object.prototype.hasOwnProperty.call(room.serialize(), 'ping'), 'пинг попал в кампанию');
+  });
+
+  p1.log.mapPing.length = 0;
+  emit(p1, 'mapPing', {
+    mapType: 'world',
+    mapId: 'чужая-карта',
+    x: 0.5,
+    y: 0.5
+  });
+  await wait(80);
+  check('пинг на карте, которой нет на столе, не рассылается', () => {
+    assert.strictEqual(p1.log.mapPing.length, 0);
   });
   const imageResponse = await httpGet(`${url}${worldMap.items[0].url}`);
   check('изображение карты раздаётся клиентам по HTTP', () => {
@@ -493,12 +549,21 @@ async function main() {
     () => dm.log.mapUpdated.filter((item) => item.type === 'battle' && item.items.length).pop(),
     'карта битвы'
   );
-  check('вторая карта загружается и становится активной', () => {
-    assert.strictEqual(battleMap.activeMap, 'battle');
+  check('вторая карта тоже загружается заготовкой и не переключает показ', () => {
+    assert.strictEqual(battleMap.activeMap, 'world');
+    assert.strictEqual(battleMap.activeMapId, worldMap.items[0].id);
+    assert.strictEqual(battleMap.items[0].published, false);
   });
+  // Дальше по сценарию карта битвы должна быть показана: жмём «Показать».
+  emit(dm, 'setActiveMap', { type: 'battle', mapId: battleMap.items[0].id });
+  await waitFor(
+    () => room.activeMap === 'battle' && room.activeMapId === battleMap.items[0].id,
+    'показ карты битвы'
+  );
 
   /* ---------------------------- несколько карт в одной вкладке */
 
+  p1.log.mapUpdated.length = 0;
   dm.log.mapUpdated.length = 0;
   emit(dm, 'uploadMap', { type: 'battle', image: PNG_1PX, name: 'пещера.png' });
   const secondBattle = await waitFor(
@@ -508,31 +573,65 @@ async function main() {
   check('во вкладку можно загрузить ещё одну карту, не потеряв прежнюю', () => {
     assert.strictEqual(secondBattle.items.length, 2, `карт во вкладке: ${secondBattle.items.length}`);
     assert.strictEqual(secondBattle.items[1].name, 'пещера.png');
-    assert.strictEqual(secondBattle.activeId, secondBattle.items[1].id, 'новая карта должна показываться сразу');
+    assert.strictEqual(secondBattle.items[1].published, false, 'новая карта — заготовка');
+    assert.strictEqual(secondBattle.activeId, secondBattle.items[1].id, 'мастер сразу видит заготовку');
     assert.strictEqual(room.currentMap('battle').name, 'пещера.png');
+    assert.strictEqual(room.activeMapId, battleMap.items[0].id, 'показ остался на прежней карте');
+  });
+  const caveHidden = await waitFor(
+    () => p1.log.mapUpdated.filter((item) => item.type === 'battle').pop(),
+    'вкладка битвы у игрока после заготовки'
+  );
+  check('заготовка не попадает в список карт игрока', () => {
+    assert.strictEqual(caveHidden.items.length, 1, `игрок получил карт: ${caveHidden.items.length}`);
+    assert.strictEqual(caveHidden.items[0].id, battleMap.items[0].id);
+    assert.strictEqual(caveHidden.activeId, battleMap.items[0].id);
+  });
+  check('снимок состояния игрока не содержит заготовок карт', () => {
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    assert.strictEqual(snapshot.maps.battle.items.length, 1, `в снимок попало карт: ${snapshot.maps.battle.items.length}`);
+    assert.strictEqual(snapshot.maps.battle.items[0].published, true);
+    assert(!snapshot.maps.battle.items.some((item) => item.name === 'пещера.png'), 'в снимок попала заготовка');
+    assert.strictEqual(snapshot.maps.world.items.length, 1);
+    assert.strictEqual(snapshot.activeMapId, battleMap.items[0].id);
   });
 
+  // Мастер листает карты вкладки у себя: игроки остаются на показанной.
   p1.log.mapUpdated.length = 0;
   emit(dm, 'selectMap', { type: 'battle', mapId: secondBattle.items[0].id });
-  // Ждём именно события с activeId нужной карты. Если брать «последнее с
-  // activeId», можно поймать ещё не долетевшее событие загрузки пещеры —
-  // проверка прошла бы раньше, чем сервер применил selectMap, и упала бы.
-  const switched = await waitFor(
-    () => p1.log.mapUpdated.filter((item) => item.activeId === secondBattle.items[0].id).pop(),
-    'переключение карты во вкладке'
+  await waitFor(() => room.currentMap('battle').name === 'battle.png', 'выбор первой карты вкладки');
+  emit(dm, 'selectMap', { type: 'battle', mapId: secondBattle.items[1].id });
+  await waitFor(() => room.currentMap('battle').name === 'пещера.png', 'выбор заготовки во вкладке');
+  const browsing = await waitFor(
+    () => p1.log.mapUpdated.filter((item) => item.type === 'battle').pop(),
+    'обновление вкладки у игрока'
   );
-  check('ДМ переключается между картами вкладки, игроки видят выбранную', () => {
-    assert.strictEqual(switched.activeId, secondBattle.items[0].id);
-    assert.strictEqual(switched.activeMap, 'battle');
-    assert.strictEqual(room.currentMap('battle').name, 'battle.png');
-    assert.strictEqual(room.maps.battle.items.length, 2, 'переключение не должно терять карты');
+  check('мастер листает карты вкладки, не показывая их игрокам', () => {
+    assert.strictEqual(browsing.items.length, 1, `игрок получил заготовки: ${browsing.items.length}`);
+    assert.strictEqual(browsing.activeId, battleMap.items[0].id, 'у игрока сменилась карта');
+    assert.strictEqual(browsing.activeMapId, battleMap.items[0].id);
+    assert.strictEqual(room.activeMapId, battleMap.items[0].id);
   });
 
   p1.log.errorMessage.length = 0;
   emit(p1, 'selectMap', { type: 'battle', mapId: secondBattle.items[1].id });
   await waitFor(() => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')), 'отказ игроку в переключении карт');
   check('игрок не может переключать карты вкладки', () => {
-    assert.strictEqual(room.currentMap('battle').name, 'battle.png');
+    assert.strictEqual(room.currentMap('battle').name, 'пещера.png');
+  });
+
+  p1.log.mapUpdated.length = 0;
+  emit(dm, 'setActiveMap', { type: 'battle', mapId: secondBattle.items[1].id });
+  const caveShown = await waitFor(
+    () => p1.log.mapUpdated.find((item) => item.type === 'battle'
+      && item.activeMapId === secondBattle.items[1].id && item.items.length === 2),
+    'показ заготовки игрокам'
+  );
+  check('показ заготовки открывает её игрокам вместе с соседней картой', () => {
+    assert.strictEqual(caveShown.items[1].published, true);
+    assert.strictEqual(caveShown.activeId, secondBattle.items[1].id);
+    assert.strictEqual(room.activeMap, 'battle');
+    assert.strictEqual(room.activeMapId, secondBattle.items[1].id);
   });
 
   dm.log.errorMessage.length = 0;
@@ -542,10 +641,14 @@ async function main() {
     () => dm.log.mapUpdated.filter((item) => item.type === 'battle' && item.items.length === 1).pop(),
     'удаление одной карты из вкладки'
   );
-  check('удаляется только выбранная карта, остальные остаются', () => {
+  check('удаление показанной карты возвращает стол к соседней', () => {
     assert.strictEqual(dm.log.errorMessage.length, 0, `ошибка при удалении: ${JSON.stringify(dm.log.errorMessage)}`);
     assert.strictEqual(afterDelete.items[0].name, 'battle.png');
+    assert.strictEqual(afterDelete.items[0].published, true);
+    assert.strictEqual(afterDelete.activeId, secondBattle.items[0].id);
     assert.strictEqual(room.maps.battle.items.length, 1);
+    assert.strictEqual(room.activeMap, 'battle');
+    assert.strictEqual(room.activeMapId, secondBattle.items[0].id);
   });
 
   check('кампания старого формата (одна карта на вкладку) открывается', () => {
@@ -564,6 +667,7 @@ async function main() {
   await waitFor(() => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')), 'отказ в смене карты');
   check('игрок не может переключать активную карту', () => {
     assert.strictEqual(room.activeMap, 'battle');
+    assert.strictEqual(room.activeMapId, secondBattle.items[0].id);
   });
 
   p1.log.mapUpdated.length = 0;
@@ -571,6 +675,7 @@ async function main() {
   await waitFor(() => p1.log.mapUpdated.find((item) => item.activeMap === 'world'), 'смена активной карты');
   check('ДМ переключает активную карту для всех клиентов', () => {
     assert.strictEqual(room.activeMap, 'world');
+    assert.strictEqual(room.activeMapId, worldMap.items[0].id);
   });
 
   p1.log.mapUpdated.length = 0;
@@ -582,6 +687,7 @@ async function main() {
   check('ДМ удаляет последнюю карту вкладки', () => {
     assert.strictEqual(room.maps.battle.items.length, 0);
     assert.strictEqual(room.activeMap, 'world', 'показ должен вернуться к оставшейся вкладке');
+    assert.strictEqual(room.activeMapId, worldMap.items[0].id);
   });
   emit(dm, 'uploadMap', { type: 'battle', image: PNG_1PX, name: 'battle.png' });
   await waitFor(() => room.maps.battle.items.length > 0, 'повторная загрузка карты битвы');
@@ -598,7 +704,9 @@ async function main() {
   check('нарисованная карта («Рисунок») хранится наравне с общей и локацией', () => {
     assert.match(sketchMap.items[0].url, /^\/files\/.+\.png$/);
     assert.strictEqual(sketchMap.items[0].name, 'Рисунок.png');
-    assert.strictEqual(room.activeMap, 'sketch');
+    assert.strictEqual(sketchMap.items[0].published, false);
+    assert.strictEqual(room.activeMap, 'world', 'рисунок пока не показан игрокам');
+    assert.strictEqual(room.activeMapId, worldMap.items[0].id);
   });
   dm.log.errorMessage.length = 0;
   emit(dm, 'createToken', { name: 'Метка на рисунке', mapType: 'sketch' });
@@ -613,10 +721,13 @@ async function main() {
   await waitFor(() => !room.tokens.some((token) => token.id === sketchToken.id), 'уборка фишки с рисунка');
   // Дальше по сценарию проверки читают первые события списка — чистим за собой.
   dm.log.tokenCreated.length = 0;
+  emit(dm, 'setActiveMap', { type: 'sketch', mapId: sketchMap.items[0].id });
+  await waitFor(() => room.activeMap === 'sketch' && room.activeMapId === sketchMap.items[0].id, 'показ рисунка');
   emit(dm, 'deleteMap', { type: 'sketch' });
   await waitFor(() => room.maps.sketch.items.length === 0, 'удаление карты-рисунка');
-  check('удаление карты-рисунка возвращает показ к оставшейся карте', () => {
+  check('удаление показанного рисунка возвращает показ к оставшейся карте', () => {
     assert.strictEqual(room.activeMap, 'world');
+    assert.strictEqual(room.activeMapId, worldMap.items[0].id);
   });
   // Возвращаем рисунок: ниже проверим, что три карты вместе переживают
   // сохранение и загрузку кампании.
@@ -624,6 +735,61 @@ async function main() {
   await waitFor(() => room.maps.sketch.items.length > 0, 'повторная загрузка карты-рисунка');
   emit(dm, 'setActiveMap', { type: 'world' });
   await waitFor(() => room.activeMap === 'world', 'возврат к общей карте');
+
+  /* ------------------------------------ перенос фишек на показанную карту */
+
+  console.log('\nПеренос фишек на показанную карту');
+  const preparedBattle = room.maps.battle.items[0];
+  dm.log.tokenCreated.length = 0;
+  emit(dm, 'createToken', { name: 'Готовый монстр', mapType: 'battle', mapId: preparedBattle.id });
+  const preparedToken = await waitFor(
+    () => dm.log.tokenCreated.find((token) => token.name === 'Готовый монстр'),
+    'фишка на заготовке'
+  );
+  p1.log.tokenCreated.length = 0;
+  emit(dm, 'setTokenHidden', { tokenId: preparedToken.id, hidden: false });
+  await wait(120);
+  check('фишка на непоказанной карте не уходит игрокам', () => {
+    assert.strictEqual(
+      p1.log.tokenCreated.filter((token) => token.id === preparedToken.id).length,
+      0,
+      'игрок получил фишку со скрытой карты'
+    );
+    assert.strictEqual(room.tokens.find((token) => token.id === preparedToken.id).hidden, false);
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    assert.strictEqual(snapshot.tokens.some((token) => token.id === preparedToken.id), false,
+      'фишка со скрытой карты попала в снимок состояния');
+  });
+
+  p1.log.tokenCreated.length = 0;
+  emit(dm, 'moveTokenToActiveMap', { tokenId: preparedToken.id });
+  const movedToken = await waitFor(
+    () => p1.log.tokenCreated.find((token) => token.id === preparedToken.id),
+    'перенос фишки на показанную карту'
+  );
+  check('мастер переносит фишку на карту, которую видят игроки', () => {
+    assert.strictEqual(movedToken.mapType, 'world');
+    assert.strictEqual(movedToken.mapId, room.activeMapId);
+    assert.strictEqual(movedToken.x, 0.5);
+    assert.strictEqual(movedToken.y, 0.5);
+    assert.strictEqual(movedToken.hidden, false);
+    const token = room.tokens.find((item) => item.id === preparedToken.id);
+    assert.strictEqual(token.mapType, 'world');
+    assert.strictEqual(token.mapId, room.activeMapId);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'moveTokenToActiveMap', { tokenId: preparedToken.id });
+  await waitFor(() => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')), 'отказ игроку в переносе');
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'moveTokenToActiveMap', { tokenId: preparedToken.id });
+  await waitFor(() => dm.log.errorMessage.find((item) => item.message.includes('уже на этой карте')), 'повторный перенос');
+  emit(dm, 'deleteToken', { tokenId: preparedToken.id });
+  await waitFor(() => !room.tokens.some((token) => token.id === preparedToken.id), 'уборка перенесённой фишки');
+  // Дальше сценарий читает первые события списков, поэтому чистим журналы.
+  dm.log.tokenCreated.length = 0;
+  p1.log.tokenCreated.length = 0;
+  p1.log.tokenDeleted.length = 0;
 
   /* --------------------------------------------------------------- сетка */
 
@@ -680,6 +846,13 @@ async function main() {
   /* -------------------------------------------------------------- фишки */
 
   console.log('\nФишки');
+  // Перенос фишки на показанную карту выше оставил события в журналах;
+  // этой секции нужен чистый список, иначе проверка «скрытая фишка» увидит
+  // чужое событие.
+  dm.log.tokenCreated.length = 0;
+  p1.log.tokenCreated.length = 0;
+  p2.log.tokenCreated.length = 0;
+  p1.log.tokenDeleted.length = 0;
   p1.log.errorMessage.length = 0;
   emit(p1, 'createToken', { name: 'Гоблин' });
   await waitFor(() => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')), 'отказ в создании фишки');
@@ -699,8 +872,10 @@ async function main() {
   });
   check('новая фишка появляется скрытой от игроков', () => {
     assert.strictEqual(token.hidden, true);
-    assert.strictEqual(p1.log.tokenCreated.length, 0, 'игрок получил скрытую фишку');
-    assert.strictEqual(p2.log.tokenCreated.length, 0, 'игрок получил скрытую фишку');
+    assert.strictEqual(p1.log.tokenCreated.length, 0,
+      `игрок получил скрытую фишку: ${p1.log.tokenCreated.map((entry) => entry.name).join(', ')}`);
+    assert.strictEqual(p2.log.tokenCreated.length, 0,
+      `игрок получил скрытую фишку: ${p2.log.tokenCreated.map((entry) => entry.name).join(', ')}`);
   });
   check('снимок состояния игрока не содержит скрытых фишек', () => {
     const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
@@ -2110,15 +2285,104 @@ async function main() {
     );
   });
 
+  dm.log.tokenUpdated.length = 0;
+  p2.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenConditions', {
+    tokenId: condToken.id,
+    conditions: ['prone', 'poisoned'],
+    conditionDurations: { prone: 3, poisoned: 99, выдуманное: 4 }
+  });
+  await waitFor(
+    () => (room.tokens.find((item) => item.id === condToken.id).conditionDurations || {}).prone === 3,
+    'длительности состояний'
+  );
+  check('длительность состояния хранится и не выходит за предел', () => {
+    const stored = room.tokens.find((item) => item.id === condToken.id);
+    assert.deepStrictEqual(stored.conditionDurations, { prone: 3, poisoned: 99 });
+  });
+  const seenDurations = await waitFor(
+    () => p2.log.tokenUpdated.find((item) => item.id === condToken.id
+      && item.conditionDurations && item.conditionDurations.prone === 3),
+    'длительности у игрока'
+  );
+  check('длительности видны игроку вместе с состояниями', () => {
+    assert.deepStrictEqual(seenDurations.conditionDurations, { prone: 3, poisoned: 99 });
+  });
+
   const condSaved = new RoomState({ state: room.serialize() });
   check('состояния переживают сохранение кампании', () => {
     const saved = condSaved.tokens.find((item) => item.name === 'Огр');
     assert.deepStrictEqual(saved.conditions, ['prone', 'poisoned']);
+    assert.deepStrictEqual(saved.conditionDurations, { prone: 3, poisoned: 99 });
   });
 
   check('состояний ровно столько, сколько есть в правилах', () => {
     assert.ok(windowlessConditionIds().length >= 13, 'список состояний потерялся');
   });
+
+  emit(dm, 'initiativeReset', {});
+  await waitFor(() => room.initiative.entries.length === 0, 'сброс боя перед длительностями');
+  emit(dm, 'initiativeAdd', { kind: 'token', refId: condToken.id, name: 'Огр', modifier: 0 });
+  const condEntry = await waitFor(
+    () => room.initiative.entries.find((entry) => entry.refId === condToken.id),
+    'Огр в порядке боя'
+  );
+  p2.log.tokenUpdated.length = 0;
+  emit(dm, 'initiativeTurn', { id: condEntry.id });
+  await waitFor(
+    () => (room.tokens.find((item) => item.id === condToken.id).conditionDurations || {}).prone === 2,
+    'уменьшение длительности в начале хода'
+  );
+  check('длительность уменьшается в начале хода и уходит игроку', () => {
+    const seen = p2.log.tokenUpdated.find((item) => item.id === condToken.id);
+    assert(seen, 'игрок не получил новую длительность');
+    assert.strictEqual(seen.conditionDurations.prone, 2);
+    assert.strictEqual(seen.conditionDurations.poisoned, 98);
+  });
+
+  emit(dm, 'initiativeStep', { dir: 1 });
+  await waitFor(
+    () => (room.tokens.find((item) => item.id === condToken.id).conditionDurations || {}).prone === 1,
+    'второй ход уменьшил длительность'
+  );
+  emit(dm, 'initiativeStep', { dir: 1 });
+  await waitFor(
+    () => !room.tokens.find((item) => item.id === condToken.id).conditions.includes('prone'),
+    'истёкшее состояние снято'
+  );
+  check('состояние снимается, когда раунды кончились', () => {
+    const stored = room.tokens.find((item) => item.id === condToken.id);
+    assert.deepStrictEqual(stored.conditions, ['poisoned']);
+    assert.strictEqual(stored.conditionDurations.poisoned, 96);
+  });
+
+  emit(dm, 'setTokenConditions', {
+    tokenId: condToken.id,
+    conditions: ['prone', 'poisoned'],
+    conditionDurations: { prone: 1, poisoned: 1 }
+  });
+  await waitFor(
+    () => room.tokens.find((item) => item.id === condToken.id).conditions.length === 2,
+    'два состояния перед истечением'
+  );
+  emit(dm, 'initiativeStep', { dir: 1 });
+  await waitFor(
+    () => room.tokens.find((item) => item.id === condToken.id).conditions.length === 0,
+    'оба состояния истекли'
+  );
+  check('два истёкших состояния снимаются вместе', () => {
+    const stored = room.tokens.find((item) => item.id === condToken.id);
+    assert.deepStrictEqual(stored.conditions, []);
+    assert.deepStrictEqual(stored.conditionDurations, {});
+  });
+
+  emit(dm, 'initiativeReset', {});
+  await waitFor(() => room.initiative.entries.length === 0, 'сброс боя после длительностей');
+  emit(dm, 'setTokenConditions', { tokenId: condToken.id, conditions: [] });
+  await waitFor(
+    () => room.tokens.find((item) => item.id === condToken.id).conditions.length === 0,
+    'состояния после проверки длительностей'
+  );
 
   emit(dm, 'deleteToken', { tokenId: condToken.id });
   await waitFor(() => !room.tokens.some((item) => item.id === condToken.id), 'уборка фишки состояний');
@@ -2514,6 +2778,12 @@ async function main() {
     assert.strictEqual(restored.maps.sketch.items.length, 1);
     assert.strictEqual(restored.currentMap('battle').name, 'battle.png', 'показываться должна выбранная карта');
     assert.strictEqual(restored.activeMap, 'world');
+    assert.strictEqual(restored.activeMapId, worldMap.items[0].id);
+    assert.strictEqual(
+      restored.maps.battle.items.every((item) => item.published === false),
+      true,
+      'заготовки должны остаться заготовками'
+    );
   });
   check('сетка стола восстанавливается вместе с кампанией', () => {
     assert.strictEqual(restored.grid.enabled, true);
@@ -2533,7 +2803,7 @@ async function main() {
     for (const field of ['id', 'name', 'createdAt', 'updatedAt', 'version', 'state']) {
       assert.ok(raw[field] !== undefined, `нет поля ${field}`);
     }
-    for (const field of ['players', 'sheets', 'maps', 'activeMap', 'tokens']) {
+    for (const field of ['players', 'sheets', 'maps', 'activeMap', 'activeMapId', 'tokens']) {
       assert.ok(raw.state[field] !== undefined, `нет state.${field}`);
     }
   });

@@ -21,9 +21,12 @@
   100% { transform: translate3d(-2%, -1%, 0) scale(1.05); }
 }
 
+/* Лес: заголовок едва заметно качается. Двигаем transform, а не
+   letter-spacing: смена межбуквенного расстояния заставляет браузер
+   пересчитывать раскладку текста на каждом кадре. */
 @keyframes theme-sway {
-  0%, 100% { letter-spacing: 0; }
-  50%      { letter-spacing: 0.02em; }
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50%      { transform: translate3d(0.4px, 0, 0); }
 }
 
 @keyframes theme-flicker {
@@ -40,6 +43,43 @@
 @keyframes theme-shimmer {
   0%, 100% { opacity: 0.45; transform: translateY(0); }
   50%      { opacity: 0.85; transform: translateY(-1px); }
+}
+
+/* Подвесной орнамент: висит на кромке карты и тянется за курсором. */
+@keyframes decor-wave {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 0.85; }
+}
+
+@keyframes decor-gear {
+  from { transform: translateX(-50%) rotate(0deg); }
+  to   { transform: translateX(-50%) rotate(360deg); }
+}
+
+/* Шестерня в заголовке панели стимпанка. */
+@keyframes control-gear {
+  to { transform: rotate(360deg); }
+}
+
+/* Кость крутится в воздухе, пока сервер считает результат. */
+@keyframes dice-roll {
+  0%   { transform: rotateZ(0) rotateX(0) translateY(0) scale(1); }
+  25%  { transform: rotateZ(90deg) rotateX(140deg) translateY(-7px) scale(0.92); }
+  50%  { transform: rotateZ(180deg) rotateX(280deg) translateY(0) scale(1.05); }
+  75%  { transform: rotateZ(270deg) rotateX(420deg) translateY(-3px) scale(0.96); }
+  100% { transform: rotateZ(360deg) rotateX(560deg) translateY(0) scale(1); }
+}
+
+@keyframes dice-shadow {
+  0%, 100% { transform: translateX(-50%) scaleX(1); opacity: 0.5; }
+  50%      { transform: translateX(-50%) scaleX(0.6); opacity: 0.25; }
+}
+
+/* Результат падает на стол, а не просто вспыхивает. */
+@keyframes dice-land {
+  0%   { opacity: 0; transform: translateY(-16px) rotateX(-160deg) scale(0.45); filter: blur(2px); }
+  55%  { opacity: 1; transform: translateY(2px) rotateX(8deg) scale(1.16); filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) rotateX(0) scale(1); }
 }
 
 /* Подложка-атмосфера. Стоит под всем содержимым и ничего не перехватывает. */
@@ -157,6 +197,42 @@ body > * {
   animation: theme-flicker 6.5s ease-in-out infinite;
 }
 
+/* Стимпанк: тёплый свет топки, клубы пара и медленный ход машины. */
+[data-theme='par'] body::before {
+  opacity: 1;
+  background:
+    radial-gradient(38% 30% at 50% 106%, rgba(224, 168, 70, 0.15), transparent 70%),
+    radial-gradient(24% 20% at 12% 10%, rgba(201, 138, 60, 0.1), transparent 72%),
+    radial-gradient(20% 16% at 84% 22%, rgba(230, 210, 180, 0.06), transparent 72%),
+    radial-gradient(16% 14% at 74% 74%, rgba(230, 210, 180, 0.05), transparent 72%),
+    radial-gradient(1.6px 1.6px at 24% 34%, rgba(255, 214, 150, 0.5), transparent 60%),
+    radial-gradient(1.4px 1.4px at 78% 66%, rgba(255, 214, 150, 0.4), transparent 60%);
+  animation: theme-drift 36s ease-in-out infinite;
+}
+
+[data-theme='par'] .panel__title,
+[data-theme='par'] .home__title {
+  text-shadow: var(--title-shadow), var(--title-glow);
+}
+
+/* Перед заголовком панели вместо ромба вращается шестерня. */
+[data-theme='par'] .panel__title::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, var(--gold) 0 12deg, transparent 12deg 30deg);
+  -webkit-mask: radial-gradient(circle, transparent 0 30%, #000 31%);
+  mask: radial-gradient(circle, transparent 0 30%, #000 31%);
+  animation: control-gear 14s linear infinite;
+}
+
+[data-theme='par'] .panel::before,
+[data-theme='par'] .panel::after {
+  border-color: color-mix(in srgb, var(--gold) 55%, transparent);
+  box-shadow: 0 0 8px var(--accent-soft);
+}
+
 /*
  * Уважаем системную настройку «уменьшить движение»: оформление остаётся,
  * исчезает только движение.
@@ -164,8 +240,18 @@ body > * {
 @media (prefers-reduced-motion: reduce) {
   body::before,
   [data-theme] .panel__title,
-  [data-theme] .home__title {
+  [data-theme] .home__title,
+  [data-theme='par'] .panel__title::before,
+  .map-decor__strand,
+  .map-decor__mark,
+  .dice__tumbler-die,
+  .dice__tumbler::after,
+  .dice__last-value.is-pop {
     animation: none !important;
+  }
+  .map-decor__strand {
+    transform: none !important;
+    transition: none !important;
   }
 }
 
@@ -512,6 +598,244 @@ body > * {
 /* Мелкие кнопки не подпрыгивают: иначе список фишек дрожал бы при наведении. */
 .btn--tiny:hover:not(:disabled) {
   transform: none;
+}
+
+/* --------------------------------------------------- Тематическая оправа
+ *
+ * Орнамент живёт не на каждой кнопке, а на самом столе: одна лоза, цепь или
+ * волна подвешена к верхней кромке карты. Тема читается, но интерфейс не
+ * рябит десятком одинаковых значков.
+ */
+[data-theme] .map-stage {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+}
+
+[data-theme] .map-tab {
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
+}
+
+[data-theme] .map-tab.is-active {
+  box-shadow: 0 0 0 1px var(--accent-soft), 0 0 10px var(--accent-soft);
+}
+
+[data-theme] .map-zoom {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-strong));
+}
+
+[data-theme] .mapview .btn:not(.btn--ghost) {
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--border-strong));
+}
+
+[data-theme] .input,
+[data-theme] .textarea,
+[data-theme] .select,
+[data-theme] .field__input {
+  border-color: color-mix(in srgb, var(--accent) 12%, var(--border));
+}
+
+/* Орнамент подвешен к верхней кромке карты. */
+.map-decor {
+  position: absolute;
+  top: 0;
+  left: 24px;
+  z-index: 4;
+  width: 46px;
+  height: 116px;
+  pointer-events: none;
+  --pointer-x: 0.5;
+}
+
+.map-decor__strand {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 74px;
+  pointer-events: none;
+  transform-origin: 50% 0;
+  transform:
+    translateX(calc((var(--pointer-x) - 0.5) * 18px))
+    rotate(calc((var(--pointer-x) - 0.5) * 16deg));
+  transition: transform 0.35s ease-out;
+}
+
+.map-decor__mark {
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+/* Лес: лоза с листьями. Тянется за курсором, но не качается сама. */
+[data-theme='les'] .map-decor__strand {
+  height: 78px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, transparent, var(--accent) 14%, var(--accent));
+  box-shadow: 0 0 8px var(--accent-soft);
+}
+
+[data-theme='les'] .map-decor__strand::before,
+[data-theme='les'] .map-decor__strand::after {
+  content: '';
+  position: absolute;
+  width: 15px;
+  height: 10px;
+  border-radius: 60% 0 60% 0;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--ok) 80%, var(--accent)));
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+
+[data-theme='les'] .map-decor__strand::before {
+  left: 2px;
+  top: 26%;
+  transform: rotate(22deg);
+}
+
+[data-theme='les'] .map-decor__strand::after {
+  right: 2px;
+  top: 56%;
+  transform: rotate(-24deg) scaleX(-1);
+}
+
+[data-theme='les'] .map-decor__mark {
+  width: 19px;
+  height: 13px;
+  border-radius: 60% 0 60% 0;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--ok) 80%, var(--accent)));
+  box-shadow: 0 0 10px var(--accent-soft);
+  transform: translateX(-50%) rotate(-14deg);
+}
+
+/* Океан: волна и капля. Волна дышит, курсор сдвигает её по кромке. */
+[data-theme='okean'] .map-decor {
+  left: auto;
+  right: 24px;
+  top: 10px;
+  width: 98px;
+  height: 48px;
+}
+
+[data-theme='okean'] .map-decor__strand {
+  left: 0;
+  top: 8px;
+  width: 94px;
+  height: 22px;
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(
+      ellipse at 50% 100%,
+      transparent 0 8px,
+      color-mix(in srgb, var(--accent) 45%, transparent) 9px 10px,
+      transparent 11px 16px
+    );
+  opacity: 0.7;
+  animation: decor-wave 5.5s ease-in-out infinite;
+}
+
+[data-theme='okean'] .map-decor__mark {
+  left: 78%;
+  bottom: -4px;
+  width: 11px;
+  height: 15px;
+  border-radius: 50% 50% 50% 50% / 62% 62% 38% 38%;
+  background: radial-gradient(circle at 38% 30%, rgba(210, 245, 255, 0.9), var(--accent));
+  box-shadow: 0 0 9px var(--accent-soft);
+}
+
+/* Магия: нить и светящийся ромб. */
+[data-theme='magiya'] .map-decor__strand {
+  width: 1px;
+  height: 70px;
+  background: linear-gradient(180deg, transparent, var(--accent));
+  box-shadow: 0 0 8px var(--glow);
+}
+
+[data-theme='magiya'] .map-decor__mark {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--gold);
+  box-shadow: 0 0 14px var(--glow);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/* Трактир: шнур и фонарь. */
+[data-theme='traktir'] .map-decor__strand {
+  height: 52px;
+  background: linear-gradient(180deg, var(--border-strong), var(--gold));
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+
+[data-theme='traktir'] .map-decor__mark {
+  width: 15px;
+  height: 19px;
+  border-radius: 5px;
+  background:
+    radial-gradient(
+      ellipse at 50% 35%,
+      var(--gold),
+      color-mix(in srgb, var(--danger) 55%, transparent) 58%,
+      transparent 70%
+    );
+  box-shadow: 0 0 12px var(--accent-soft);
+}
+
+/* Стимпанк: цепь и шестерня. */
+[data-theme='par'] .map-decor__strand {
+  height: 66px;
+  background: repeating-linear-gradient(180deg, var(--gold) 0 4px, transparent 4px 7px);
+  box-shadow: 0 0 7px var(--accent-soft);
+}
+
+[data-theme='par'] .map-decor__mark {
+  bottom: -18px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(var(--gold) 0 14deg, transparent 14deg 30deg);
+  -webkit-mask: radial-gradient(circle, transparent 0 32%, #000 33%);
+  mask: radial-gradient(circle, transparent 0 32%, #000 33%);
+  animation: decor-gear 18s linear infinite;
+}
+
+/* Стандартная: тонкая нить и золотой ромб. */
+[data-theme='standart'] .map-decor__strand {
+  width: 1px;
+  height: 44px;
+  background: linear-gradient(180deg, transparent, var(--border-strong));
+}
+
+[data-theme='standart'] .map-decor__mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--gold);
+  opacity: 0.6;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/* Оправа карты: акцент темы по кромке, без узора на каждой кнопке. */
+[data-theme] .map-surface {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 38%, var(--border-strong)),
+    0 0 22px var(--accent-soft),
+    0 12px 34px var(--shadow-press);
+}
+
+[data-theme='par'] .map-surface {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--gold) 48%, transparent),
+    0 0 22px var(--accent-soft),
+    0 12px 34px var(--shadow-press);
+}
+
+[data-theme='par'] .map-zoom {
+  border-color: color-mix(in srgb, var(--gold) 45%, transparent);
+  background: color-mix(in srgb, var(--bg-deep) 88%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--accent-soft),
+    0 0 16px rgba(0, 0, 0, 0.45);
 }
 
 /* ---------------------------------------------------------------- Поля */
@@ -1327,6 +1651,52 @@ body::after {
 
 .token-conditions.is-open .token-conditions__grid {
   display: flex;
+}
+
+.token-conditions__body {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.token-conditions.is-open .token-conditions__body {
+  display: flex;
+}
+
+.token-conditions__durations {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.token-conditions__rounds {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.token-conditions__rounds-name {
+  min-width: 74px;
+}
+
+.token-conditions__rounds-input {
+  width: 46px;
+  padding: 1px 4px;
+  font-size: 10.5px;
+}
+
+.token-conditions__rounds-unit {
+  color: var(--dim);
+}
+
+.token-conditions__note {
+  max-width: 230px;
+  font-size: 9.5px;
+  line-height: 1.3;
+  color: var(--dim);
 }
 
 .token-conditions__chip {
@@ -2257,6 +2627,59 @@ body::after {
   animation: dnd-tumble 480ms var(--ease-back);
 }
 
+/* Пока сервер считает, над столом крутится кость.
+ * Результат приходит быстрее, чем успевает прочитаться бросок, поэтому
+ * плашка держит анимацию минимум полтакта и только потом оседает числом.
+ */
+.dice__last.is-tumbling {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent);
+}
+
+.dice__tumbler {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  perspective: 120px;
+  flex: none;
+}
+
+.dice__tumbler-die {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--bg-deep);
+  background: linear-gradient(145deg, var(--gold), var(--accent));
+  clip-path: polygon(50% 0, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+  box-shadow: 0 0 14px var(--accent-soft);
+  animation: dice-roll 560ms linear infinite;
+}
+
+.dice__tumbler::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 18px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: var(--shadow-press);
+  filter: blur(2px);
+  animation: dice-shadow 560ms ease-in-out infinite;
+}
+
+.dice__last-value.is-pop {
+  animation: dice-land 560ms var(--ease-back);
+  transform-origin: 50% 80%;
+}
+
 /* ------------------------------------------------------------------ Чат */
 
 /* Бросок помечен маленьким ромбом: в ленте он сразу отличается от реплики. */
@@ -2785,6 +3208,34 @@ body::after {
 
 .hit-die__out.is-pop .hit-die__value {
   animation: dnd-tumble 480ms var(--ease-back);
+}
+
+.hit-die__rest {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  border: 1px dashed rgba(112, 78, 38, 0.35);
+  border-radius: 2px;
+  background: rgba(255, 252, 240, 0.3);
+}
+
+.hit-die__pool {
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: #5a3d22;
+}
+
+.hit-die__rest-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hit-die__rest-note {
+  font-size: 10px;
+  color: #7b6040;
+  font-style: italic;
 }
 
 @media (prefers-reduced-motion: reduce) {

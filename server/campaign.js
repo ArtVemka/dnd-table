@@ -297,7 +297,10 @@ class CampaignStore {
       try {
         // eslint-disable-next-line no-await-in-loop
         const stat = await fsp.stat(full);
-        if (now - stat.mtimeMs < keepMs) continue;
+        // keepMs: 0 выключает окно защиты: только что записанный файл тоже
+        // удаляется. Без этой ветки mtime, округлённый вперёд, оставлял его
+        // навсегда, и свалка возвращала 0 вместо удаления.
+        if (keepMs > 0 && now - stat.mtimeMs < keepMs) continue;
         // eslint-disable-next-line no-await-in-loop
         await fsp.unlink(full);
         removed += 1;

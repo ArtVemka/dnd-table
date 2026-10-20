@@ -1100,6 +1100,9 @@ const GRID = {
       spellSlotsUsed: [0, 0, 0, 0, 0, 0, 0, 0, 0],
       spellSlotsMax: [0, 0, 0, 0, 0, 0, 0, 0, 0],
       hitDice: '1d8',
+      // Сколько костей хитов уже потрачено. Пул общий: у мультикласса
+      // конкретную кость выбирают в листе, а счётчик один.
+      hitDiceSpent: 0,
       armorClass: 10,
       initiativeMisc: 0,
       speed: 30,

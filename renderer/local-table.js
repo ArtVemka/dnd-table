@@ -328,6 +328,7 @@
     sheet.maxHp = clampInt(raw.maxHp, 0, 9999, 10);
     sheet.tempHp = clampInt(raw.tempHp, 0, 9999, 0);
     sheet.hitDice = sanitizeText(raw.hitDice, 20);
+    sheet.hitDiceSpent = clampInt(raw.hitDiceSpent, 0, 20, 0);
     sheet.armorClass = clampInt(raw.armorClass, 0, 99, 10);
     sheet.initiativeMisc = clampInt(raw.initiativeMisc, -20, 20, 0);
     sheet.speed = clampInt(raw.speed, 0, 999, 30);
@@ -469,6 +470,36 @@
       turnId: state.initiative.turnId,
       round: state.initiative.round
     });
+
+    /** Уменьшает длительности состояний в начале хода, как настоящий стол. */
+    const tickConditionsForTurn = () => {
+      const entry = state.initiative.entries.find((item) => item.id === state.initiative.turnId);
+      if (!entry) return;
+      const tokenIds = new Set();
+      if (entry.kind === 'token') tokenIds.add(entry.refId);
+      else if (entry.kind === 'player') {
+        for (const token of state.tokens) {
+          if (token.assignedPlayerId === entry.refId) tokenIds.add(token.id);
+        }
+      }
+      for (const token of state.tokens) {
+        if (!tokenIds.has(token.id)) continue;
+        const durations = token.conditionDurations && typeof token.conditionDurations === 'object'
+          ? { ...token.conditionDurations }
+          : {};
+        let touched = false;
+        for (const [id, rounds] of Object.entries(durations)) {
+          const next = clampInt(rounds, 0, 99, 0) - 1;
+          if (next <= 0) delete durations[id];
+          else durations[id] = next;
+          touched = true;
+        }
+        if (!touched) continue;
+        token.conditions = (token.conditions || []).filter((condition) => durations[condition] > 0);
+        token.conditionDurations = durations;
+        emitTo('tokenUpdated', { ...token });
+      }
+    };
 
     const mapUpdated = (type) => {
       const slot = state.maps[type];
@@ -846,6 +877,14 @@
         const known = new Set(DnD.CONDITIONS.map((item) => item.id));
         const list = Array.isArray(payload.conditions) ? payload.conditions : [];
         token.conditions = [...new Set(list.filter((id) => known.has(id)))];
+        token.conditionDurations = {};
+        const rawDurations = payload.conditionDurations && typeof payload.conditionDurations === 'object'
+          ? payload.conditionDurations
+          : {};
+        for (const id of token.conditions) {
+          const rounds = clampInt(rawDurations[id], 0, 99, 0);
+          if (rounds > 0) token.conditionDurations[id] = rounds;
+        }
         emitTo('tokenUpdated', { ...token });
       },
 
@@ -1025,7 +1064,9 @@
       initiativeTurn(payload) {
         const id = String((payload && payload.id) || '');
         if (!state.initiative.entries.some((entry) => entry.id === id)) return;
+        if (state.initiative.turnId === id) return;
         state.initiative.turnId = id;
+        tickConditionsForTurn();
         emitTo('initiativeUpdated', cloneInitiative());
       },
 
@@ -1044,6 +1085,7 @@
         } else {
           state.initiative.turnId = entries[current - 1] || entries[0].id;
         }
+        tickConditionsForTurn();
         emitTo('initiativeUpdated', cloneInitiative());
       },
 

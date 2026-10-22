@@ -70,6 +70,25 @@ endpoint из панели «Приглашение игроков» на экр
 
 ---
 
+## Android: клиент игрока
+
+В `android/` лежит отдельное приложение для телефона и планшета. Electron на
+Android не запускается, поэтому там WebView с тем же renderer и Kotlin-туннель
+iroh. Мастер работает на компьютере, игрок вставляет билет и играет за столом.
+
+* Доступен только вход за игрока: кампании, карты и мастерские панели остаются
+  на компьютере.
+* Лист персонажа можно заполнить до подключения и выбрать при входе.
+* Отдельное окно листа не открывается, лист правится во вкладке стола.
+* Свёрнутое приложение может усыпить туннель; после возврата подключение
+  поднимается заново.
+* Сборка: JDK 21, Android SDK 35, build-tools 35.0.0. `cd android` и
+  `./gradlew assembleDebug`. APK появится в
+  `android/app/build/outputs/apk/debug/`.
+* Подробности: [android/README.md](android/README.md).
+
+---
+
 ## Стол без сервера (проверка)
 
 Кнопка **«▷ Запустить стол без сервера (как игрок)»** в настройках открывает
@@ -1020,6 +1039,9 @@ renderer/dice.js         разбор формул броска: общий дл
 renderer/local-table.js стол без сервера: те же события внутри окна + черновик листа
 renderer/app.js         контроллер: экраны, панели, IPC, события сокета
 renderer/vendor/        socket.io-client (копируется из node_modules при установке)
+android/                клиент игрока: WebView + Kotlin-туннель iroh
+android/app/src/main/assets/android-bridge.js  window.desktop для WebView
+test/android-bridge.js  проверка моста Android без эмулятора
 scripts/copy-vendor.js  копирование клиента socket.io
 scripts/make-avatar.js  build/avatar-dm.svg -> renderer/avatar-dm.png
 test/integration.js     серверные тесты

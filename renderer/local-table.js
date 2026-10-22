@@ -843,6 +843,7 @@
           // за неимением лучшего. Поле держим, чтобы модель совпадала.
           hidden: false,
           color: TOKEN_COLORS[state.tokens.length % TOKEN_COLORS.length],
+          size: DnD.clampNumber(payload.size, 1, 4, 1),
           // Прочность необязательна: пустое поле у формы — метка без здоровья.
           maxHp: Number(payload.maxHp) > 0 ? Math.min(9999, Math.round(Number(payload.maxHp))) : null,
           conditions: [],
@@ -904,6 +905,16 @@
           return;
         }
         token.hp = Math.max(0, Math.min(token.maxHp, value));
+        emitTo('tokenUpdated', { ...token });
+      },
+
+      setTokenSize(payload) {
+        const token = findToken(payload.tokenId);
+        if (!token) {
+          emitTo('errorMessage', { message: 'Фишка не найдена' });
+          return;
+        }
+        token.size = DnD.clampNumber(payload.size, 1, 4, 1);
         emitTo('tokenUpdated', { ...token });
       },
 

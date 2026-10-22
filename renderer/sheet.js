@@ -507,6 +507,7 @@
 
       // --- Колонка 3: атаки, снаряжение, особенности, заметки ---
       const col3 = el('section', 'sheet__col');
+      col3.appendChild(this.buildAttacksBlock());
       col3.appendChild(this.textarea('attacks', 'Атаки и заклинания'));
       col3.appendChild(this.textarea('equipment', 'Снаряжение'));
       col3.appendChild(this.textarea('features', 'Особенности и черты'));
@@ -776,6 +777,155 @@
       return wrap;
     }
 
+    /**
+     * Атаки для быстрых бросков: имя, бонус к попаданию, формула урона.
+     *
+     * Текстовое поле «Атаки и заклинания» остаётся для описаний: в нём удобно
+     * писать свойства оружия, но бросок из текста не собрать.
+     * @returns {HTMLElement}
+     */
+    buildAttacksBlock() {
+      const wrap = el('div', 'box box--attacks');
+      wrap.appendChild(el('div', 'box__title', 'Быстрые броски'));
+      wrap.appendChild(el('div', 'box__note',
+        'Бонус к попаданию и урон. Бросок уходит всему столу.'));
+      this.attackList = el('div', 'attack-list');
+      this.attackRows = [];
+      wrap.appendChild(this.attackList);
+      const add = el('button', 'btn btn--tiny attack-list__add', '+ Атака');
+      add.type = 'button';
+      add.addEventListener('click', () => {
+        if (this.readOnly || this.attackRows.length >= DnD.LIMITS.maxSheetAttacks) return;
+        // Не зовём refresh(): пустая строка не должна сохраняться в кампанию
+        // раньше, чем в неё что-то впишут.
+        this.addAttackRow({});
+      });
+      this.attackAdd = add;
+      wrap.appendChild(add);
+      return wrap;
+    }
+
+    /** @param {{name?: string, bonus?: number, damage?: string}} attack */
+    addAttackRow(attack = {}) {
+      const row = el('div', 'attack-row');
+      const name = el('input', 'input attack-row__name');
+      name.type = 'text';
+      name.placeholder = 'Название';
+      name.maxLength = DnD.LIMITS.maxAttackName;
+      name.value = attack.name || '';
+      const bonus = el('input', 'input attack-row__bonus');
+      bonus.type = 'number';
+      bonus.min = '-20';
+      bonus.max = '30';
+      bonus.placeholder = '+0';
+      bonus.title = 'Бонус к попаданию';
+      bonus.value = attack.bonus === undefined ? '' : String(attack.bonus);
+      const damage = el('input', 'input attack-row__damage');
+      damage.type = 'text';
+      damage.placeholder = '1d8+3';
+      damage.maxLength = DnD.LIMITS.maxAttackDamage;
+      damage.value = attack.damage || '';
+      damage.title = 'Формула урона, например 1d8+3';
+
+      const hit = el('button', 'btn btn--tiny attack-row__roll', 'd20');
+      hit.type = 'button';
+      hit.title = 'Бросок атаки';
+      hit.addEventListener('click', () => {
+        const label = name.value.trim() || 'Атака';
+        this.rollCheck('Атака: ' + label, DnD.formatModifier(
+          DnD.clampNumber(bonus.value, -20, 30, 0)
+        ));
+      });
+
+      const dmg = el('button', 'btn btn--tiny attack-row__roll', 'урон');
+      dmg.type = 'button';
+      dmg.title = 'Бросок урона';
+      dmg.addEventListener('click', () => {
+        const formula = damage.value.trim();
+        if (!formula) return;
+        if (!this.handlers.onRollCheck || this.readOnly) return;
+        this.handlers.onRollCheck(formula, 'Урон: ' + (name.value.trim() || 'атака'));
+      });
+
+      const remove = el('button', 'btn btn--ghost btn--tiny attack-row__remove', '×');
+      remove.type = 'button';
+      remove.title = 'Убрать атаку';
+      remove.addEventListener('click', () => {
+        if (this.readOnly) return;
+        const index = this.attackRows.findIndex((item) => item.node === row);
+        if (index >= 0) this.attackRows.splice(index, 1);
+        row.remove();
+        this.refresh();
+      });
+
+      for (const input of [name, bonus, damage]) {
+        input.addEventListener('input', () => this.refresh());
+      }
+
+      row.appendChild(name);
+      row.appendChild(bonus);
+      row.appendChild(damage);
+      row.appendChild(hit);
+      row.appendChild(dmg);
+      row.appendChild(remove);
+      this.attackList.appendChild(row);
+      this.attackRows.push({ node: row, name, bonus, damage, hit, dmg, remove });
+    }
+
+    /**
+     * Обновляет строки атак из листа. При смене персонажа пересобирает их
+     * целиком, иначе правит значения на месте: иначе ответ сервера на каждую
+     * букву пересоздавал бы поле и выбивал из него курсор.
+     * @param {object[]} list
+     * @param {boolean} sameCharacter
+     */
+    syncAttackRows(list, sameCharacter) {
+      if (!this.attackList) return;
+      const data = Array.isArray(list) ? list : [];
+      if (!sameCharacter) {
+        this.attackList.innerHTML = '';
+        this.attackRows = [];
+        for (const attack of data) this.addAttackRow(attack);
+        return;
+      }
+      // Лишние пустые строки не трогаем: человек мог только что нажать
+      // «+ Атака» и ещё не начать печатать.
+      while (this.attackRows.length > data.length) {
+        const last = this.attackRows[this.attackRows.length - 1];
+        const empty = !last.name.value.trim() && !last.damage.value.trim()
+          && !String(last.bonus.value).trim();
+        if (!empty) break;
+        this.attackRows.pop();
+        last.node.remove();
+      }
+      for (let index = 0; index < data.length; index += 1) {
+        if (!this.attackRows[index]) this.addAttackRow(data[index]);
+      }
+      data.forEach((attack, index) => {
+        const row = this.attackRows[index];
+        if (!row) return;
+        // Не перебиваем то, что человек печатает прямо сейчас.
+        if (document.activeElement !== row.name) row.name.value = attack.name || '';
+        if (document.activeElement !== row.bonus) {
+          row.bonus.value = attack.bonus === undefined ? '' : String(attack.bonus);
+        }
+        if (document.activeElement !== row.damage) row.damage.value = attack.damage || '';
+      });
+    }
+
+    /** @returns {{name: string, bonus: number, damage: string}[]} */
+    collectAttackList() {
+      const list = [];
+      for (const row of this.attackRows || []) {
+        const name = row.name.value.trim().slice(0, DnD.LIMITS.maxAttackName);
+        const damage = row.damage.value.trim().slice(0, DnD.LIMITS.maxAttackDamage);
+        const bonus = DnD.clampNumber(row.bonus.value, -20, 30, 0);
+        if (!name && !damage && bonus === 0) continue;
+        list.push({ name, bonus, damage });
+      }
+      return list.slice(0, DnD.LIMITS.maxSheetAttacks);
+    }
+
     /** Читает текущие значения формы в объект листа. */
     /**
      * Собирает лист из полей формы.
@@ -882,6 +1032,7 @@ sheet.hitDiceSpent = DnD.clampNumber(current.hitDiceSpent, 0, DnD.LIMITS.maxLeve
       // Мультикласс хранится списком только когда он есть: у одноклассового
       // листа класс остаётся в старых полях, и кампании не нужно мигрировать.
       sheet.classes = this.extraRows.length ? this.currentClasses() : [];
+      sheet.attackList = this.collectAttackList();
       return sheet;
     }
 
@@ -1197,6 +1348,10 @@ node.max.disabled = this.readOnly;
         this.skillNodes[skill.key].expert.checked = Boolean(data.skillExpertise && data.skillExpertise[skill.key]);
       }
       this.applyExtraClasses(data);
+      const sameCharacter = Boolean(previous)
+        && previous.playerName === data.playerName
+        && previous.characterName === data.characterName;
+      this.syncAttackRows(data.attackList, sameCharacter);
       this.derived = DnD.computeDerived(data);
       this.paintDerived();
       this.syncHitDie();
@@ -1213,6 +1368,12 @@ node.max.disabled = this.readOnly;
         row.level.disabled = this.readOnly;
         if (row.removeButton) row.removeButton.disabled = this.readOnly;
       }
+      for (const row of this.attackRows || []) {
+        for (const node of [row.name, row.bonus, row.damage, row.hit, row.dmg, row.remove]) {
+          node.disabled = this.readOnly;
+        }
+      }
+      if (this.attackAdd) this.attackAdd.disabled = this.readOnly;
       this.updateClassSummary();
 if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
     if (this.manualProfCheck && !this.manualProfCheck.checked) this.manualProfInput.hidden = true;

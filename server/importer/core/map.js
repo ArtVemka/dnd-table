@@ -206,6 +206,11 @@ function mapToCampaign(built, context) {
             x: toFraction(raw.x, raw.width, sceneWidth),
             y: toFraction(raw.y, raw.height, sceneHeight),
             imageUrl: child.image ? child.image.data : null,
+            // Foundry хранит размер токена в клетках: 2 у большого, 3 у
+            // огромного. Берём большую сторону, потому что фишка круглая.
+            size: Math.max(1, Math.min(4, Math.round(Math.max(
+              Number(raw.width) || 1, Number(raw.height) || 1
+            )))),
             assignedPlayerId: null,
             color: '#c87550'
           });
@@ -259,7 +264,9 @@ function mapToCampaign(built, context) {
       adventure.actors.push({
         id: nextId('actor'),
         name: entity.name || 'Персонаж',
+        type: String((entity.raw && entity.raw.type) || 'npc'),
         image: entity.image ? entity.image.data : '',
+        statblock: (entity.raw && entity.raw.statblock) || null,
         sourceId: entity.sourceId
       });
       applied.push({ kind: 'actor', name: plan.name, where: 'справочник персонажей' });

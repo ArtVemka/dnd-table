@@ -62,6 +62,8 @@ const LIMITS = {
   maxSpellSlotsPerLevel: 9,
   /** Заметка мастера: столько же, сколько заметки в листе. */
   maxDmNote: 4000,
+  /** Строк атак в листе: больше двадцати за бой всё равно не пригодится. */
+  maxSheetAttacks: 20,
   maxLevel: 20,
   minAbility: 1,
   maxAbility: 30,
@@ -440,6 +442,31 @@ function sanitizeText(value, maxLength) {
 }
 
 /**
+ * Статблок монстра или NPC: только поля, которые нужны за столом.
+ * @param {unknown} input
+ * @returns {object|null}
+ */
+function normalizeStatblock(input) {
+  if (!input || typeof input !== 'object') return null;
+  const raw = /** @type {Record<string, any>} */ (input);
+  const abilitiesRaw = raw.abilities && typeof raw.abilities === 'object' ? raw.abilities : {};
+  const abilities = {};
+  for (const key of ABILITY_KEYS) {
+    abilities[key] = clampInt(abilitiesRaw[key], LIMITS.minAbility, LIMITS.maxAbility, 10);
+  }
+  return {
+    ac: clampInt(raw.ac, 0, 99, 0),
+    hp: clampInt(raw.hp, 0, LIMITS.maxTokenHp, 0),
+    speed: sanitizeText(raw.speed, 60),
+    size: clampInt(raw.size, 1, 4, 1),
+    cr: sanitizeText(raw.cr, 20),
+    abilities,
+    attacks: sanitizeText(raw.attacks, LIMITS.maxSheetTextLength),
+    notes: sanitizeText(raw.notes, LIMITS.maxSheetTextLength)
+  };
+}
+
+/**
  * Приводит импортированное приключение к виду, который безопасно отдать
  * интерфейсу. Всё прогоняется через те же ограничения, что и остальной
  * текст: неизвестные поля не сохраняются, длинные строки обрезаются.
@@ -481,9 +508,12 @@ function normalizeAdventure(input) {
     actors: list(raw.actors, LIMITS.maxAdventureActors).map((item, index) => ({
       id: String((item && item.id) || `actor-${index}`),
       name: sanitizeText(item && item.name, LIMITS.maxAdventureTitle) || 'Персонаж',
+      // npc или character: только для подписи в карточке, на механику не влияет.
+      type: sanitizeText(item && item.type, 20) || 'npc',
       // Картинки импорта — это ссылки вида /files/<имя>. Не строка сюда не попадает:
       // приводить 42 к «42» зачем, а вот тихо испорченная ссылка мешает потом.
       image: typeof item?.image === 'string' ? sanitizeText(item.image, LIMITS.maxAdventureImageRef) : '',
+      statblock: normalizeStatblock(item && item.statblock),
       sourceId: String((item && item.sourceId) || '')
     }))
   };
@@ -515,6 +545,26 @@ function normalizeSheetClasses(value) {
     const level = Math.min(clampInt(entry && entry.level, 1, LIMITS.maxLevel, 1), room);
     result.push({ name, level });
     sum += level;
+  }
+  return result;
+}
+
+/**
+ * Строки атак листа: имя, бонус к попаданию и формула урона. Пустые строки
+ * выбрасываются, чтобы «+ Атака» без текста не сохранялась в кампанию.
+ * @param {unknown} value
+ * @returns {{name: string, bonus: number, damage: string}[]}
+ */
+function normalizeAttackList(value) {
+  if (!Array.isArray(value)) return [];
+  const result = [];
+  for (const entry of value.slice(0, LIMITS.maxSheetAttacks)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const name = sanitizeText(entry.name, 60);
+    const damage = sanitizeText(entry.damage, 80);
+    const bonus = clampInt(entry.bonus, -20, 30, 0);
+    if (!name && !damage && bonus === 0) continue;
+    result.push({ name, bonus, damage });
   }
   return result;
 }
@@ -572,6 +622,7 @@ function normalizeSheet(input, fallbackPlayerName = '') {
   sheet.initiativeMisc = clampInt(raw.initiativeMisc, -20, 20, 0);
   sheet.speed = clampInt(raw.speed, 0, 999, 30);
 
+  sheet.attackList = normalizeAttackList(raw.attackList);
   sheet.attacks = sanitizeText(raw.attacks, LIMITS.maxSheetTextLength);
   sheet.equipment = sanitizeText(raw.equipment, LIMITS.maxSheetTextLength);
   sheet.features = sanitizeText(raw.features, LIMITS.maxSheetTextLength);
@@ -1098,6 +1149,9 @@ fogMask: normalizeFog(source.fogMask),
       // одинаково у всех и тайны здесь нет.
       hideLabels: Boolean(token.hideLabels),
       color: typeof token.color === 'string' ? token.color : TOKEN_PALETTE[0],
+      // Размер в клетках: 1 — средний, 2 — большой, 3 — огромный, 4 — исполин.
+      // Якорь остаётся центром фишки, поэтому большая фишка растёт от центра.
+      size: clampInt(token.size, 1, 4, 1),
       // Прочность. maxHp === null — фишка без здоровья: монетка, метка или
       // просто шарик. У монстра и персонажа она есть.
       maxHp: null,
@@ -1460,7 +1514,10 @@ fogMask: normalizeFog(source.fogMask),
       // иначе «слепой» бросок утечёт в состояние, которое игрок получает целиком.
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory)
         .map((roll) => (isDm ? roll : diceModule.hideRollResult(roll))),
+      // Шёпот игрока мастеру отдаём только мастеру и самому игроку: остальным
+      // его не видно ни в ленте, ни после переподключения.
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory)
+        .filter((message) => isDm || !message.whisper || message.playerId === viewer.playerId)
     };
   }
 
@@ -1504,6 +1561,7 @@ module.exports = {
   newTokenId,
   normalizeSheet,
   normalizeAdventure,
+  normalizeStatblock,
   normalizeDarkness,
   normalizeTemplate,
   normalizeTemplates,

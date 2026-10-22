@@ -11,7 +11,7 @@ const path = require('path');
 
 const repo = path.join(__dirname, '..');
 const dir = path.join(repo, 'renderer', 'styles');
-const PALETTE = new Set(['01-tokens.css', '08-theme-layer.css']);
+const PALETTE = new Set(['01-tokens.css', '08-theme-layer.css', '09-theme-studio.css']);
 const order = fs.readdirSync(dir).filter((f) => f.endsWith('.css')).sort();
 
 const checks = [];
@@ -27,7 +27,8 @@ const check = (name, fn) => {
 check('части идут в порядке номеров', () => {
   const expected = [
     '01-tokens.css', '02-screens.css', '03-controls.css', '04-layout.css',
-    '05-map.css', '06-panels.css', '07-sheet.css', '08-theme-layer.css'
+    '05-map.css', '06-panels.css', '07-sheet.css', '08-theme-layer.css',
+    '09-theme-studio.css'
   ];
   if (JSON.stringify(order) !== JSON.stringify(expected)) {
     throw new Error(`на диске: ${order.join(', ')}`);
@@ -83,6 +84,157 @@ check('у каждой темы есть свой --info', () => {
       throw new Error('в теме ' + theme + ' цвет роли совпал с акцентом');
     }
   }
+});
+
+check('текст тем проходит WCAG AA', () => {
+  const read = (file) => fs.readFileSync(path.join(dir, file), 'utf8');
+  const css01 = read('01-tokens.css');
+  const css09 = read('09-theme-studio.css');
+  const block = (css, selector) => {
+    const start = css.indexOf(selector);
+    if (start < 0) return '';
+    const open = css.indexOf('{', start);
+    const close = css.indexOf('}', open);
+    return open < 0 || close < 0 ? '' : css.slice(open + 1, close);
+  };
+  const get = (text, name) => {
+    const match = text.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-f]{6})`, 'i'));
+    return match ? match[1] : '';
+  };
+  const lum = (hex) => {
+    const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((value) => (value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)));
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const ratio = (a, b) => {
+    const x = lum(a);
+    const y = lum(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+
+  const failures = [];
+  const root = block(css09, ':root');
+  const lightBase = block(css09, "[data-tone='light']");
+  const ink = {
+    dark: get(root, '--accent-ink') || '#1f140b',
+    light: get(lightBase, '--accent-ink') || '#fff'
+  };
+
+  for (const theme of ['standart', 'les', 'magiya', 'okean', 'traktir', 'par']) {
+    const variants = [
+      ['тёмная', block(css01, `[data-theme='${theme}']`), ink.dark],
+      ['светлая', block(css09, `[data-tone='light'][data-theme='${theme}']`), ink.light]
+    ];
+    for (const [label, text, accentInk] of variants) {
+      if (!text) {
+        failures.push(`${theme}: нет ${label} палитры`);
+        continue;
+      }
+      for (const name of ['--bg', '--surface', '--text', '--text-dim', '--muted', '--accent']) {
+        if (!get(text, name)) failures.push(`${theme} ${label}: нет ${name}`);
+      }
+      const pairs = [
+        ['--text', '--bg'],
+        ['--text', '--bg-deep'],
+        ['--text', '--surface'],
+        ['--text', '--surface-3'],
+        ['--text-dim', '--bg-deep'],
+        ['--text-dim', '--surface'],
+        ['--text-dim', '--surface-3'],
+        ['--muted', '--bg-deep'],
+        ['--muted', '--surface'],
+        ['--muted', '--surface-3'],
+        ['--accent', '--bg-deep'],
+        ['--accent', '--surface'],
+        ['--accent', '--surface-3']
+      ];
+      for (const [fg, bg] of pairs) {
+        const a = get(text, fg);
+        const b = get(text, bg);
+        if (!a || !b) continue;
+        const value = ratio(a, b);
+        if (value < 4.5) failures.push(`${theme} ${label}: ${fg} на ${bg} = ${value.toFixed(2)}`);
+      }
+      const accent = get(text, '--accent');
+      if (accent) {
+        const value = ratio(accent, accentInk);
+        if (value < 4.5) failures.push(`${theme} ${label}: текст на акценте = ${value.toFixed(2)}`);
+      }
+    }
+  }
+  if (failures.length) throw new Error(failures.join('; '));
+});
+
+check('предлагаемые акценты контрастны', () => {
+  // theme.js — обычный браузерный модуль, поэтому на время проверки даём ему
+  // минимальные window/document/localStorage. Иначе пришлось бы дублировать
+  // список акцентов в тесте и он разошёлся бы с интерфейсом.
+  const saved = {
+    window: global.window,
+    document: global.document,
+    localStorage: global.localStorage,
+    addEventListener: global.addEventListener
+  };
+  global.window = global;
+  global.localStorage = { getItem: () => null, setItem: () => {} };
+  global.document = {
+    documentElement: {
+      dataset: {},
+      style: { removeProperty() {}, setProperty() {} }
+    }
+  };
+  global.addEventListener = () => {};
+  delete require.cache[require.resolve('../renderer/theme.js')];
+  require('../renderer/theme.js');
+  const themes = global.DnDTheme.THEMES;
+
+  const read = (file) => fs.readFileSync(path.join(dir, file), 'utf8');
+  const block = (css, selector) => {
+    const start = css.indexOf(selector);
+    if (start < 0) return '';
+    const open = css.indexOf('{', start);
+    const close = css.indexOf('}', open);
+    return open < 0 || close < 0 ? '' : css.slice(open + 1, close);
+  };
+  const get = (text, name) => {
+    const match = text.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-f]{6})`, 'i'));
+    return match ? match[1] : '';
+  };
+  const lum = (hex) => {
+    const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((value) => (value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)));
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const ratio = (a, b) => {
+    const x = lum(a);
+    const y = lum(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+
+  const failures = [];
+  for (const theme of themes) {
+    for (const [tone, choices, ink] of [
+      ['dark', theme.accents, '#1f140b'],
+      ['light', theme.accentsLight, '#ffffff']
+    ]) {
+      const text = tone === 'dark'
+        ? block(read('01-tokens.css'), `[data-theme='${theme.id}']`)
+        : block(read('09-theme-studio.css'), `[data-tone='light'][data-theme='${theme.id}']`);
+      const surface = get(text, '--surface-3');
+      for (const choice of choices) {
+        if (ratio(choice.color, surface) < 4.5 || ratio(choice.color, ink) < 4.5) {
+          failures.push(`${theme.id} ${tone}: ${choice.label}`);
+        }
+      }
+    }
+  }
+
+  global.window = saved.window;
+  global.document = saved.document;
+  global.localStorage = saved.localStorage;
+  global.addEventListener = saved.addEventListener;
+  delete require.cache[require.resolve('../renderer/theme.js')];
+  if (failures.length) throw new Error(failures.join('; '));
 });
 
 check('нет самоссылок переменных', () => {

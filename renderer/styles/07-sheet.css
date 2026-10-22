@@ -93,6 +93,47 @@
   color: var(--muted);
 }
 
+.attack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attack-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.attack-row .input {
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.attack-row__name {
+  flex: 1 1 100px;
+}
+
+.attack-row__bonus {
+  width: 54px;
+  flex: 0 0 auto;
+}
+
+.attack-row__damage {
+  flex: 1 1 80px;
+}
+
+.attack-row__roll,
+.attack-row__remove {
+  flex: 0 0 auto;
+}
+
+.attack-list__add {
+  align-self: flex-start;
+}
+
 .abil-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -839,4 +880,53 @@
 .adv-empty {
   font-size: 12px;
   padding: 6px 2px;
+}
+
+.adv-actions,
+.adv-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.adv-item__actions {
+  margin: 6px 0 0;
+}
+
+.adv-stat {
+  margin-top: 4px;
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: var(--gold);
+}
+
+.modal--statblock {
+  width: min(620px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.statblock__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 8px;
+}
+
+.statblock__abilities {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.modal--statblock .field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.modal--statblock .field__label {
+  font-size: 10.5px;
+  color: var(--muted);
 }

@@ -1009,6 +1009,36 @@
       assert(!view.avatarInput.disabled, 'игрок не может выбрать файл');
       assert(!view.avatarLabel.disabled, 'игрок не может нажать кнопку аватара');
     });
+    check('в листе есть быстрые броски атак с бонусом и уроном', () => {
+      const host = document.createElement('div');
+      const rolls = [];
+      const view = new window.SheetView(host, {
+        onRollCheck: (formula, label) => rolls.push({ formula, label })
+      });
+      view.setSheet({
+        ...window.DnD5e.createEmptySheet('Артём'),
+        characterName: 'Тордин',
+        attackList: [{ name: 'Длинный меч', bonus: 5, damage: '1d8+3' }]
+      });
+      const row = host.querySelector('.attack-row');
+      assert(row, 'в листе нет строки атаки');
+      assert.strictEqual(row.querySelector('.attack-row__name').value, 'Длинный меч');
+      assert.strictEqual(row.querySelector('.attack-row__bonus').value, '5');
+      row.querySelectorAll('.attack-row__roll')[0].click();
+      assert.strictEqual(rolls[0].formula, 'd20+5', `атака: ${rolls[0].formula}`);
+      row.querySelectorAll('.attack-row__roll')[1].click();
+      assert.strictEqual(rolls[1].formula, '1d8+3', `урон: ${rolls[1].formula}`);
+
+      host.querySelector('.attack-list__add').click();
+      const rows = [...host.querySelectorAll('.attack-row')];
+      assert.strictEqual(rows.length, 2, 'вторая атака не добавилась');
+      const second = rows[1];
+      second.querySelector('.attack-row__name').value = 'Лук';
+      second.querySelector('.attack-row__name').dispatchEvent(new Event('input'));
+      const sheet = view.collect();
+      assert.deepStrictEqual(sheet.attackList[1], { name: 'Лук', bonus: 0, damage: '' });
+    });
+
     check('лист открывается из панели участников и оттуда же закрывается', () => {
       let requested = null;
       // Отдельные узлы: список участников и лист строятся в одном контейнере
@@ -1620,6 +1650,33 @@
       assert(chatHost.querySelectorAll('.chat__msg--system').length === 1,
         'реплика игрока нарисована объявлением стола');
       assert(chatHost.textContent.includes('Готов'), 'реплика игрока пропала');
+    });
+
+    check('шёпот мастеру отправляется с флагом и помечен в ленте', () => {
+      const host = document.createElement('div');
+      let sent = null;
+      const chat = new window.TableUI.ChatPanel(host, {
+        canWhisper: () => true,
+        onSend: (text, whisper) => { sent = { text, whisper }; }
+      });
+      chat.renderAll([]);
+      const button = host.querySelector('.chat__whisper');
+      assert(button && !button.hidden, 'у игрока нет кнопки шёпота');
+      button.click();
+      assert(button.getAttribute('aria-pressed') === 'true', 'шёпот не включился');
+      const input = host.querySelector('.chat__form input');
+      input.value = 'Сундук с ловушкой';
+      host.querySelector('.chat__form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      assert.deepStrictEqual(sent, { text: 'Сундук с ловушкой', whisper: true });
+      assert(button.getAttribute('aria-pressed') === 'false', 'шёпот остался включённым после отправки');
+      chat.append({ from: 'Артём', role: 'player', whisper: true, text: 'Тайна' });
+      assert(host.querySelector('.chat__msg--whisper'), 'шёпот в ленте не помечен');
+      assert(host.textContent.includes('мастеру'), 'у шёпота нет подписи адресата');
+
+      const dmHost = document.createElement('div');
+      const dmChat = new window.TableUI.ChatPanel(dmHost, { canWhisper: () => false });
+      dmChat.renderAll([]);
+      assert(dmHost.querySelector('.chat__whisper').hidden, 'у мастера осталась кнопка шёпота');
     });
 
     check('наведение показывает клетку назначения и расстояние', () => {
@@ -2866,12 +2923,19 @@
     sandbox.appendChild(tokensHost);
     let createdTokenName = null;
     let createdTokenHp = 'не вызвано';
+    let createdTokenSize = null;
     let spawnedFrom = null;
     const hpChanges = [];
+    const sizeChanges = [];
     const tokenPanel = new window.TableUI.TokenPanel(tokensHost, {
-      onCreate: (name, maxHp) => { createdTokenName = name; createdTokenHp = maxHp; },
+      onCreate: (name, maxHp, size) => {
+        createdTokenName = name;
+        createdTokenHp = maxHp;
+        createdTokenSize = size;
+      },
       onDeleteToken: () => {},
       onSetTokenHp: (tokenId, hp) => hpChanges.push({ tokenId, hp }),
+      onSetTokenSize: (tokenId, size) => sizeChanges.push({ tokenId, size }),
       onSpawnFromSheet: (playerId) => { spawnedFrom = playerId; }
     });
     tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
@@ -2879,6 +2943,22 @@
       assert(tokensHost.querySelector('.token-form'), 'нет формы создания');
       assert(tokensHost.textContent.includes('Гоблин') && tokensHost.textContent.includes('Мира'), 'нет списка фишек');
       assert(tokensHost.querySelectorAll('.token-row button').length >= 1, 'нет кнопки удаления');
+    });
+
+    check('размер фишки выбирается при создании и меняется в списке', () => {
+      const form = tokensHost.querySelector('.token-form');
+      form.querySelector('input').value = 'Огр';
+      form.querySelector('.token-form__size').value = '3';
+      form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      assert.strictEqual(createdTokenName, 'Огр');
+      assert.strictEqual(createdTokenSize, 3, `при создании передан размер ${createdTokenSize}`);
+
+      const row = tokensHost.querySelector('.token-row[data-token-id="t1"]');
+      const select = row && row.querySelector('.token-row__size');
+      assert(select, 'в строке фишки нет выбора размера');
+      select.value = '2';
+      select.dispatchEvent(new Event('change'));
+      assert.deepStrictEqual(sizeChanges[0], { tokenId: 't1', size: 2 });
     });
 
     /* ------------------------------------------------------- прочность */
@@ -3483,46 +3563,141 @@
         'уже находясь за столом, предлагают открыть ещё один тренировочный стол');
     });
 
-    // Переключатель тем: он должен быть в настройках, и смена темы обязана
-    // реально менять палитру, а не только подсветку у списка.
-    const themeSelect = document.querySelector('.modal-overlay [data-setting="theme"]');
-    check('в настройках есть выбор оформления', () => {
-      assert(themeSelect, 'нет переключателя тем');
-      const labels = [].map.call(themeSelect.options, (option) => option.textContent);
+    // Выбор тем: карточки с превью, тон, акцент, минимализм, движение и звук.
+    const themeGrid = document.querySelector('.modal-overlay [data-setting="theme"]');
+    check('в настройках есть карточки тем с превью', () => {
+      assert(themeGrid, 'нет выбора тем');
+      const labels = Array.from(themeGrid.querySelectorAll('.theme-card__label'))
+        .map((node) => node.textContent);
       for (const name of ['Стандартная', 'Лес', 'Магия', 'Океан', 'Трактир', 'Стимпанк']) {
         assert(labels.includes(name), `нет темы «${name}»: ${labels.join(', ')}`);
       }
+      assert(themeGrid.querySelector('.theme-card__scene'), 'у карточек нет превью');
     });
-    if (themeSelect) {
+    if (themeGrid) {
       const before = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
       // Выбираем не ту тему, что уже стоит, иначе проверка ничего не заметит.
-      const target = themeSelect.value === window.DnDTheme.current()
-        ? themeSelect.options[1].value
-        : themeSelect.options[0].value;
-      themeSelect.value = target;
-      themeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      const targetId = window.DnDTheme.current() === 'standart' ? 'les' : 'standart';
+      document.querySelector(`.modal-overlay [data-theme-id="${targetId}"]`).click();
       check('смена темы меняет палитру и запоминается', () => {
         assert(
-          document.documentElement.dataset.theme === target,
+          document.documentElement.dataset.theme === targetId,
           `тема не применилась: ${document.documentElement.dataset.theme}`
         );
         const after = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
         assert(after && after !== before, `цвет акцента не изменился: ${before} → ${after}`);
         assert(
-          localStorage.getItem(window.DnDTheme.STORAGE_KEY) === target,
+          localStorage.getItem(window.DnDTheme.STORAGE_KEY) === targetId,
           'выбор темы не сохранился'
         );
       });
-      const parOption = Array.from(themeSelect.options).find((option) => option.textContent === 'Стимпанк');
+
+      document.querySelector('.modal-overlay [data-setting="tone"][data-tone="light"]').click();
+      check('светлый тон переключается и запоминается', () => {
+        assert(document.documentElement.dataset.tone === 'light', 'тон не применился');
+        assert(localStorage.getItem(window.DnDTheme.TONE_KEY) === 'light', 'тон не сохранился');
+      });
+
+      const swatch = document.querySelector('.modal-overlay [data-setting="accent"]');
+      const accentColor = swatch && swatch.dataset.accent;
+      if (swatch) swatch.click();
+      check('акцент темы меняется и запоминается', () => {
+        assert(swatch, 'нет акцентов темы');
+        assert(
+          document.documentElement.style.getPropertyValue('--accent').trim() === accentColor,
+          'акцент не попал в переменную темы'
+        );
+        assert(window.DnDTheme.accentFor(window.DnDTheme.current()) === accentColor, 'акцент не сохранился');
+      });
+
+      const focusToggle = document.querySelector('.modal-overlay [data-setting="focus"]');
+      focusToggle.click();
+      check('минимализм убирает декор, но оставляет интерфейс', () => {
+        assert(document.documentElement.dataset.focus === 'on', 'режим фокуса не включился');
+        assert(
+          getComputedStyle(document.body, '::before').display === 'none',
+          'атмосфера осталась в режиме фокуса'
+        );
+        assert(document.querySelector('.modal-overlay'), 'окно настроек закрылось');
+      });
+
+      const motionToggle = document.querySelector('.modal-overlay [data-setting="motion"]');
+      motionToggle.click();
+      check('анимации отключаются и запоминаются', () => {
+        assert(document.documentElement.dataset.motion === 'off', 'анимации не отключились');
+        assert(localStorage.getItem(window.DnDTheme.MOTION_KEY) === 'off', 'настройка движения не сохранилась');
+      });
+
+      const soundToggle = document.querySelector('.modal-overlay [data-setting="sound"]');
+      soundToggle.click();
+      const soundSkin = document.querySelector('.modal-overlay [data-setting="sound-skin"]');
+      soundSkin.value = 'les';
+      soundSkin.dispatchEvent(new Event('change', { bubbles: true }));
+      const soundVolume = document.querySelector('.modal-overlay [data-setting="sound-volume"]');
+      soundVolume.value = '35';
+      soundVolume.dispatchEvent(new Event('input', { bubbles: true }));
+      check('звук включается отдельно от темы, скином и громкостью', () => {
+        assert(localStorage.getItem(window.DnDSound.ENABLED_KEY) === 'on', 'звук не включился');
+        assert(localStorage.getItem(window.DnDSound.SKIN_KEY) === 'les', 'звуковой скин не сохранился');
+        assert(localStorage.getItem(window.DnDSound.VOLUME_KEY) === '35', 'громкость не сохранилась');
+      });
+
+      const ambientVolume = document.querySelector('.modal-overlay [data-setting="sound-ambient-volume"]');
+      ambientVolume.value = '40';
+      ambientVolume.dispatchEvent(new Event('input', { bubbles: true }));
+      check('громкость атмосферы настраивается отдельно от щелчков', () => {
+        assert(
+          localStorage.getItem(window.DnDSound.AMBIENT_VOLUME_KEY) === '40',
+          'громкость атмосферы не сохранилась'
+        );
+        assert(typeof window.DnDSound.previewAmbient === 'function', 'нет пробы атмосферы');
+      });
+
+      const ambientToggle = document.querySelector('.modal-overlay [data-setting="ambient"]');
+      check('атмосфера темы включается отдельно от щелчков', () => {
+        assert(ambientToggle, 'нет переключателя звуков темы');
+        assert(ambientToggle.checked, 'атмосфера должна быть включена по умолчанию');
+        assert(typeof window.DnDSound.setScene === 'function', 'нет управления сценой');
+        ambientToggle.click();
+        assert(
+          localStorage.getItem(window.DnDSound.AMBIENT_KEY) === 'off',
+          'атмосфера не выключилась'
+        );
+        assert(window.DnDSound.ambientEnabled() === false, 'выключение не применилось');
+      });
+
+      check('у главного экрана есть сцена темы и частицы', () => {
+        const scene = document.querySelector('.home-scene');
+        assert(scene, 'нет сцены главного экрана');
+        assert(scene.querySelector('.home-scene__sky'), 'нет неба сцены');
+        assert(scene.querySelectorAll('.home-scene__particles i').length === 6, 'нет частиц сцены');
+        const sky = getComputedStyle(scene.querySelector('.home-scene__sky'));
+        assert(
+          sky.backgroundImage && sky.backgroundImage !== 'none',
+          'небо сцены не получило оформление'
+        );
+      });
+
+      // Возвращаем читаемый режим и проверяем, что тема не сломала орнамент карты.
+      focusToggle.click();
+      motionToggle.click();
+      document.querySelector('.modal-overlay [data-theme-id="par"]').click();
       check('стимпанк включается и вешает свою цепь на карту', () => {
-        assert(parOption, 'в списке нет стимпанка');
-        themeSelect.value = parOption.value;
-        themeSelect.dispatchEvent(new Event('change', { bubbles: true }));
         assert(document.documentElement.dataset.theme === 'par', 'стимпанк не применился');
         const strand = document.querySelector('.map-decor__strand');
         assert(strand, 'у карты нет подвесного орнамента');
         const image = getComputedStyle(strand).backgroundImage;
         assert(image && image !== 'none', 'орнамент не получил оформление');
+      });
+
+      check('орнамент карты качается на ветру и живёт частицами', () => {
+        const decor = document.querySelector('.map-decor');
+        assert(decor.querySelector('.map-decor__wind'), 'нет слоя ветра');
+        assert(decor.querySelectorAll('.map-decor__leaf').length === 3, 'нет листьев');
+        assert(decor.querySelectorAll('.map-decor__mote').length === 6, 'нет частиц орнамента');
+        assert(decor.querySelector('.map-decor__aside-mark'), 'нет второго подвеса');
+        const wind = getComputedStyle(decor.querySelector('.map-decor__wind'));
+        assert(wind.animationName && wind.animationName !== 'none', 'ветер не анимируется');
       });
     }
     document.querySelector('.modal-overlay .modal__actions button').click();

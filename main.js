@@ -7,7 +7,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 
 const { CampaignStore } = require('./server/campaign');
 const { createTableServer } = require('./server/socket');
-const { RoomState, LIMITS } = require('./server/state');
+const { RoomState, LIMITS, normalizeAdventure } = require('./server/state');
 const { decodeImage } = require('./server/image');
 const irohManager = require('./server/iroh-manager');
 const importer = require('./server/importer');
@@ -476,6 +476,18 @@ function registerIpc() {
     return { ok: true, campaign: meta };
   });
 
+  ipcMain.handle('campaign:backup', async () => {
+    if (!currentCampaign) return { ok: false, error: 'Сначала откройте кампанию' };
+    try {
+      // Сначала дописываем текущее состояние, иначе копия отстанет на минуту.
+      await persistCampaign();
+      const dir = await store.backup(currentCampaign.id, currentCampaign.name);
+      return { ok: true, dir };
+    } catch (error) {
+      return { ok: false, error: `Не удалось сделать копию: ${error.message}` };
+    }
+  });
+
   ipcMain.handle('campaign:delete', async (event, id) => {
     try {
       if (currentCampaign && currentCampaign.id === id) {
@@ -789,7 +801,9 @@ function registerIpc() {
       // Единственное место, где патч трогает стол. До этого момента ничего
       // измениться не могло.
       host.room.maps = patch.maps;
-      host.room.adventure = patch.adventure;
+      // Тот же предел строк и полей, что и при загрузке кампании: импорт не
+      // должен быть вторым, более слабым путём внутрь приложения.
+      host.room.adventure = normalizeAdventure(patch.adventure);
       for (const token of addedTokens) host.room.tokens.push(token);
       host.room.markDirty();
 

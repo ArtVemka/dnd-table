@@ -1,0 +1,1538 @@
+/* ==================================================================
+ * Тематическая мастерская.
+ *
+ * Отдельный слой после 08: здесь живут светлые варианты, акценты, режим
+ * минимализма, выключение движения и карточки выбора темы. Основные палитры
+ * остаются в 01-tokens.css, поэтому старые темы и сохранённые кампании не
+ * ломаются.
+ * ================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* Компонентные токены: размеры, отступы и иконки. */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+  --control-h: 34px;
+  --icon-size: 16px;
+  --icon-stroke: 1.5;
+  --preview-radius: 6px;
+
+  /* Цвет текста на акцентной заливке. Светлые темы переопределяют на белый. */
+  --accent-ink: #1f140b;
+
+  /* Глубина и блик сценического фона. В светлом тоне вместо чёрного берём
+     тёплую тень бумаги, иначе лес и океан выглядели бы вырезанными из угля. */
+  --scene-shadow: #000;
+  --scene-glow: #fff;
+}
+
+/* ==========================================================================
+ * Светлый вариант.
+ *
+ * Общие светлые правила: тени мягче, блик светлый, подложка под хитами не
+ * проваливается в чёрное. Дальше каждая тема задаёт свою бумагу: цвет фона не
+ * должен быть одинаковым у леса и океана, иначе светлый режим превращает все
+ * темы в одну.
+ * ========================================================================== */
+
+[data-tone='light'] {
+  color-scheme: light;
+  --accent-ink: #fff;
+  --scene-shadow: #5f4f3c;
+  --scene-glow: #fff;
+  --shadow-press: rgba(45, 30, 15, 0.18);
+  --panel-shadow: 0 8px 22px rgba(45, 30, 15, 0.12);
+  --title-shadow: 0 1px 0 rgba(255, 255, 255, 0.65);
+  --title-glow: none;
+  --glow: color-mix(in srgb, var(--accent) 30%, transparent);
+  --sheen: rgba(255, 255, 255, 0.55);
+  --hairline: rgba(40, 30, 20, 0.08);
+  --corner: 8px;
+  --frame-inner: 0 0;
+  --hp-plate: color-mix(in srgb, var(--surface-2) 94%, transparent);
+  --hp-track: color-mix(in srgb, var(--text) 14%, transparent);
+  --hp-track-soft: color-mix(in srgb, var(--text) 10%, transparent);
+  --scrim: rgba(35, 25, 15, 0.35);
+  --disabled-bg: rgba(40, 30, 20, 0.06);
+  --hover-wash: rgba(40, 30, 20, 0.04);
+  --wall: color-mix(in srgb, var(--gold) 55%, #4a3420);
+}
+
+[data-tone='light'] body::before {
+  opacity: 0.28;
+}
+
+[data-tone='light'] .panel {
+  box-shadow:
+    var(--frame-inner),
+    var(--panel-shadow),
+    inset 0 1px 0 var(--hairline),
+    inset 0 -1px 0 rgba(40, 30, 20, 0.06);
+}
+
+[data-tone='light'] .panel__title,
+[data-tone='light'] .home__title {
+  text-shadow: var(--title-shadow);
+}
+
+/* Светлый титул без растянутого блика: масштабированный градиент в тонком
+   светлом тексте даёт грязную кайму, а тёмная заливка теряет контраст.
+   В тёмном тоне блик остаётся, в светлом титул читается как тушь. */
+[data-tone='light'] .home__brand .home__title {
+  background: linear-gradient(100deg, var(--text) 18%, var(--accent) 48%, var(--text) 82%);
+  background-size: 100% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: none;
+  text-shadow: none;
+}
+
+[data-tone='light'] .btn {
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 1px 2px rgba(40, 30, 20, 0.16);
+}
+
+[data-tone='light'] .btn:hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 3px 10px rgba(40, 30, 20, 0.16),
+    0 0 14px var(--accent-soft);
+}
+
+[data-tone='light'] .btn:focus-visible {
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 0 0 3px var(--accent-soft);
+}
+
+[data-tone='light'] .btn--accent {
+  color: var(--accent-ink);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 2px 8px rgba(40, 30, 20, 0.18);
+}
+
+[data-tone='light'] .btn--accent:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 86%, #000));
+}
+
+[data-tone='light'] .card:hover {
+  box-shadow:
+    0 10px 24px rgba(40, 30, 20, 0.14),
+    0 0 0 1px var(--accent-soft);
+}
+
+[data-tone='light'] ::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* Стандартная: тёплая бумага и медь. */
+[data-tone='light'][data-theme='standart'] {
+  --bg: #f4eee2;
+  --bg-deep: #ebe2d2;
+  --surface: #fffaf0;
+  --surface-2: #f7efe2;
+  --surface-3: #efe4d3;
+  --border: #d8c8b2;
+  --border-strong: #b9a184;
+  --text: #2a2118;
+  --text-dim: #5c4a38;
+  --muted: #74614c;
+  --accent: #9c4e29;
+  --accent-hover: #8a4325;
+  --accent-soft: rgba(162, 84, 47, 0.14);
+  --gold: #8a6418;
+  --danger: #a83a2f;
+  --ok: #3f7a3a;
+  --info: #3d6aa6;
+  --ring: rgba(162, 84, 47, 0.4);
+  --wash: rgba(162, 84, 47, 0.07);
+}
+
+/* Лес: светлый мох и кора, без зелёного текста на зелёном. */
+[data-tone='light'][data-theme='les'] {
+  --bg: #eef2e6;
+  --bg-deep: #e2e9d9;
+  --surface: #f8faf1;
+  --surface-2: #eef3e7;
+  --surface-3: #e3ebd9;
+  --border: #c8d4bd;
+  --border-strong: #a6b89a;
+  --text: #1f2a1a;
+  --text-dim: #46553d;
+  --muted: #576c50;
+  --accent: #39742d;
+  --accent-hover: #326628;
+  --accent-soft: rgba(63, 122, 51, 0.14);
+  --gold: #7d6420;
+  --danger: #9f3b32;
+  --ok: #3f7a33;
+  --info: #3f6e8c;
+  --ring: rgba(63, 122, 51, 0.4);
+  --wash: rgba(63, 122, 51, 0.07);
+}
+
+/* Магия: светлая бумага, индиго и золото. */
+[data-tone='light'][data-theme='magiya'] {
+  --bg: #f1edfa;
+  --bg-deep: #e7e0f4;
+  --surface: #faf8ff;
+  --surface-2: #f2edfc;
+  --surface-3: #e9e1f7;
+  --border: #d4c8ea;
+  --border-strong: #b5a3d6;
+  --text: #241a38;
+  --text-dim: #4f4168;
+  --muted: #6d5d8a;
+  --accent: #6b46c1;
+  --accent-hover: #57369f;
+  --accent-soft: rgba(107, 70, 193, 0.14);
+  --gold: #8a6a12;
+  --danger: #a83a54;
+  --ok: #2f7d6b;
+  --info: #3f5fb0;
+  --ring: rgba(107, 70, 193, 0.45);
+  --wash: rgba(107, 70, 193, 0.08);
+  --panel-shadow: 0 8px 22px rgba(45, 30, 70, 0.14);
+}
+
+/* Океан: светлая пена, глубина и коралл. */
+[data-tone='light'][data-theme='okean'] {
+  --bg: #e8f3f5;
+  --bg-deep: #dcecef;
+  --surface: #f7fcfd;
+  --surface-2: #edf7f9;
+  --surface-3: #e1f0f3;
+  --border: #c2dbe0;
+  --border-strong: #9dc2c9;
+  --text: #15313a;
+  --text-dim: #3a5c66;
+  --muted: #4c6d76;
+  --accent: #1f6f8b;
+  --accent-hover: #185b73;
+  --accent-soft: rgba(31, 111, 139, 0.14);
+  --gold: #8a6f2a;
+  --danger: #a8413a;
+  --ok: #2f7d68;
+  --info: #2f6390;
+  --ring: rgba(31, 111, 139, 0.4);
+  --wash: rgba(31, 111, 139, 0.08);
+  --panel-shadow: 0 8px 22px rgba(20, 50, 60, 0.14);
+}
+
+/* Трактир: светлое дерево и мёд. */
+[data-tone='light'][data-theme='traktir'] {
+  --bg: #f6ecdc;
+  --bg-deep: #ecdfca;
+  --surface: #fff8ea;
+  --surface-2: #f7edd9;
+  --surface-3: #efe2ca;
+  --border: #d9c3a2;
+  --border-strong: #b99c73;
+  --text: #2a1b0e;
+  --text-dim: #5a4128;
+  --muted: #745c3d;
+  --accent: #945419;
+  --accent-hover: #7f4614;
+  --accent-soft: rgba(154, 90, 31, 0.14);
+  --gold: #8a6418;
+  --danger: #a83a2f;
+  --ok: #4f7a2f;
+  --info: #4b6a9a;
+  --ring: rgba(154, 90, 31, 0.4);
+  --wash: rgba(154, 90, 31, 0.07);
+}
+
+/* Стимпанк: светлая латунная пластина и кожа. */
+[data-tone='light'][data-theme='par'] {
+  --bg: #f2ebdf;
+  --bg-deep: #e7ddcd;
+  --surface: #fbf5ea;
+  --surface-2: #f4ebdc;
+  --surface-3: #eadfce;
+  --border: #d3bfa4;
+  --border-strong: #b19672;
+  --text: #2a2117;
+  --text-dim: #584735;
+  --muted: #6f5d47;
+  --accent: #885816;
+  --accent-hover: #71470f;
+  --accent-soft: rgba(138, 90, 24, 0.14);
+  --gold: #7d5a14;
+  --danger: #a83a2f;
+  --ok: #3f7a5f;
+  --info: #3f6f75;
+  --ring: rgba(138, 90, 24, 0.42);
+  --wash: rgba(138, 90, 24, 0.08);
+}
+
+/* ==========================================================================
+ * Материалы тем.
+ *
+ * Текстура живёт на панелях и карточках, но не на тексте и не на карте.
+ * Проценты подмешивания маленькие: поверхность должна оставаться ровной
+ * подложкой для чисел, а не картиной.
+ * ========================================================================== */
+
+[data-theme='par'] .panel,
+[data-theme='par'] .home__group,
+[data-theme='par'] .sheet .box,
+[data-theme='par'] .adv-item,
+[data-theme='par'] .chat,
+[data-theme='par'] .dice {
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--gold) 7%, transparent), transparent 42%),
+    repeating-linear-gradient(90deg, transparent 0 24px, color-mix(in srgb, var(--gold) 4%, transparent) 24px 25px);
+}
+
+[data-theme='par'] .panel__title {
+  border-bottom: 1px solid color-mix(in srgb, var(--gold) 24%, transparent);
+}
+
+[data-theme='par'] .btn:not(.btn--accent):not(.btn--danger) {
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--gold) 8%, transparent), transparent 62%);
+}
+
+[data-theme='par'] .input:focus,
+[data-theme='par'] .textarea:focus,
+[data-theme='par'] .select:focus,
+[data-theme='par'] .field__input:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 18%, transparent);
+}
+
+[data-theme='les'] .panel,
+[data-theme='les'] .home__group,
+[data-theme='les'] .sheet .box,
+[data-theme='les'] .adv-item,
+[data-theme='les'] .chat,
+[data-theme='les'] .dice {
+  background-image:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--ok) 7%, transparent), transparent 55%),
+    repeating-linear-gradient(112deg, transparent 0 18px, color-mix(in srgb, var(--gold) 3%, transparent) 18px 19px);
+}
+
+[data-theme='les'] .panel__title {
+  color: color-mix(in srgb, var(--text) 78%, var(--accent));
+}
+
+[data-theme='okean'] .panel,
+[data-theme='okean'] .home__group,
+[data-theme='okean'] .sheet .box,
+[data-theme='okean'] .adv-item,
+[data-theme='okean'] .chat,
+[data-theme='okean'] .dice {
+  background-image:
+    radial-gradient(130% 60% at 50% -30%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%),
+    repeating-linear-gradient(178deg, transparent 0 22px, color-mix(in srgb, var(--accent) 4%, transparent) 22px 23px);
+}
+
+[data-theme='okean'] .btn--accent {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 4px 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+[data-theme='magiya'] .panel,
+[data-theme='magiya'] .home__group,
+[data-theme='magiya'] .sheet .box,
+[data-theme='magiya'] .adv-item,
+[data-theme='magiya'] .chat,
+[data-theme='magiya'] .dice {
+  background-image:
+    radial-gradient(1px 1px at 18% 30%, color-mix(in srgb, var(--gold) 40%, transparent), transparent 70%),
+    radial-gradient(1px 1px at 72% 64%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 42%);
+  background-size: 90px 90px, 130px 130px, auto;
+}
+
+/* Постоянное неоновое дыхание заголовка выключено: свечение остаётся
+   акцентом при наведении и у активных состояний. */
+[data-theme='magiya'] .panel__title,
+[data-theme='magiya'] .home__title {
+  animation: none;
+  text-shadow: var(--title-shadow);
+}
+
+[data-theme='magiya'] .panel:hover,
+[data-theme='magiya'] .card:hover {
+  box-shadow:
+    var(--frame-inner),
+    var(--panel-shadow),
+    0 0 0 1px var(--accent-soft),
+    0 0 18px var(--glow);
+}
+
+/* Смысловые кнопки сильнее общей фактуры: фон акцента и опасного действия не
+   должен растворяться в текстуре панели. */
+.btn--accent {
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn--accent:hover:not(:disabled) {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-hover) 82%, #fff),
+    var(--accent)
+  );
+}
+
+.btn--danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--danger-hover);
+}
+
+/* ==========================================================================
+ * Живой орнамент карты.
+ *
+ * Верхняя точка подвеса неподвижна: качается только нить. Курсор задаёт
+ * наклон, ветер добавляет собственное дыхание, а груз поворачивается меньше
+ * нити, как настоящий подвес на кольце. Листья и пылинки живут отдельными
+ * слоями, поэтому не выглядят нарисованными на одной линии.
+ * ========================================================================== */
+
+[data-theme] .map-decor {
+  left: 24px;
+  right: auto;
+  top: 0;
+  width: 78px;
+  height: 154px;
+}
+
+.map-decor__wind {
+  position: absolute;
+  inset: 0;
+  transform-origin: 18px 0;
+  animation: decor-wind 8s ease-in-out infinite;
+}
+
+[data-theme] .map-decor__strand {
+  left: 18px;
+  transform-origin: 50% 0;
+  transform: rotate(calc((var(--pointer-x) - 0.5) * 19deg));
+  transition: transform 0.55s cubic-bezier(0.2, 0.85, 0.25, 1.1);
+}
+
+[data-theme] .map-decor__strand::before,
+[data-theme] .map-decor__strand::after {
+  display: none;
+}
+
+[data-theme] .map-decor__mark {
+  transform-origin: 50% 0;
+  transform:
+    translateX(-50%)
+    rotate(calc(var(--mark-tilt, 0deg) + (var(--pointer-x) - 0.5) * -13deg));
+  transition: transform 0.65s cubic-bezier(0.2, 0.85, 0.25, 1.1);
+}
+
+[data-theme='les'] .map-decor__mark { --mark-tilt: -14deg; }
+[data-theme='standart'] .map-decor__mark { --mark-tilt: 45deg; }
+[data-theme='magiya'] .map-decor__mark { --mark-tilt: 45deg; }
+
+[data-theme='okean'] .map-decor__strand {
+  left: 18px;
+  top: 0;
+  width: 1px;
+  height: 68px;
+  border-radius: 0;
+  background: linear-gradient(180deg, transparent, var(--accent));
+  box-shadow: 0 0 8px var(--accent-soft);
+  opacity: 1;
+  animation: none;
+}
+
+.map-decor__leaf {
+  position: absolute;
+  display: block;
+  width: 16px;
+  height: 11px;
+  border-radius: 62% 4% 62% 4%;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--ok) 78%, var(--accent)));
+  box-shadow: 0 0 6px var(--accent-soft);
+  opacity: 0;
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+
+[data-theme='les'] .map-decor__leaf {
+  opacity: 1;
+  animation: decor-leaf 5.5s ease-in-out infinite;
+}
+
+[data-theme='les'] .map-decor__leaf--1 {
+  left: 1px;
+  top: 23%;
+  --leaf-rot: 20deg;
+  animation-delay: -1.1s;
+}
+
+[data-theme='les'] .map-decor__leaf--2 {
+  right: 1px;
+  left: auto;
+  top: 43%;
+  --leaf-rot: -24deg;
+  transform-origin: 100% 50%;
+  animation-delay: -2.8s;
+}
+
+[data-theme='les'] .map-decor__leaf--3 {
+  left: 1px;
+  top: 63%;
+  --leaf-rot: 16deg;
+  animation-delay: -4.2s;
+}
+
+.map-decor__aside {
+  position: absolute;
+  top: 0;
+  left: 49px;
+  width: 20px;
+  height: 108px;
+  transform-origin: 50% 0;
+  transform: rotate(calc((0.5 - var(--pointer-x)) * 13deg));
+  transition: transform 0.7s cubic-bezier(0.2, 0.85, 0.25, 1.1);
+  animation: decor-aside-idle 9s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.map-decor__aside-line {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 54px;
+  background: linear-gradient(180deg, transparent, var(--border-strong));
+  transform: translateX(-50%);
+}
+
+.map-decor__aside-mark {
+  position: absolute;
+  left: 50%;
+  bottom: 38px;
+  width: 11px;
+  height: 14px;
+  transform: translateX(-50%);
+}
+
+[data-theme='les'] .map-decor__aside-line {
+  background: linear-gradient(180deg, transparent, var(--accent));
+}
+
+[data-theme='les'] .map-decor__aside-mark {
+  border-radius: 50% 50% 45% 45%;
+  background: linear-gradient(180deg, var(--gold), color-mix(in srgb, var(--gold) 55%, var(--accent)));
+  box-shadow: 0 0 7px var(--accent-soft);
+}
+
+[data-theme='okean'] .map-decor__aside-line {
+  background: linear-gradient(180deg, transparent, var(--accent));
+}
+
+[data-theme='okean'] .map-decor__aside-mark {
+  width: 12px;
+  height: 12px;
+  border-radius: 50% 50% 46% 46% / 60% 60% 40% 40%;
+  background: radial-gradient(circle at 38% 28%, var(--scene-glow), var(--accent));
+  box-shadow: 0 0 8px var(--accent-soft);
+}
+
+[data-theme='magiya'] .map-decor__aside-line {
+  background: linear-gradient(180deg, transparent, var(--accent));
+  box-shadow: 0 0 7px var(--glow);
+}
+
+[data-theme='magiya'] .map-decor__aside-mark {
+  width: 9px;
+  height: 15px;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  background: var(--gold);
+  box-shadow: 0 0 10px var(--glow);
+}
+
+[data-theme='traktir'] .map-decor__aside-line {
+  background: linear-gradient(180deg, var(--border-strong), var(--gold));
+}
+
+[data-theme='traktir'] .map-decor__aside-mark {
+  width: 10px;
+  height: 14px;
+  border-radius: 3px;
+  background:
+    radial-gradient(
+      ellipse at 50% 35%,
+      var(--gold),
+      color-mix(in srgb, var(--danger) 55%, transparent) 58%,
+      transparent 72%
+    );
+  box-shadow: 0 0 11px var(--accent-soft);
+}
+
+[data-theme='par'] .map-decor__aside-line {
+  background: repeating-linear-gradient(180deg, var(--gold) 0 4px, transparent 4px 7px);
+}
+
+[data-theme='par'] .map-decor__aside-mark {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--gold), color-mix(in srgb, var(--gold) 55%, var(--scene-shadow)));
+  box-shadow:
+    0 0 6px var(--accent-soft),
+    inset 0 0 0 2px color-mix(in srgb, var(--scene-shadow) 35%, transparent);
+}
+
+[data-theme='standart'] .map-decor__aside-line {
+  background: linear-gradient(180deg, transparent, var(--border-strong));
+}
+
+[data-theme='standart'] .map-decor__aside-mark {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 30%, var(--gold), color-mix(in srgb, var(--accent) 55%, var(--scene-shadow)));
+  box-shadow: 0 0 5px var(--accent-soft);
+}
+
+.map-decor__motes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.map-decor__mote {
+  position: absolute;
+  display: block;
+  width: 4px;
+  height: 4px;
+  opacity: 0;
+  animation: decor-mote-fall var(--mote-dur, 9s) linear infinite;
+  animation-delay: var(--mote-delay, 0s);
+}
+
+.map-decor__mote--1 { left: 6%; top: 18%; --mote-drift: 18px; --mote-delay: -1s; --mote-dur: 8s; }
+.map-decor__mote--2 { left: 62%; top: 34%; --mote-drift: -16px; --mote-delay: -4s; --mote-dur: 10s; }
+.map-decor__mote--3 { left: 30%; top: 52%; --mote-drift: 14px; --mote-delay: -7s; --mote-dur: 9s; }
+.map-decor__mote--4 { left: 72%; top: 22%; --mote-drift: -20px; --mote-delay: -2s; --mote-dur: 12s; }
+.map-decor__mote--5 { left: 48%; top: 68%; --mote-drift: 10px; --mote-delay: -5s; --mote-dur: 7s; }
+.map-decor__mote--6 { left: 84%; top: 48%; --mote-drift: -12px; --mote-delay: -8s; --mote-dur: 11s; }
+
+[data-theme='les'] .map-decor__mote {
+  width: 6px;
+  height: 4px;
+  border-radius: 60% 0 60% 0;
+  background: var(--accent);
+  box-shadow: 0 0 4px var(--accent-soft);
+}
+
+[data-theme='okean'] .map-decor__mote {
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  border: 1px solid color-mix(in srgb, var(--scene-glow) 45%, transparent);
+  animation-name: decor-mote-rise;
+}
+
+[data-theme='magiya'] .map-decor__mote {
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--gold);
+  box-shadow: 0 0 6px var(--glow);
+  animation-name: decor-mote-rise;
+}
+
+[data-theme='traktir'] .map-decor__mote {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 5px var(--accent-soft);
+  animation-name: decor-mote-rise;
+}
+
+[data-theme='par'] .map-decor__mote {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--scene-glow) 14%, transparent);
+  filter: blur(1px);
+  animation-name: decor-mote-rise;
+}
+
+[data-theme='standart'] .map-decor__mote {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: var(--gold);
+  opacity: 0.5;
+}
+
+@keyframes decor-wind {
+  0%, 100% { transform: rotate(-1.3deg); }
+  50%      { transform: rotate(1.3deg); }
+}
+
+@keyframes decor-leaf {
+  0%, 100% { transform: rotate(var(--leaf-rot, 0deg)) scale(0.96); }
+  50%      { transform: rotate(calc(var(--leaf-rot, 0deg) + 8deg)) scale(1.05); }
+}
+
+@keyframes decor-aside-idle {
+  0%, 100% { rotate: -1.4deg; }
+  50%      { rotate: 1.4deg; }
+}
+
+@keyframes decor-mote-fall {
+  0%   { transform: translate3d(0, -6px, 0) rotate(0); opacity: 0; }
+  12%  { opacity: 0.75; }
+  100% { transform: translate3d(var(--mote-drift, 16px), 130px, 0) rotate(260deg); opacity: 0; }
+}
+
+@keyframes decor-mote-rise {
+  0%   { transform: translate3d(0, 120px, 0) scale(0.6); opacity: 0; }
+  14%  { opacity: 0.6; }
+  100% { transform: translate3d(var(--mote-drift, -14px), -18px, 0) scale(1.15); opacity: 0; }
+}
+
+/* ==========================================================================
+ * Главный экран: сцена темы.
+ *
+ * Фон собран из четырёх планов и живых частиц. Это не картинка: слои
+ * двигаются с разной скоростью, поэтому лес дышит, океан катит волну, а
+ * пар над шестернями поднимается вверх. В минимализме сцена исчезает.
+ * ========================================================================== */
+
+#screen-home {
+  position: relative;
+  isolation: isolate;
+}
+
+.home-scene {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--bg);
+}
+
+.home-scene > span {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+#screen-home > .home {
+  position: relative;
+  z-index: 1;
+}
+
+[data-tone='light'] .home-scene {
+  opacity: 0.8;
+}
+
+.home-scene__particles i {
+  position: absolute;
+  display: block;
+  width: 5px;
+  height: 5px;
+  opacity: 0;
+  animation: home-mote-fall var(--mote-dur, 14s) linear infinite;
+  animation-delay: var(--mote-delay, 0s);
+}
+
+.home-scene__particles i:nth-child(1) { left: 10%; top: -6%; --mote-dur: 16s; --mote-delay: -3s; --mote-drift: 38px; }
+.home-scene__particles i:nth-child(2) { left: 28%; top: -2%; --mote-dur: 12s; --mote-delay: -7s; --mote-drift: -24px; }
+.home-scene__particles i:nth-child(3) { left: 48%; top: -8%; --mote-dur: 18s; --mote-delay: -1s; --mote-drift: 22px; }
+.home-scene__particles i:nth-child(4) { left: 66%; top: -4%; --mote-dur: 14s; --mote-delay: -9s; --mote-drift: -32px; }
+.home-scene__particles i:nth-child(5) { left: 82%; top: -6%; --mote-dur: 15s; --mote-delay: -5s; --mote-drift: 28px; }
+.home-scene__particles i:nth-child(6) { left: 92%; top: -2%; --mote-dur: 11s; --mote-delay: -11s; --mote-drift: -18px; }
+
+[data-theme='okean'] .home-scene__particles i,
+[data-theme='magiya'] .home-scene__particles i,
+[data-theme='traktir'] .home-scene__particles i,
+[data-theme='par'] .home-scene__particles i {
+  top: auto;
+  bottom: -6%;
+  animation-name: home-mote-rise;
+}
+
+/* Лес: солнечные шахты, кроны, три плана стволов и падающие листья. */
+[data-theme='les'] .home-scene__sky {
+  background:
+    radial-gradient(48% 38% at 50% -8%, color-mix(in srgb, var(--ok) 30%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 78%, var(--scene-shadow)), var(--bg-deep));
+}
+
+[data-theme='les'] .home-scene__sky::after {
+  content: '';
+  position: absolute;
+  inset: -8% -10% 52%;
+  background: repeating-linear-gradient(
+    104deg,
+    transparent 0 58px,
+    color-mix(in srgb, var(--ok) 7%, transparent) 58px 96px,
+    transparent 96px 154px
+  );
+  filter: blur(9px);
+  opacity: 0.55;
+  animation: home-drift 26s ease-in-out infinite;
+  pointer-events: none;
+}
+
+[data-theme='les'] .home-scene__far {
+  background:
+    radial-gradient(18% 14% at 8% 0%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 72%),
+    radial-gradient(24% 17% at 27% -4%, color-mix(in srgb, var(--ok) 26%, transparent), transparent 72%),
+    radial-gradient(20% 15% at 51% 0%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 72%),
+    radial-gradient(26% 18% at 74% -4%, color-mix(in srgb, var(--ok) 24%, transparent), transparent 72%),
+    radial-gradient(18% 13% at 96% 2%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 72%),
+    linear-gradient(90deg, transparent 0 6.2%, color-mix(in srgb, var(--scene-shadow) 40%, transparent) 7.2% 7.4%, transparent 8.4%),
+    linear-gradient(90deg, transparent 0 26.4%, color-mix(in srgb, var(--scene-shadow) 34%, transparent) 27.1% 27.3%, transparent 28.2%),
+    linear-gradient(90deg, transparent 0 65.4%, color-mix(in srgb, var(--scene-shadow) 32%, transparent) 66.1% 66.3%, transparent 67.2%),
+    linear-gradient(90deg, transparent 0 90.4%, color-mix(in srgb, var(--scene-shadow) 38%, transparent) 91.1% 91.3%, transparent 92.2%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0 48%, transparent 78%);
+  mask-image: linear-gradient(180deg, #000 0 48%, transparent 78%);
+  opacity: 0.65;
+}
+
+[data-theme='les'] .home-scene__far::before {
+  content: '';
+  position: absolute;
+  inset: -6% -4% auto;
+  height: 38%;
+  background:
+    radial-gradient(22% 50% at 8% 10%, color-mix(in srgb, var(--accent) 40%, transparent), transparent 70%),
+    radial-gradient(18% 42% at 22% 0%, color-mix(in srgb, var(--ok) 36%, transparent), transparent 70%),
+    radial-gradient(24% 52% at 42% 6%, color-mix(in srgb, var(--accent) 32%, transparent), transparent 70%),
+    radial-gradient(20% 44% at 62% 0%, color-mix(in srgb, var(--ok) 34%, transparent), transparent 70%),
+    radial-gradient(24% 50% at 82% 8%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 70%),
+    radial-gradient(20% 44% at 96% 0%, color-mix(in srgb, var(--ok) 28%, transparent), transparent 70%);
+  filter: blur(3px);
+  opacity: 0.8;
+}
+
+[data-theme='les'] .home-scene__far::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(38% 46% at -4% 12%, color-mix(in srgb, var(--accent) 34%, transparent), transparent 70%),
+    radial-gradient(34% 42% at 104% 20%, color-mix(in srgb, var(--ok) 30%, transparent), transparent 70%),
+    radial-gradient(22% 28% at -2% 52%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%),
+    radial-gradient(22% 28% at 102% 58%, color-mix(in srgb, var(--ok) 20%, transparent), transparent 70%);
+  filter: blur(5px);
+  opacity: 0.85;
+}
+
+[data-theme='les'] .home-scene__mid {
+  background:
+    radial-gradient(30% 18% at 16% -2%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 70%),
+    radial-gradient(34% 20% at 82% -4%, color-mix(in srgb, var(--ok) 22%, transparent), transparent 70%),
+    linear-gradient(90deg, transparent 0 11.6%, color-mix(in srgb, var(--scene-shadow) 58%, transparent) 13.2% 13.8%, transparent 15.2%),
+    linear-gradient(90deg, transparent 0 57.8%, color-mix(in srgb, var(--scene-shadow) 52%, transparent) 59.2% 59.8%, transparent 61.2%),
+    linear-gradient(90deg, transparent 0 83.6%, color-mix(in srgb, var(--scene-shadow) 55%, transparent) 84.8% 85.4%, transparent 86.8%);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0 8%, #000 28%, #000 100%);
+  mask-image: linear-gradient(180deg, transparent 0 8%, #000 28%, #000 100%);
+  opacity: 0.58;
+}
+
+[data-theme='les'] .home-scene__mid::before {
+  content: '';
+  position: absolute;
+  inset: 4% -4% auto;
+  height: 48%;
+  background:
+    repeating-linear-gradient(
+      72deg,
+      transparent 0 76px,
+      color-mix(in srgb, var(--scene-shadow) 32%, transparent) 76px 79px,
+      transparent 79px 156px
+    ),
+    repeating-linear-gradient(
+      108deg,
+      transparent 0 94px,
+      color-mix(in srgb, var(--scene-shadow) 24%, transparent) 94px 97px,
+      transparent 97px 180px
+    );
+  -webkit-mask-image: radial-gradient(80% 100% at 50% 0, #000 0 45%, transparent 80%);
+  mask-image: radial-gradient(80% 100% at 50% 0, #000 0 45%, transparent 80%);
+  opacity: 0.5;
+}
+
+[data-theme='les'] .home-scene__near {
+  background:
+    radial-gradient(80% 30% at 50% 108%, color-mix(in srgb, var(--scene-shadow) 80%, transparent), transparent 70%),
+    radial-gradient(28% 22% at 4% 102%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 70%),
+    radial-gradient(24% 20% at 12% 108%, color-mix(in srgb, var(--ok) 24%, transparent), transparent 70%),
+    radial-gradient(26% 22% at 96% 104%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 70%),
+    radial-gradient(22% 18% at 88% 110%, color-mix(in srgb, var(--ok) 22%, transparent), transparent 70%);
+  filter: blur(2px);
+}
+
+[data-theme='les'] .home-scene__particles i {
+  width: 8px;
+  height: 5px;
+  border-radius: 60% 0 60% 0;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+
+/* Океан: горизонт, три полосы прибоя и поднимающиеся пузыри. */
+[data-theme='okean'] .home-scene__sky {
+  background:
+    radial-gradient(40% 30% at 50% 58%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 80%, var(--scene-shadow)), color-mix(in srgb, var(--bg) 72%, var(--accent)));
+}
+
+[data-theme='okean'] .home-scene__far {
+  background:
+    repeating-radial-gradient(
+      ellipse at 50% 112%,
+      transparent 0 16px,
+      color-mix(in srgb, var(--accent) 14%, transparent) 17px 18px,
+      transparent 19px 32px
+    ),
+    repeating-radial-gradient(
+      ellipse at 22% 118%,
+      transparent 0 22px,
+      color-mix(in srgb, var(--accent) 10%, transparent) 23px 24px,
+      transparent 25px 42px
+    ),
+    repeating-radial-gradient(
+      ellipse at 78% 116%,
+      transparent 0 26px,
+      color-mix(in srgb, var(--scene-glow) 8%, transparent) 27px 28px,
+      transparent 29px 48px
+    );
+  -webkit-mask-image: linear-gradient(180deg, transparent 46%, #000 60%, transparent 84%);
+  mask-image: linear-gradient(180deg, transparent 46%, #000 60%, transparent 84%);
+  animation: home-tide 12s ease-in-out infinite;
+}
+
+[data-theme='okean'] .home-scene__mid {
+  background:
+    repeating-radial-gradient(
+      ellipse at 50% 110%,
+      transparent 0 34px,
+      color-mix(in srgb, var(--accent) 11%, transparent) 35px 36px,
+      transparent 37px 66px
+    ),
+    radial-gradient(90% 26% at 50% 98%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 68%),
+    radial-gradient(70% 20% at 20% 104%, color-mix(in srgb, var(--scene-glow) 12%, transparent), transparent 70%);
+  animation: home-swell 9s ease-in-out infinite;
+}
+
+[data-theme='okean'] .home-scene__near {
+  background:
+    radial-gradient(
+      60% 18% at 50% 104%,
+      color-mix(in srgb, var(--scene-glow) 28%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      40% 12% at 30% 108%,
+      color-mix(in srgb, var(--scene-glow) 18%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      40% 12% at 70% 108%,
+      color-mix(in srgb, var(--scene-glow) 16%, transparent),
+      transparent 70%
+    );
+  filter: blur(2px);
+}
+
+[data-theme='okean'] .home-scene__particles i {
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--scene-glow) 40%, transparent);
+}
+
+/* Магия: звёздное поле, туманность и медленный круг рун. */
+[data-theme='magiya'] .home-scene__sky {
+  background:
+    radial-gradient(1.6px 1.6px at 18% 22%, color-mix(in srgb, var(--gold) 70%, transparent), transparent 65%),
+    radial-gradient(1.4px 1.4px at 34% 14%, color-mix(in srgb, var(--accent) 55%, transparent), transparent 65%),
+    radial-gradient(2px 2px at 52% 38%, color-mix(in srgb, var(--gold) 55%, transparent), transparent 65%),
+    radial-gradient(1.4px 1.4px at 68% 18%, color-mix(in srgb, var(--scene-glow) 45%, transparent), transparent 65%),
+    radial-gradient(1.8px 1.8px at 84% 34%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 65%),
+    radial-gradient(1.4px 1.4px at 76% 72%, color-mix(in srgb, var(--gold) 36%, transparent), transparent 65%),
+    radial-gradient(48% 42% at 50% 30%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 78%, var(--scene-shadow)), var(--bg-deep));
+}
+
+[data-theme='magiya'] .home-scene__far {
+  background:
+    radial-gradient(30% 24% at 24% 30%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%),
+    radial-gradient(34% 26% at 78% 62%, color-mix(in srgb, var(--info) 14%, transparent), transparent 70%);
+  filter: blur(8px);
+  animation: home-drift 20s ease-in-out infinite;
+}
+
+[data-theme='magiya'] .home-scene__mid {
+  background: radial-gradient(
+    44% 44% at 50% 100%,
+    color-mix(in srgb, var(--accent) 12%, transparent),
+    transparent 70%
+  );
+}
+
+[data-theme='magiya'] .home-scene__mid::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -16%;
+  width: min(58vw, 620px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  background: repeating-conic-gradient(
+    from 0deg,
+    color-mix(in srgb, var(--gold) 18%, transparent) 0 1deg,
+    transparent 1deg 15deg
+  );
+  box-shadow: 0 0 30px color-mix(in srgb, var(--accent) 10%, transparent);
+  -webkit-mask: radial-gradient(circle, transparent 0 49%, #000 50% 51%, transparent 52%);
+  mask: radial-gradient(circle, transparent 0 49%, #000 50% 51%, transparent 52%);
+  transform: translateX(-50%);
+  animation: home-rune 60s linear infinite;
+}
+
+[data-theme='magiya'] .home-scene__near {
+  background: radial-gradient(
+    60% 24% at 50% 104%,
+    color-mix(in srgb, var(--accent) 18%, transparent),
+    transparent 70%
+  );
+}
+
+[data-theme='magiya'] .home-scene__particles i {
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--gold);
+  box-shadow: 0 0 7px var(--glow);
+}
+
+/* Стимпанк: кирпичная стена, две шестерни и пар. */
+[data-theme='par'] .home-scene__sky {
+  background:
+    radial-gradient(40% 30% at 50% 104%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 84%, var(--scene-shadow)), var(--bg-deep));
+}
+
+[data-theme='par'] .home-scene__far {
+  background:
+    repeating-linear-gradient(0deg, transparent 0 22px, color-mix(in srgb, var(--scene-shadow) 35%, transparent) 22px 23px),
+    repeating-linear-gradient(90deg, transparent 0 44px, color-mix(in srgb, var(--scene-shadow) 30%, transparent) 44px 45px);
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent 85%);
+  mask-image: linear-gradient(180deg, #000, transparent 85%);
+  opacity: 0.35;
+}
+
+[data-theme='par'] .home-scene__mid {
+  background: radial-gradient(
+    34% 30% at 50% 108%,
+    color-mix(in srgb, var(--gold) 16%, transparent),
+    transparent 70%
+  );
+}
+
+[data-theme='par'] .home-scene__mid::before,
+[data-theme='par'] .home-scene__mid::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  background: repeating-conic-gradient(
+    from 0deg,
+    color-mix(in srgb, var(--gold) 32%, transparent) 0 8deg,
+    transparent 8deg 22deg
+  );
+  -webkit-mask: radial-gradient(circle, transparent 0 34%, #000 35% 46%, transparent 47%);
+  mask: radial-gradient(circle, transparent 0 34%, #000 35% 46%, transparent 47%);
+  animation: home-gear 48s linear infinite;
+}
+
+[data-theme='par'] .home-scene__mid::before {
+  left: -8%;
+  bottom: 6%;
+  width: 260px;
+  height: 260px;
+}
+
+[data-theme='par'] .home-scene__mid::after {
+  right: -6%;
+  bottom: 18%;
+  width: 180px;
+  height: 180px;
+  animation-direction: reverse;
+  animation-duration: 34s;
+}
+
+[data-theme='par'] .home-scene__near {
+  background:
+    linear-gradient(0deg, color-mix(in srgb, var(--scene-shadow) 70%, transparent) 0 12%, transparent 12%),
+    repeating-linear-gradient(90deg, transparent 0 90px, color-mix(in srgb, var(--gold) 10%, transparent) 90px 98px);
+  opacity: 0.6;
+}
+
+[data-theme='par'] .home-scene__particles i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--scene-glow) 14%, transparent);
+  filter: blur(1px);
+}
+
+/* Трактир: тёплое окно, свечи и угли. */
+[data-theme='traktir'] .home-scene__sky {
+  background:
+    radial-gradient(40% 36% at 50% 6%, color-mix(in srgb, var(--gold) 18%, transparent), transparent 70%),
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--scene-shadow) 18%, transparent) 0 2px, transparent 2px 96px),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 84%, var(--scene-shadow)), var(--bg-deep));
+}
+
+[data-theme='traktir'] .home-scene__far::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 8%;
+  width: min(30vw, 340px);
+  aspect-ratio: 1.4;
+  border-radius: 50% 50% 8% 8%;
+  background: radial-gradient(
+    circle at 50% 55%,
+    color-mix(in srgb, var(--gold) 26%, transparent),
+    transparent 70%
+  );
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--scene-shadow) 45%, transparent);
+  transform: translateX(-50%);
+}
+
+[data-theme='traktir'] .home-scene__mid {
+  background: radial-gradient(
+    30% 26% at 50% 44%,
+    color-mix(in srgb, var(--gold) 16%, transparent),
+    transparent 70%
+  );
+  animation: home-flicker 7s ease-in-out infinite;
+}
+
+[data-theme='traktir'] .home-scene__near {
+  background:
+    linear-gradient(0deg, color-mix(in srgb, var(--scene-shadow) 75%, transparent) 0 16%, transparent 16%),
+    radial-gradient(60% 18% at 50% 108%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%);
+}
+
+[data-theme='traktir'] .home-scene__particles i {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+
+/* Стандартная: пергамент, свеча и звёзды компаса. */
+[data-theme='standart'] .home-scene__sky {
+  background:
+    radial-gradient(32% 28% at 50% 104%, color-mix(in srgb, var(--gold) 14%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 78%, var(--scene-shadow)), var(--bg-deep));
+}
+
+[data-theme='standart'] .home-scene__far {
+  background: repeating-conic-gradient(
+    from 0deg at 50% 120%,
+    color-mix(in srgb, var(--gold) 12%, transparent) 0 2deg,
+    transparent 2deg 30deg
+  );
+  -webkit-mask: radial-gradient(circle at 50% 120%, #000 0 40%, transparent 60%);
+  mask: radial-gradient(circle at 50% 120%, #000 0 40%, transparent 60%);
+  opacity: 0.25;
+}
+
+[data-theme='standart'] .home-scene__mid {
+  background: radial-gradient(
+    40% 30% at 50% 100%,
+    color-mix(in srgb, var(--accent) 10%, transparent),
+    transparent 70%
+  );
+}
+
+[data-theme='standart'] .home-scene__near {
+  background: radial-gradient(
+    70% 40% at 50% 108%,
+    color-mix(in srgb, var(--scene-shadow) 55%, transparent),
+    transparent 70%
+  );
+}
+
+[data-theme='standart'] .home-scene__particles i {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+
+@keyframes home-mote-fall {
+  0%   { transform: translate3d(0, 0, 0) rotate(0); opacity: 0; }
+  12%  { opacity: 0.75; }
+  100% { transform: translate3d(var(--mote-drift, 24px), 112vh, 0) rotate(300deg); opacity: 0; }
+}
+
+@keyframes home-mote-rise {
+  0%   { transform: translate3d(0, 12vh, 0) scale(0.6); opacity: 0; }
+  14%  { opacity: 0.7; }
+  100% { transform: translate3d(var(--mote-drift, 20px), -112vh, 0) scale(1.3); opacity: 0; }
+}
+
+@keyframes home-tide {
+  0%, 100% { background-position: 0 0; }
+  50%      { background-position: 0 9px; }
+}
+
+@keyframes home-swell {
+  0%, 100% { transform: translateY(0) scaleX(1); }
+  50%      { transform: translateY(-8px) scaleX(1.03); }
+}
+
+@keyframes home-drift {
+  0%, 100% { transform: translate3d(-1.5%, 0, 0) scale(1.04); }
+  50%      { transform: translate3d(1.5%, 1%, 0) scale(1.08); }
+}
+
+@keyframes home-rune {
+  to { transform: translateX(-50%) rotate(360deg); }
+}
+
+@keyframes home-gear {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes home-flicker {
+  0%, 100% { opacity: 0.55; }
+  38%      { opacity: 0.72; }
+  64%      { opacity: 0.48; }
+}
+
+/* ==========================================================================
+ * Минимализм и фокус.
+ *
+ * Убираем атмосферу, уголки, орнамент карты и текстуры. Цвет и акцент
+ * остаются, поэтому тема всё ещё узнаётся, но ничто не спорит с чтением.
+ * ========================================================================== */
+
+[data-focus='on'] {
+  --corner: 0 0;
+  --radius: 6px;
+  --radius-sm: 4px;
+  --frame-inner: 0 0;
+  --glow: transparent;
+  --title-glow: none;
+  --title-shadow: none;
+  --panel-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+[data-focus='on'] body::before,
+[data-focus='on'] .home-scene,
+[data-focus='on'] .map-decor,
+[data-focus='on'] .panel__title::before,
+[data-focus='on'] .panel::before,
+[data-focus='on'] .panel::after {
+  display: none !important;
+}
+
+[data-focus='on'] .panel,
+[data-focus='on'] .home__group,
+[data-focus='on'] .sheet .box,
+[data-focus='on'] .adv-item,
+[data-focus='on'] .chat,
+[data-focus='on'] .dice,
+[data-focus='on'] .btn,
+[data-focus='on'] .card {
+  background-image: none !important;
+}
+
+[data-focus='on'] .panel,
+[data-focus='on'] .home__group,
+[data-focus='on'] .sheet .box,
+[data-focus='on'] .adv-item,
+[data-focus='on'] .chat,
+[data-focus='on'] .dice {
+  box-shadow: var(--frame-inner), 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+[data-focus='on'] .btn:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+
+[data-focus='on'] .card:hover {
+  transform: none;
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+/* ==========================================================================
+ * Движение.
+ *
+ * Отдельный выключатель нужен тем, кому системная настройка не помогает:
+ * например, на чужом компьютере или в трансляции. Системное предпочтение
+ * уважается отдельно и всегда.
+ * ========================================================================== */
+
+[data-motion='off'] *,
+[data-motion='off'] *::before,
+[data-motion='off'] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+ * Иконки.
+ *
+ * Один размер и один штрих у карточных иконок. Иконки вкладок остаются
+ * заливными, но получают тот же токен размера.
+ * ========================================================================== */
+
+.card__icon {
+  display: grid;
+  place-items: center;
+}
+
+.card__icon svg {
+  display: block;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--icon-stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tabs__icon svg {
+  display: block;
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+/* ==========================================================================
+ * Выбор темы в настройках.
+ * ========================================================================== */
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-2) 0 var(--space-4);
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--preview-radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+
+.theme-card.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.theme-card__scene {
+  position: relative;
+  flex: none;
+  width: 100%;
+  height: 46px;
+  overflow: hidden;
+  border-radius: calc(var(--preview-radius) - 2px);
+  background: var(--pv-bg);
+  border: 1px solid color-mix(in srgb, var(--pv-text) 14%, transparent);
+}
+
+.theme-card__scene::before {
+  content: '';
+  position: absolute;
+  inset: 7px 38% 7px 7px;
+  border-radius: 3px;
+  background: var(--pv-surface);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pv-accent) 24%, transparent);
+}
+
+.theme-card__scene::after {
+  content: '';
+  position: absolute;
+  right: 7px;
+  bottom: 9px;
+  left: 7px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--pv-accent) 0 34%, color-mix(in srgb, var(--pv-accent) 34%, transparent) 34% 100%);
+}
+
+.theme-card__label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.theme-card.is-active .theme-card__label::after {
+  content: ' \2713';
+  color: var(--accent);
+}
+
+.theme-card__note {
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.settings__seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-deep);
+}
+
+.settings__seg button {
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.settings__seg button:hover {
+  color: var(--text);
+}
+
+.settings__seg button.is-on {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
+.accent-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.accent-swatch {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: var(--swatch);
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.accent-swatch:hover {
+  transform: translateY(-1px);
+}
+
+.accent-swatch.is-on {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.accent-reset {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.accent-reset:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.settings__range {
+  flex: 1;
+  min-width: 110px;
+  accent-color: var(--accent);
+}
+
+.settings__sound-test {
+  margin-left: auto;
+}
+
+.settings__note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* ==========================================================================
+ * Мобильная ширина.
+ * ========================================================================== */
+
+@media (max-width: 560px) {
+  .theme-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .modal--settings {
+    max-width: calc(100vw - 20px);
+  }
+
+  .settings__row {
+    flex-wrap: wrap;
+  }
+
+  .settings__label {
+    min-width: 90px;
+  }
+}

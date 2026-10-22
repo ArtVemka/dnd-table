@@ -34,7 +34,9 @@ const {
   clampNumber,
   newMapId,
   newTokenId,
+  normalizeAdventure,
   normalizeSheet,
+  normalizeStatblock,
   normalizeTemplate,
   normalizeTokenLight,
   sanitizeText
@@ -309,6 +311,69 @@ async function createTableServer(options) {
       if (wasHidden) emitToken('tokenCreated', token);
     }
     broadcastPlayers();
+  };
+
+  /**
+   * Объявление об изменении прочности в чате.
+   *
+   * Монстрам прочность в чат не пишем: сервер намеренно прячет её от игроков,
+   * и объявление выдало бы ровно то, что скрывает tokenForViewer. У фишки
+   * игрока прочность и так видят все, поэтому её изменение полезно объяснить:
+   * иначе полоска у соседей прыгает молча.
+   *
+   * Кнопки «-1» жмут быстро, поэтому правки одного токена склеиваются за
+   * полсекунды в одну строку с итоговой разницей.
+   */
+  const HP_NOTICE_DELAY = 500;
+  const hpNotices = new Map();
+
+  /** @param {string} tokenId */
+  const flushHpNotice = (tokenId) => {
+    const pending = hpNotices.get(tokenId);
+    if (!pending) return;
+    hpNotices.delete(tokenId);
+    const { token, before, actor } = pending;
+    if (!room.tokens.includes(token) || !room.isTokenVisibleToPlayers(token)) return;
+    const after = token.hp;
+    if (after === before) return;
+    const delta = after - before;
+    const name = room.tokenForViewer(token, false).name || 'Фишка';
+    const notice = {
+      from: actor.name,
+      playerId: actor.playerId,
+      role: actor.role,
+      text: `${name}: ${after}/${token.maxHp} (${delta < 0 ? 'урон' : 'лечение'} ${Math.abs(delta)})`,
+      system: true,
+      time: new Date().toISOString()
+    };
+    room.chatHistory.push(notice);
+    if (room.chatHistory.length > LIMITS.maxChatHistory) {
+      room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
+    }
+    markDirty();
+    io.emit('chatMessage', notice);
+  };
+
+  /**
+   * @param {object} token
+   * @param {number} before прочность до правки
+   * @param {{playerId: string, name: string, role: string}} actor
+   */
+  const announceTokenHp = (token, before, actor) => {
+    if (!token.assignedPlayerId) return;
+    if (!room.isTokenVisibleToPlayers(token)) return;
+    const pending = hpNotices.get(token.id);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.timer = setTimeout(() => flushHpNotice(token.id), HP_NOTICE_DELAY);
+      return;
+    }
+    hpNotices.set(token.id, {
+      token,
+      before,
+      actor,
+      timer: setTimeout(() => flushHpNotice(token.id), HP_NOTICE_DELAY)
+    });
   };
 
   /**
@@ -894,8 +959,11 @@ socket.on('setGrid', (payload) => {
         // начиналась бы с того, что все монстры уже на виду.
         hidden: true,
         color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length],
+        // Большой монстр занимает несколько клеток: 1 — средний, 2 — большой,
+        // 3 — огромный, 4 — исполин.
+        size: clampInt(payload && payload.size, 1, 4, 1),
         // Прочность задаётся сразу при создании: монстра заводят на стол с его
-        // хитами, и дописывать их потом отдельной правкой неудобно.
+        // статами, и выставлять здоровье вторым шагом неудобно.
         maxHp: Number.isFinite(Number(payload && payload.maxHp)) && Number(payload.maxHp) > 0
           ? clampInt(payload.maxHp, 1, LIMITS.maxTokenHp, 1)
           : null,
@@ -1250,7 +1318,24 @@ socket.on('setGrid', (payload) => {
       if (token.maxHp === null || token.maxHp === undefined) {
         return emitError(socket, `У фишки «${token.name}» нет прочности`);
       }
+      const before = token.hp;
       room.setTokenHp(token, payload && payload.hp);
+      markDirty();
+      emitToken('tokenUpdated', token);
+      if (token.hp !== before) {
+        announceTokenHp(token, before, {
+          playerId: socket.data.playerId,
+          name: socket.data.name,
+          role: socket.data.role
+        });
+      }
+    });
+
+    socket.on('setTokenSize', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      token.size = clampInt(payload && payload.size, 1, 4, 1);
       markDirty();
       emitToken('tokenUpdated', token);
     });
@@ -1448,6 +1533,86 @@ socket.on('setGrid', (payload) => {
         emitError(socket, error && error.quota ? error.message : 'Не получилось сохранить картинку');
         onLog(`Ошибка сохранения картинки: ${error.message}`);
       }
+    });
+
+    /**
+     * Статблок персонажа приключения. Правка идёт по названию группы: у
+     * импортированного «Кобольда» двадцать одинаковых записей, и мастер правит
+     * не одну из них, а всех сразу.
+     */
+    socket.on('setAdventureGroupStatblock', (payload) => {
+      if (!requireDm(socket)) return;
+      const name = sanitizeText(payload && payload.name, LIMITS.maxAdventureTitle).trim();
+      if (!name) return emitError(socket, 'Не указано название персонажа');
+      if (!room.adventure) {
+        room.adventure = normalizeAdventure({ name: 'Приключение', source: 'вручную', actors: [] });
+      }
+      const key = groupKey(name);
+      let group = room.adventure.actors.filter((entry) => groupKey(entry.name) === key);
+      if (!group.length) {
+        if (!(payload && payload.create)) {
+          return emitError(socket, 'В приключении нет персонажа с таким названием');
+        }
+        if (room.adventure.actors.length >= LIMITS.maxAdventureActors) {
+          return emitError(socket, 'В приключении уже слишком много персонажей');
+        }
+        const actor = {
+          id: `actor-${crypto.randomBytes(4).toString('hex')}`,
+          name,
+          type: 'npc',
+          image: '',
+          statblock: null,
+          sourceId: ''
+        };
+        room.adventure.actors.push(actor);
+        group = [actor];
+      }
+      const block = normalizeStatblock(payload && payload.statblock);
+      for (const actor of group) actor.statblock = block;
+      markDirty();
+      io.to('dm-sockets').emit('adventureUpdated', room.adventure);
+    });
+
+    /**
+     * Фишка из статблока: имя, прочность и размер берутся оттуда. Картинка
+     * переносится только если она уже лежит файлом кампании: data-URL в
+     * состоянии фишки раздувал бы каждую рассылку.
+     */
+    socket.on('createTokenFromAdventureActor', (payload) => {
+      if (!requireDm(socket)) return;
+      const name = sanitizeText(payload && payload.name, LIMITS.maxAdventureTitle).trim();
+      if (!name) return emitError(socket, 'Не указано название персонажа');
+      if (!room.adventure) return emitError(socket, 'В кампании нет приключения');
+      if (room.tokens.length >= LIMITS.maxTokens) return emitError(socket, 'Слишком много фишек на столе');
+      const actor = room.adventure.actors.find((entry) => groupKey(entry.name) === groupKey(name));
+      if (!actor) return emitError(socket, 'В приключении нет такого персонажа');
+      const block = actor.statblock || {};
+      const requestedMap = payload && payload.mapType;
+      const mapType = MAP_TYPES.includes(requestedMap) ? requestedMap : (room.activeMap || 'battle');
+      const maxHp = Number(block.hp) > 0 ? clampInt(block.hp, 1, LIMITS.maxTokenHp, 1) : null;
+      const image = typeof actor.image === 'string' && /^\/files\/[A-Za-z0-9_.-]{1,80}$/.test(actor.image)
+        ? actor.image
+        : null;
+      const token = {
+        id: newTokenId(),
+        name: actor.name,
+        mapType,
+        mapId: sanitizeText(payload && payload.mapId, 80),
+        x: 0.5,
+        y: 0.5,
+        imageUrl: image,
+        assignedPlayerId: null,
+        hidden: true,
+        color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length],
+        size: clampInt(block.size, 1, 4, 1),
+        maxHp,
+        hp: maxHp,
+        conditions: []
+      };
+      room.tokens.push(token);
+      markDirty();
+      emitToken('tokenCreated', token);
+      onLog(`Фишка <${token.name}> создана из статблока`);
     });
 
     socket.on('moveToken', (payload) => {
@@ -1754,11 +1919,15 @@ socket.on('rollDice', (payload) => {
       if (!requireJoined(socket)) return;
       const text = sanitizeText(payload && payload.text, LIMITS.maxChatLength).trim();
       if (!text) return;
+      // Шёпот мастеру: игрок может сказать что-то только ведущему. Мастер
+      // шёпота не пишет, иначе пришлось бы выбирать адресата из игроков.
+      const whisper = socket.data.role === ROLE_PLAYER && Boolean(payload && payload.whisper);
       const message = {
         from: socket.data.name,
         playerId: socket.data.playerId,
         role: socket.data.role,
         text,
+        whisper: whisper || undefined,
         time: new Date().toISOString()
       };
       room.chatHistory.push(message);
@@ -1766,7 +1935,12 @@ socket.on('rollDice', (payload) => {
         room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
       }
       markDirty();
-      io.emit('chatMessage', message);
+      if (whisper) {
+        io.to('dm-sockets').emit('chatMessage', message);
+        io.to(socket.data.playerId).emit('chatMessage', message);
+      } else {
+        io.emit('chatMessage', message);
+      }
     });
 
     socket.on('ping', (payload) => {
@@ -1812,6 +1986,8 @@ socket.on('rollDice', (payload) => {
     /** Полная остановка сервера. Все сокеты закрываются. */
     close() {
       return new Promise((resolve) => {
+        for (const pending of hpNotices.values()) clearTimeout(pending.timer);
+        hpNotices.clear();
         let finished = false;
         const finish = () => {
           if (finished) return;

@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('desktop', {
   loadCampaign: (id) => ipcRenderer.invoke('campaign:load', id),
   currentCampaign: () => ipcRenderer.invoke('campaign:current'),
   saveCampaign: () => ipcRenderer.invoke('campaign:save'),
+  backupCampaign: () => ipcRenderer.invoke('campaign:backup'),
   deleteCampaign: (id) => ipcRenderer.invoke('campaign:delete', id),
 
   // Стол (сервер в main-процессе)

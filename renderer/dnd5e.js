@@ -1012,7 +1012,11 @@ const GRID = {
     maxExperience: 9999999,
     maxSheetTextLength: 4000,
     maxHitDiceLength: 20,
-    maxClassLength: 60
+    maxClassLength: 60,
+    /** Строк атак в листе: больше двадцати за бой всё равно не пригодится. */
+    maxSheetAttacks: 20,
+    maxAttackName: 60,
+    maxAttackDamage: 80
   };
 
   /**
@@ -1106,6 +1110,9 @@ const GRID = {
       armorClass: 10,
       initiativeMisc: 0,
       speed: 30,
+      // Атаки для быстрых бросков: [{name, bonus, damage}]. Текстовое поле
+      // attacks остаётся для описаний и старых листов.
+      attackList: [],
       attacks: '',
       equipment: '',
       features: '',

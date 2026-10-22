@@ -182,6 +182,53 @@ function sceneTokens(doc, resolveAsset) {
     });
 }
 
+/** @param {unknown} value @returns {number} */
+function statNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+/**
+ * Статблок актёра из `system` Foundry. Поля dnd5e лежат по-разному в разных
+ * версиях, поэтому читаем оба известных вида и молча пропускаем остальное:
+ * лучше показать меньше, чем уронить импорт.
+ * @param {any} doc
+ * @returns {object|null}
+ */
+function actorStatblock(doc) {
+  if (!doc || (!doc.system && !doc.data)) return null;
+  const system = doc.system || doc.data || {};
+  const attributes = system.attributes || {};
+  const acRaw = attributes.ac;
+  const ac = acRaw && typeof acRaw === 'object' ? (acRaw.value ?? acRaw.flat) : acRaw;
+  const hpRaw = attributes.hp;
+  const hp = hpRaw && typeof hpRaw === 'object' ? (hpRaw.max ?? hpRaw.value) : hpRaw;
+  const movement = attributes.movement || {};
+  const speedParts = [];
+  for (const [key, label] of [['walk', ''], ['fly', 'полёт'], ['swim', 'плавание'],
+    ['climb', 'лазание'], ['burrow', 'копание']]) {
+    const value = statNumber(movement[key]);
+    if (value > 0) speedParts.push(label ? `${label} ${value} фт` : `${value} фт`);
+  }
+  const abilities = {};
+  const abilitiesRaw = system.abilities || {};
+  for (const key of ['str', 'dex', 'con', 'int', 'wis', 'cha']) {
+    const entry = abilitiesRaw[key];
+    const value = statNumber(entry && typeof entry === 'object' ? entry.value : entry);
+    abilities[key] = value > 0 ? value : 10;
+  }
+  return {
+    ac: statNumber(ac),
+    hp: statNumber(hp),
+    speed: speedParts.join(', '),
+    size: 1,
+    cr: String((system.details && system.details.cr) || ''),
+    abilities,
+    attacks: '',
+    notes: ''
+  };
+}
+
 /**
  * Приводит один документ Foundry к плоскому описанию.
  * @param {any} doc
@@ -206,7 +253,8 @@ function describeDocument(doc, fallbackKind, resolveAsset) {
       type: String(raw.type || ''),
       formula: String(raw.formula || ''),
       sceneWidth: Number(raw.width) || 0,
-      sceneHeight: Number(raw.height) || 0
+      sceneHeight: Number(raw.height) || 0,
+      statblock: kind === 'actor' ? actorStatblock(raw) : undefined
     }
   };
 }

@@ -35,7 +35,7 @@
 .btn--accent {
   background: linear-gradient(180deg, var(--accent-hover), var(--accent));
   border-color: var(--accent);
-  color: #22120a;
+  color: var(--accent-ink);
   font-weight: 600;
 }
 

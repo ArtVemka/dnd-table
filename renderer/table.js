@@ -1376,14 +1376,29 @@
       stage.appendChild(surface);
       stage.appendChild(empty);
 
-      // Тематический орнамент висит на верхней кромке карты. Он один на стол,
-      // поэтому кнопки остаются спокойными. Позиция курсора уходит в CSS:
-      // лоза тянется в сторону мыши, но сама по себе не качается.
+      // Тематический орнамент висит на верхней кромке карты. Внутри три слоя:
+      // ветер качает подвес, курсор задаёт наклон, а листья и пылинки живут
+      // своей жизнью. Позиция курсора уходит в CSS, поэтому браузер не
+      // пересчитывает геометрию на каждое движение мыши.
       const decor = el('div', 'map-decor');
       decor.setAttribute('aria-hidden', 'true');
+      const wind = el('span', 'map-decor__wind');
       const strand = el('span', 'map-decor__strand');
+      for (let i = 1; i <= 3; i += 1) {
+        strand.appendChild(el('span', `map-decor__leaf map-decor__leaf--${i}`));
+      }
       strand.appendChild(el('span', 'map-decor__mark'));
-      decor.appendChild(strand);
+      wind.appendChild(strand);
+      decor.appendChild(wind);
+      const aside = el('span', 'map-decor__aside');
+      aside.appendChild(el('span', 'map-decor__aside-line'));
+      aside.appendChild(el('span', 'map-decor__aside-mark'));
+      decor.appendChild(aside);
+      const motes = el('span', 'map-decor__motes');
+      for (let i = 1; i <= 6; i += 1) {
+        motes.appendChild(el('span', `map-decor__mote map-decor__mote--${i}`));
+      }
+      decor.appendChild(motes);
       this.decor = decor;
       stage.appendChild(decor);
 
@@ -4138,6 +4153,7 @@
           token.hideLabels ? 1 : 0,
           token.imageUrl || '',
           token.color || '',
+          token.size || 1,
           token.maxHp || 0,
           token.hp === undefined ? '' : token.hp,
           token.assignedPlayerId || '',
@@ -4237,6 +4253,9 @@
       node.dataset.tokenId = token.id;
       node.style.left = `${token.x * 100}%`;
       node.style.top = `${token.y * 100}%`;
+      // Размер в клетках. Якорь остаётся центром, поэтому фишка растёт от
+      // центра и закрывает соседние клетки с обеих сторон.
+      node.style.setProperty('--token-size', String(DnD.clampNumber(token.size, 1, 4, 1)));
 
       // Прочность видна прямо на поле, а не только в списке фишек: за боком
       // мастер смотрит на карту, а не в правую колонку.
@@ -4793,6 +4812,18 @@
       input.maxLength = DnD.LIMITS.maxChatLength;
       this.input = input;
       form.appendChild(input);
+
+      // Шёпот мастеру: одноразовый режим, после отправки выключается сам.
+      // Скрыт у мастера и в тренировочном столе, где ведущего нет.
+      const whisper = el('button', 'btn btn--ghost btn--tiny chat__whisper', 'Шёпот');
+      whisper.type = 'button';
+      whisper.title = 'Шёпот мастеру: сообщение увидит только ведущий';
+      whisper.setAttribute('aria-pressed', 'false');
+      whisper.addEventListener('click', () => this.setWhisper(!this.whisper));
+      this.whisperButton = whisper;
+      this.whisper = false;
+      form.appendChild(whisper);
+
       const send = el('button', 'btn btn--accent', 'Отправить');
       send.type = 'submit';
       form.appendChild(send);
@@ -4800,8 +4831,9 @@
         event.preventDefault();
         const text = input.value.trim();
         if (!text) return;
-        if (this.handlers.onSend) this.handlers.onSend(text);
+        if (this.handlers.onSend) this.handlers.onSend(text, this.whisper);
         input.value = '';
+        this.setWhisper(false);
       });
       this.root.appendChild(form);
 
@@ -4854,12 +4886,26 @@
       if (this.handlers.onQuery) this.handlers.onQuery(query);
     }
 
+    /** @param {boolean} on */
+    setWhisper(on) {
+      this.whisper = Boolean(on);
+      if (!this.whisperButton) return;
+      this.whisperButton.classList.toggle('btn--accent', this.whisper);
+      this.whisperButton.setAttribute('aria-pressed', String(this.whisper));
+      this.whisperButton.textContent = this.whisper ? 'Шёпот: вкл' : 'Шёпот';
+    }
+
     /**
      * @param {object[]} history
      * @param {string} [query] Запрос поиска: снимок стола приходит вместе с
      *   историей, и иначе подсветка молча пропала бы после переподключения.
      */
     renderAll(history, query) {
+      if (this.whisperButton) {
+        const allowed = !this.handlers.canWhisper || this.handlers.canWhisper();
+        this.whisperButton.hidden = !allowed;
+        if (!allowed) this.setWhisper(false);
+      }
       // Собираем ленту в фрагмент и вставляем один раз: appendChild в цикле
       // заставляет браузер пересчитывать раскладку на каждую строку. Заодно
       // не гоняем поиск по всей ленте после каждого сообщения.
@@ -4882,6 +4928,7 @@
       const row = el('div', 'chat__msg');
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
       if (message.isRoll) row.classList.add('chat__msg--roll');
+      if (message.whisper) row.classList.add('chat__msg--whisper');
       // Служебные объявления стола, например о режиме боя: их пишет сервер, а
       // не человек, и подпись автора у них лишняя.
       if (message.system) {
@@ -4903,6 +4950,7 @@
       head.appendChild(el('span', 'chat__author', message.from));
       if (message.role === 'dm') head.appendChild(el('span', 'badge badge--dm', 'ДМ'));
       if (message.isRoll) head.appendChild(el('span', 'badge badge--roll', 'бросок'));
+      if (message.whisper) head.appendChild(el('span', 'badge badge--whisper', 'мастеру'));
       head.appendChild(el('span', 'chat__time', formatTime(message.time)));
       row.appendChild(head);
       row.appendChild(el('div', 'chat__text', message.isRoll ? `🎲 ${message.text}` : message.text));
@@ -5140,6 +5188,9 @@
      */
     startRolling(formula) {
       if (!this.last) return;
+      // Звук стартует вместе с анимацией, а не после ответа сервера: иначе
+      // бросок «молчит» всю паузу и звук приходит невпопад.
+      if (window.DnDSound) window.DnDSound.play('dice');
       this.rolling = true;
       this.pendingResult = null;
       this.rollStartedAt = Date.now();
@@ -5647,6 +5698,17 @@
       form.appendChild(hpInput);
       this.hpInput = hpInput;
 
+      // Размер в клетках: большой монстр занимает 2×2, огромный 3×3.
+      const sizeInput = el('select', 'select select--tiny token-form__size');
+      sizeInput.title = 'Размер фишки в клетках';
+      for (const size of [1, 2, 3, 4]) {
+        const option = el('option', null, `${size}×${size}`);
+        option.value = String(size);
+        sizeInput.appendChild(option);
+      }
+      form.appendChild(sizeInput);
+      this.sizeInput = sizeInput;
+
       const create = el('button', 'btn btn--accent', 'Создать фишку');
       create.type = 'submit';
       form.appendChild(create);
@@ -5655,10 +5717,15 @@
         const name = input.value.trim();
         const maxHp = Number(hpInput.value);
         if (this.handlers.onCreate) {
-          this.handlers.onCreate(name, Number.isFinite(maxHp) && maxHp > 0 ? maxHp : null);
+          this.handlers.onCreate(
+            name,
+            Number.isFinite(maxHp) && maxHp > 0 ? maxHp : null,
+            Number(sizeInput.value) || 1
+          );
         }
         input.value = '';
         hpInput.value = '';
+        sizeInput.value = '1';
       });
       form.appendChild(create);
       this.root.appendChild(form);
@@ -5886,6 +5953,22 @@
       const owner = players.find((player) => player.playerId === token.assignedPlayerId);
       row.appendChild(el('span', 'token-row__meta', owner ? `→ ${owner.name}` : 'не назначена'));
       if (token.maxHp) row.appendChild(this.buildHpControl(token));
+
+      const sizeSelect = el('select', 'select select--tiny token-row__size');
+      sizeSelect.title = 'Размер фишки в клетках';
+      for (const size of [1, 2, 3, 4]) {
+        const option = el('option', null, `${size}×${size}`);
+        option.value = String(size);
+        sizeSelect.appendChild(option);
+      }
+      sizeSelect.value = String(DnD.clampNumber(token.size, 1, 4, 1));
+      sizeSelect.addEventListener('change', () => {
+        if (this.handlers.onSetTokenSize) {
+          this.handlers.onSetTokenSize(token.id, Number(sizeSelect.value) || 1);
+        }
+      });
+      row.appendChild(sizeSelect);
+
       row.appendChild(this.buildConditionsControl(token));
 
       const nameless = el('button',

@@ -66,7 +66,7 @@ const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
   'tokensUpdated', 'mapPing',
-  'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated'
+  'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated'
 ];
 
 /**
@@ -289,6 +289,11 @@ async function main() {
     hp: 44, maxHp: 44, tempHp: 0, hitDice: '1d10', hitDiceSpent: 2,
     armorClass: 18, initiativeMisc: 0, speed: 25,
     attacks: 'Боевой топор +7, 1d8+3',
+    attackList: [
+      { name: 'Боевой топор', bonus: 7, damage: '1d8+3' },
+      { name: '', bonus: 0, damage: '' },
+      { name: 'Лук', bonus: 99, damage: '1d8+3' }
+    ],
     equipment: 'Кольчуга, щит',
     features: 'Второе дыхание',
     notes: 'Ищет брата'
@@ -308,6 +313,13 @@ async function main() {
     assert.strictEqual(saved.sheet.classes.length, 2, 'мультикласс должен сохраниться списком');
     assert.strictEqual(saved.sheet.classes[1].name, 'Волшебник');
     assert.strictEqual(saved.sheet.classes[1].level, 2);
+  });
+  check('строки атак сохраняются, пустая выбрасывается, бонус ограничен', () => {
+    assert.strictEqual(saved.sheet.attackList.length, 2);
+    assert.deepStrictEqual(saved.sheet.attackList[0], {
+      name: 'Боевой топор', bonus: 7, damage: '1d8+3'
+    });
+    assert.strictEqual(saved.sheet.attackList[1].bonus, 30);
   });
   check('компетентность без владения сбрасывается', () => {
     assert.strictEqual(saved.sheet.skillProficiencies.stealth, false);
@@ -860,7 +872,7 @@ async function main() {
     assert.strictEqual(room.tokens.length, 0);
   });
 
-  emit(dm, 'createToken', { name: 'Гоблин', mapType: 'world' });
+  emit(dm, 'createToken', { name: 'Гоблин', mapType: 'world', size: 2 });
   const token = await waitFor(() => dm.log.tokenCreated[0], 'создание фишки');
   check('ДМ создаёт фишку в центре выбранной карты', () => {
     assert.strictEqual(token.name, 'Гоблин');
@@ -868,6 +880,7 @@ async function main() {
     assert.strictEqual(token.x, 0.5);
     assert.strictEqual(token.y, 0.5);
     assert.strictEqual(token.assignedPlayerId, null);
+    assert.strictEqual(token.size, 2);
     assert.ok(token.color);
   });
   check('новая фишка появляется скрытой от игроков', () => {
@@ -921,6 +934,26 @@ async function main() {
     assert.strictEqual(assigned.assignedPlayerId, 'p-test-0001');
   });
 
+  dm.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenSize', { tokenId: token.id, size: 9 });
+  const resized = await waitFor(
+    () => dm.log.tokenUpdated.find((item) => item.id === token.id && item.size === 4),
+    'размер фишки'
+  );
+  check('размер фишки задаёт мастер, лишнее обрезается до четырёх клеток', () => {
+    assert.strictEqual(resized.size, 4);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenSize', { tokenId: token.id, size: 1 });
+  await waitFor(
+    () => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')),
+    'отказ игроку в размере фишки'
+  );
+  check('игрок не меняет размер фишки', () => {
+    assert.strictEqual(room.tokens[0].size, 4);
+  });
+
   dm.log.errorMessage.length = 0;
   emit(dm, 'assignTokenToPlayer', { tokenId: token.id, playerId: 'p-unknown' });
   await waitFor(() => dm.log.errorMessage.find((item) => item.message.includes('Игрок не найден')), 'отказ по несуществующему игроку');
@@ -969,6 +1002,67 @@ async function main() {
   check('ДМ переименовывает фишку', () => {
     assert.strictEqual(renamed.name, 'Гоблин-вождь');
   });
+
+  /* --- статблоки --- */
+
+  console.log('\nСтатблоки');
+  room.adventure = null;
+  emit(dm, 'setAdventureGroupStatblock', {
+    name: 'Гоблин-вожак',
+    create: true,
+    statblock: {
+      ac: 15, hp: 22, speed: '30 фт', cr: '1/2', size: 2,
+      abilities: { str: 14, dex: 14, con: 12, int: 10, wis: 8, cha: 10 },
+      attacks: 'Скимитар +4, 1d6+2',
+      notes: 'Тактика стаи'
+    }
+  });
+  await waitFor(
+    () => dm.log.adventureUpdated.find((adventure) => adventure.actors
+      && adventure.actors.some((actor) => actor.name === 'Гоблин-вожак')),
+    'статблок в справочнике'
+  );
+  check('мастер создаёт NPC и заполняет статблок', () => {
+    const actor = room.adventure.actors.find((entry) => entry.name === 'Гоблин-вожак');
+    assert.ok(actor, 'NPC не появился в справочнике');
+    assert.strictEqual(actor.statblock.ac, 15);
+    assert.strictEqual(actor.statblock.hp, 22);
+    assert.strictEqual(actor.statblock.size, 2);
+    assert.strictEqual(actor.statblock.abilities.str, 14);
+  });
+  check('игрок не получает справочник приключения', () => {
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    assert.strictEqual(snapshot.adventure, null);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setAdventureGroupStatblock', {
+    name: 'Гоблин-вожак',
+    statblock: { ac: 10, hp: 1 }
+  });
+  await waitFor(
+    () => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')),
+    'отказ игроку в правке статблока'
+  );
+  check('статблок правит только мастер', () => {
+    const actor = room.adventure.actors.find((entry) => entry.name === 'Гоблин-вожак');
+    assert.strictEqual(actor.statblock.ac, 15);
+  });
+
+  dm.log.tokenCreated.length = 0;
+  emit(dm, 'createTokenFromAdventureActor', { name: 'Гоблин-вожак', mapType: 'world' });
+  const actorToken = await waitFor(
+    () => dm.log.tokenCreated.find((item) => item.name === 'Гоблин-вожак'),
+    'фишка из статблока'
+  );
+  check('фишка из статблока берёт прочность и размер', () => {
+    assert.strictEqual(actorToken.maxHp, 22);
+    assert.strictEqual(actorToken.hp, 22);
+    assert.strictEqual(actorToken.size, 2);
+    assert.strictEqual(actorToken.hidden, true);
+  });
+  emit(dm, 'deleteToken', { tokenId: actorToken.id });
+  await waitFor(() => !room.tokens.some((item) => item.id === actorToken.id), 'удаление фишки из статблока');
 
   /* --- скрытие фишек --- */
 
@@ -1186,6 +1280,8 @@ async function main() {
   // такого ведёт мастер у себя: игроку хватает знать, что монстр на поле есть.
   dm.log.tokenUpdated.length = 0;
   p2.log.tokenUpdated.length = 0;
+  const dmChatBeforeMonsterHp = dm.log.chatMessage.length;
+  const p2ChatBeforeMonsterHp = p2.log.chatMessage.length;
   emit(dm, 'setTokenHp', { tokenId: hpToken.id, hp: 5 });
   await waitFor(() => dm.log.tokenUpdated.find((item) => item.id === hpToken.id), 'мастер снял урон монстру');
   check('игрок не получает прочность монстра ни при уроне, ни в живых событиях', () => {
@@ -1197,6 +1293,20 @@ async function main() {
     assert.strictEqual(seenByPlayer.hp, null, `игрок увидел прочность: ${seenByPlayer.hp}`);
     // Название и положение фишки игроку по-прежнему нужны.
     assert.strictEqual(seenByPlayer.name, 'Гоблин');
+  });
+
+  await wait(700);
+  check('прочность монстра не попадает в чат', () => {
+    assert.strictEqual(
+      dm.log.chatMessage.length,
+      dmChatBeforeMonsterHp,
+      'мастеру пришло объявление о скрытой прочности'
+    );
+    assert.strictEqual(
+      p2.log.chatMessage.length,
+      p2ChatBeforeMonsterHp,
+      'игроку пришло объявление о скрытой прочности'
+    );
   });
 
   const monsterView = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER });
@@ -1227,10 +1337,25 @@ async function main() {
   await waitFor(() => p2.log.tokenCreated.find((item) => item.id === heroToken.id), 'игрок увидел свою фишку');
   dm.log.tokenUpdated.length = 0;
   p2.log.tokenUpdated.length = 0;
+  dm.log.chatMessage.length = 0;
+  p2.log.chatMessage.length = 0;
   emit(dm, 'setTokenHp', { tokenId: heroToken.id, hp: 4 });
   await waitFor(() => p2.log.tokenUpdated.find((item) => item.id === heroToken.id), 'игрок увидел урон своей фишке');
   check('прочность фишки игрока видна всем, в том числе его сопернику за столом', () => {
     assert.strictEqual(p2.log.tokenUpdated.find((item) => item.id === heroToken.id).hp, 4);
+  });
+
+  const hpNotice = await waitFor(
+    () => p2.log.chatMessage.find((message) => message.system && /Кобра/.test(message.text)),
+    'объявление об уроне фишке игрока'
+  );
+  check('изменение прочности фишки игрока объясняется в чате', () => {
+    assert.match(hpNotice.text, /4\/11/, `в объявлении нет прочности: ${hpNotice.text}`);
+    assert.match(hpNotice.text, /урон 7/, `в объявлении нет разницы: ${hpNotice.text}`);
+    assert(
+      dm.log.chatMessage.some((message) => message.text === hpNotice.text),
+      'мастер не увидел объявление об уроне'
+    );
   });
 
   emit(dm, 'deleteToken', { tokenId: heroToken.id });
@@ -2677,6 +2802,25 @@ async function main() {
     assert.strictEqual(longChat.text.length, 1000);
   });
 
+  p1.log.chatMessage.length = 0;
+  p2.log.chatMessage.length = 0;
+  dm.log.chatMessage.length = 0;
+  emit(p1, 'chatMessage', { text: 'Сундук с ловушкой', whisper: true });
+  const whisper = await waitFor(() => dm.log.chatMessage[0], 'шёпот мастеру');
+  await wait(150);
+  check('шёпот получает мастер и автор, но не другой игрок', () => {
+    assert.strictEqual(whisper.text, 'Сундук с ловушкой');
+    assert.strictEqual(whisper.whisper, true);
+    assert.strictEqual(p1.log.chatMessage.length, 1);
+    assert.strictEqual(p2.log.chatMessage.length, 0);
+  });
+  check('шёпот не попадает в снимок стола чужому игроку', () => {
+    const mine = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER });
+    const other = room.snapshotFor({ playerId: 'p-test-0002', role: ROLE_PLAYER });
+    assert.ok(mine.chatHistory.some((message) => message.whisper));
+    assert.ok(!other.chatHistory.some((message) => message.whisper));
+  });
+
   const { ack: longJoin } = await open({ name: 'Я'.repeat(120), playerId: 'p-long' });
   check('слишком длинное имя обрезается до 40 символов', () => {
     assert.strictEqual(longJoin.you.name.length, 40);
@@ -2697,6 +2841,24 @@ async function main() {
   await store.save(campaign);
   check('файл кампании записан на диск', () => {
     assert.ok(fs.existsSync(path.join(root, 'campaigns', campaign.id, 'campaign.json')));
+  });
+
+  const previousName = campaign.name;
+  campaign.name = 'Тестовая кампания, переименованная';
+  await store.save(campaign);
+  check('перед сохранением остаётся предыдущая версия кампании', () => {
+    const backup = JSON.parse(fs.readFileSync(
+      path.join(root, 'campaigns', campaign.id, 'campaign.json.bak'), 'utf8'
+    ));
+    assert.strictEqual(backup.name, previousName);
+  });
+  campaign.name = previousName;
+  await store.save(campaign);
+
+  const backupDir = await store.backup(campaign.id, 'Копия');
+  check('копия кампании переносит JSON и папку с картинками', () => {
+    assert.ok(fs.existsSync(path.join(backupDir, 'campaign.json')), 'в копии нет campaign.json');
+    assert.ok(fs.existsSync(path.join(backupDir, 'files')), 'в копии нет папки files');
   });
 
   const list = await store.list();

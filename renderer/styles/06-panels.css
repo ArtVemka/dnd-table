@@ -24,8 +24,8 @@
 .token {
   position: absolute;
   transform: translate(-50%, -50%);
-  width: var(--cell, 46px);
-  height: var(--cell, 46px);
+  width: calc(var(--cell, 46px) * var(--token-size, 1));
+  height: calc(var(--cell, 46px) * var(--token-size, 1));
   pointer-events: auto;
   user-select: none;
   touch-action: none;
@@ -99,8 +99,8 @@
 }
 
 .token__circle {
-  width: var(--cell, 46px);
-  height: var(--cell, 46px);
+  width: calc(var(--cell, 46px) * var(--token-size, 1));
+  height: calc(var(--cell, 46px) * var(--token-size, 1));
   border-radius: 50%;
   background: var(--token-color, var(--accent));
   border: 2px solid rgba(12, 9, 6, 0.85);
@@ -111,7 +111,7 @@
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: calc(var(--cell, 46px) * 0.4);
+  font-size: calc(var(--cell, 46px) * 0.4 * var(--token-size, 1));
   line-height: 1;
   color: #1a1209;}
 
@@ -169,8 +169,8 @@
    под фишкой меняют её высоку, и «низ фишки» без обёртки гулял бы. */
 .token__body {
   position: relative;
-  width: var(--cell, 46px);
-  height: var(--cell, 46px);
+  width: calc(var(--cell, 46px) * var(--token-size, 1));
+  height: calc(var(--cell, 46px) * var(--token-size, 1));
   display: flex;
 }
 
@@ -818,6 +818,21 @@
 .chat__msg--roll {
   border-left-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.chat__msg--whisper {
+  border-left-color: var(--info);
+  background: var(--info-soft);
+}
+
+.badge--whisper {
+  background: var(--info-soft);
+  border-color: var(--info-border);
+  color: var(--info-text);
+}
+
+.chat__whisper {
+  white-space: nowrap;
 }
 
 .badge--roll {

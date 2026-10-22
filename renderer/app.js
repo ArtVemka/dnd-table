@@ -203,6 +203,9 @@ let chosenSheetId = null;
     for (const screen of document.querySelectorAll('.screen')) {
       screen.classList.toggle('is-active', screen.id === id);
     }
+    // Атмосфера звучит только на главном экране. Уходя в стол или лист,
+    // гасим её, чтобы звук не спорил с броском кубика и разговором.
+    if (window.DnDSound) window.DnDSound.setScene(id === 'screen-home' ? 'home' : '');
   }
 
   function formatDateTime(iso) {
@@ -1131,9 +1134,12 @@ let chosenSheetId = null;
     }
     if (!chatPanel) {
       chatPanel = new ChatPanel($('#tab-chat'), {
-        onSend: (text) => emit('chatMessage', { text }),
+        onSend: (text, whisper) => emit('chatMessage', { text, whisper }),
+        // Шёпот есть только у игрока за настоящим столом: у мастера нет
+        // адресата, а в тренировке нет ведущего.
+        canWhisper: () => app.role === 'player' && !app.training,
         // Запрос поиска живёт в контроллере, а не в панели: снимок стола
-        // приходит при переподключении, и подсветка должна восстановиться.
+        // приходит по переподключению, и подсветка должна восстановиться.
         onQuery: (value) => { app.chatQuery = value; },
         resolveUrl: assetUrl
       });
@@ -1150,12 +1156,12 @@ let chosenSheetId = null;
     if (!tokenPanel) {
       tokenPanel = new TokenPanel($('#tab-tokens'), {
         // Прочность необязательна: пустое поле — фишка-метка без здоровья.
-        onCreate: (name, maxHp) => {
+        onCreate: (name, maxHp, size) => {
           // Фишка создаётся на той карте, которую мастер сейчас открыл, а не
           // на показанной: иначе заготовку нельзя было бы обставить заранее.
           const mapType = (mapView && mapView.viewedMap) || app.room.activeMap || 'battle';
           const mapId = (mapView && mapView.currentMapId) || activeMapId();
-          emit('createToken', { name, maxHp, mapType, mapId });
+          emit('createToken', { name, maxHp, size, mapType, mapId });
         },
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
         // Свет фишки: факел в руке. Дальность в футах, как в правилах.
@@ -1170,6 +1176,7 @@ let chosenSheetId = null;
         // Прочность ведёт мастер: игрок правит своё здоровье в листе, и две
         // правки одного числа за столом разошлись бы.
         onSetTokenHp: (tokenId, hp) => emit('setTokenHp', { tokenId, hp }),
+        onSetTokenSize: (tokenId, size) => emit('setTokenSize', { tokenId, size }),
         // Состояния ведёт мастер, но видны они всем.
         onSetTokenConditions: (tokenId, conditions, conditionDurations) => emit('setTokenConditions', {
           tokenId,
@@ -1513,13 +1520,19 @@ let chosenSheetId = null;
     const total = adventure
       ? ADVENTURE_SECTIONS.reduce((sum, section) => sum + (adventure[section.key] || []).length, 0)
       : 0;
-    // Пустой справочник занимал бы вкладку впустую: прячем её, пока есть что читать.
-    button.hidden = total === 0;
+    // Вкладка нужна мастеру и когда справочник пуст: здесь он заводит NPC
+    // вручную, без импорта чужого приключения.
+    button.hidden = app.role !== 'dm';
     if (!button.hidden) {
       button.querySelector('.tabs__label').textContent = total ? `Приключение · ${total}` : 'Приключение';
     }
     if (!adventure) {
       panel.innerHTML = '';
+      const empty = el('div', 'adv-empty');
+      empty.appendChild(el('p', 'muted',
+        'Справочник пуст. Импортируйте приключение из Foundry или создайте NPC вручную.'));
+      empty.appendChild(makeAddActorButton());
+      panel.appendChild(empty);
       adventurePanelStale = false;
       return;
     }
@@ -1562,7 +1575,29 @@ let chosenSheetId = null;
     });
     panel.appendChild(query);
 
+    const actions = el('div', 'adv-actions');
+    actions.appendChild(makeAddActorButton());
+    panel.appendChild(actions);
+
     fillAdventureSections(panel, adventure, '');
+  }
+
+  /** Кнопка «новый NPC»: работает и без импортированного приключения. */
+  function makeAddActorButton() {
+    const add = el('button', 'btn btn--tiny', '+ NPC');
+    add.type = 'button';
+    add.title = 'Создать персонажа вручную и заполнить ему статблок';
+    add.addEventListener('click', async () => {
+      const name = await modal({
+        title: 'Новый NPC',
+        message: 'Имя персонажа или монстра. Статблок заполняется в карточке.',
+        input: { placeholder: 'Например, «Гоблин-вожак»', maxLength: 80 },
+        confirmLabel: 'Создать'
+      });
+      if (!name) return;
+      emit('setAdventureGroupStatblock', { name, create: true, statblock: {} });
+    });
+    return add;
   }
 
   /**
@@ -1664,6 +1699,27 @@ let chosenSheetId = null;
       }));
     }
 
+    if (section.key === 'actors') {
+      const block = group.members[0].statblock || {};
+      const summary = statblockSummary(block);
+      if (summary) card.appendChild(el('div', 'adv-stat', summary));
+      const actions = el('div', 'adv-item__actions');
+      const edit = el('button', 'btn btn--tiny', 'Статблок');
+      edit.type = 'button';
+      edit.addEventListener('click', () => openStatblockEditor(group.name, block));
+      actions.appendChild(edit);
+      const spawn = el('button', 'btn btn--tiny btn--accent', 'На стол');
+      spawn.type = 'button';
+      spawn.title = 'Поставить фишку с прочностью и размером из статблока';
+      spawn.addEventListener('click', () => {
+        const mapType = (mapView && mapView.viewedMap) || app.room.activeMap || 'battle';
+        const mapId = (mapView && mapView.currentMapId) || activeMapId();
+        emit('createTokenFromAdventureActor', { name: group.name, mapType, mapId });
+      });
+      actions.appendChild(spawn);
+      card.appendChild(actions);
+    }
+
     // Подробности показываем, когда в группе что-то есть сказать либо когда
     // группа не одна: одиночную карточку незачем прятать под «раскрыть».
     const sample = group.members[0];
@@ -1700,6 +1756,141 @@ let chosenSheetId = null;
     card.appendChild(toggle);
     card.appendChild(body);
     return card;
+  }
+
+  /** Короткая строка статблока для карточки персонажа. */
+  function statblockSummary(block = {}) {
+    const parts = [];
+    if (block.ac) parts.push(`AC ${block.ac}`);
+    if (block.hp) parts.push(`HP ${block.hp}`);
+    if (block.speed) parts.push(block.speed);
+    if (block.cr) parts.push(`CR ${block.cr}`);
+    return parts.join(' · ');
+  }
+
+  /**
+   * Редактор статблока. Полей немного и они плоские, поэтому обычная форма в
+   * модальном окне: отдельный экран ради десятка чисел был бы лишним.
+   * @param {string} name
+   * @param {object} [block]
+   */
+  function openStatblockEditor(name, block = {}) {
+    const overlay = el('div', 'modal-overlay');
+    const box = el('div', 'modal modal--statblock');
+    box.appendChild(el('div', 'modal__title', `Статблок: ${name}`));
+    const fields = {};
+
+    const numberField = (label, key, value, min, max) => {
+      const wrap = el('label', 'field');
+      wrap.appendChild(el('span', 'field__label', label));
+      const input = el('input', 'input');
+      input.type = 'number';
+      input.min = String(min);
+      input.max = String(max);
+      input.value = value === undefined || value === null ? '' : String(value);
+      fields[key] = input;
+      wrap.appendChild(input);
+      return wrap;
+    };
+    const textField = (label, key, value, maxLength) => {
+      const wrap = el('label', 'field');
+      wrap.appendChild(el('span', 'field__label', label));
+      const input = el('input', 'input');
+      input.type = 'text';
+      input.value = value || '';
+      input.maxLength = maxLength;
+      fields[key] = input;
+      wrap.appendChild(input);
+      return wrap;
+    };
+
+    const top = el('div', 'statblock__row');
+    top.appendChild(numberField('КЗ', 'ac', block.ac, 0, 99));
+    top.appendChild(numberField('Хиты', 'hp', block.hp, 0, 9999));
+    top.appendChild(textField('Скорость', 'speed', block.speed, 60));
+    top.appendChild(textField('CR', 'cr', block.cr, 20));
+    const sizeWrap = el('label', 'field');
+    sizeWrap.appendChild(el('span', 'field__label', 'Размер'));
+    const size = el('select', 'select');
+    for (const value of [1, 2, 3, 4]) {
+      const option = el('option', null, `${value}×${value}`);
+      option.value = String(value);
+      size.appendChild(option);
+    }
+    size.value = String(block.size || 1);
+    fields.size = size;
+    sizeWrap.appendChild(size);
+    top.appendChild(sizeWrap);
+    box.appendChild(top);
+
+    const abilities = el('div', 'statblock__abilities');
+    for (const key of DnD.ABILITY_KEYS) {
+      const value = block.abilities && block.abilities[key] !== undefined ? block.abilities[key] : 10;
+      abilities.appendChild(numberField(DnD.ABILITY_LABELS[key], key, value, 1, 30));
+    }
+    box.appendChild(abilities);
+
+    const attacksWrap = el('label', 'field');
+    attacksWrap.appendChild(el('span', 'field__label', 'Атаки и действия'));
+    const attacks = el('textarea', 'textarea');
+    attacks.rows = 4;
+    attacks.maxLength = DnD.LIMITS.maxSheetTextLength;
+    attacks.value = block.attacks || '';
+    fields.attacks = attacks;
+    attacksWrap.appendChild(attacks);
+    box.appendChild(attacksWrap);
+
+    const notesWrap = el('label', 'field');
+    notesWrap.appendChild(el('span', 'field__label', 'Особенности'));
+    const notes = el('textarea', 'textarea');
+    notes.rows = 3;
+    notes.maxLength = DnD.LIMITS.maxSheetTextLength;
+    notes.value = block.notes || '';
+    fields.notes = notes;
+    notesWrap.appendChild(notes);
+    box.appendChild(notesWrap);
+
+    const actions = el('div', 'modal__actions');
+    const cancel = el('button', 'btn btn--ghost', 'Отмена');
+    cancel.type = 'button';
+    const save = el('button', 'btn btn--accent', 'Сохранить');
+    save.type = 'button';
+    const close = () => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') close();
+    };
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', () => {
+      const statblock = {
+        ac: Number(fields.ac.value) || 0,
+        hp: Number(fields.hp.value) || 0,
+        speed: fields.speed.value.trim(),
+        cr: fields.cr.value.trim(),
+        size: Number(fields.size.value) || 1,
+        abilities: {},
+        attacks: fields.attacks.value,
+        notes: fields.notes.value
+      };
+      for (const key of DnD.ABILITY_KEYS) {
+        statblock.abilities[key] = Number(fields[key].value) || 10;
+      }
+      emit('setAdventureGroupStatblock', { name, statblock });
+      close();
+    });
+    actions.appendChild(cancel);
+    actions.appendChild(save);
+    box.appendChild(actions);
+
+    overlay.addEventListener('pointerdown', (event) => {
+      if (event.target === overlay) close();
+    });
+    document.addEventListener('keydown', onKey);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    fields.ac.focus();
   }
 
   /** Текст объекта приключения для карточки. */
@@ -1922,6 +2113,21 @@ let chosenSheetId = null;
     dirButton.addEventListener('click', () => desktop.openDataDir());
     appBox.appendChild(dirButton);
 
+    if (app.campaign) {
+      const backupButton = el('button', 'btn btn--tiny', 'Сохранить копию кампании');
+      backupButton.type = 'button';
+      backupButton.title = 'Копия папки кампании со всеми картинками в data/backups';
+      backupButton.addEventListener('click', async () => {
+        const result = await desktop.backupCampaign();
+        if (!result || !result.ok) {
+          toast((result && result.error) || 'Не удалось сделать копию', 'error');
+          return;
+        }
+        toast(`Копия кампании: ${result.dir}`, 'ok');
+      });
+      appBox.appendChild(backupButton);
+    }
+
     // Имя за столом. У мастера оно по умолчанию «Мастер», и под таким именем
     // он остаётся во всех заметках и разговорах, если не задал своё.
     const nameRow = el('div', 'settings__row');
@@ -1953,24 +2159,203 @@ let chosenSheetId = null;
         : 'Сохранится и пригодится, когда вы запустите стол или подключитесь.'));
     box.appendChild(appBox);
 
+    /** Строка с галочкой: одинаково выглядит для движения, фокуса и звука. */
+    const settingsCheck = (label, checked, setting, onChange) => {
+      const row = el('div', 'settings__row');
+      const wrap = el('label', 'settings__check');
+      const input = el('input');
+      input.type = 'checkbox';
+      input.checked = checked;
+      input.dataset.setting = setting;
+      input.addEventListener('change', () => onChange(input.checked));
+      wrap.appendChild(input);
+      wrap.appendChild(el('span', null, label));
+      row.appendChild(wrap);
+      return row;
+    };
+
     const themeBox = el('div', 'box');
-    themeBox.appendChild(el('div', 'box__title', 'Оформление'));
-    const themeRow = el('div', 'settings__row');
-    const themeSelect = el('select', 'select settings__select');
-    themeSelect.dataset.setting = 'theme';
-    for (const theme of window.DnDTheme.THEMES) {
-      const option = el('option', null, theme.label);
-      option.value = theme.id;
-      if (theme.id === window.DnDTheme.current()) option.selected = true;
-      themeSelect.appendChild(option);
-    }
-    // Переключаем сразу, без кнопки: палитра видна прямо в окне настроек.
-    themeSelect.addEventListener('change', () => window.DnDTheme.apply(themeSelect.value));
-    themeRow.appendChild(themeSelect);
-    themeBox.appendChild(themeRow);
-    themeBox.appendChild(el('div', 'box__note',
-      'Тема меняется у вас на этом компьютере. Выбор сохраняется и в окно листа персонажа.'));
+    // Перерисовываем только этот блок: смена тона меняет и превью, и набор
+    // безопасных акцентов, но не должна закрывать всё окно настроек.
+    const renderThemeBox = () => {
+      themeBox.textContent = '';
+      themeBox.appendChild(el('div', 'box__title', 'Оформление'));
+
+      const toneRow = el('div', 'settings__row');
+      toneRow.appendChild(el('span', 'settings__label', 'Тон'));
+      const toneSeg = el('div', 'settings__seg');
+      for (const [id, label] of [['dark', 'Тёмная'], ['light', 'Светлая']]) {
+        const button = el('button', null, label);
+        button.type = 'button';
+        button.dataset.setting = 'tone';
+        button.dataset.tone = id;
+        if (window.DnDTheme.currentTone() === id) button.classList.add('is-on');
+        button.addEventListener('click', () => {
+          window.DnDTheme.setTone(id);
+          renderThemeBox();
+        });
+        toneSeg.appendChild(button);
+      }
+      toneRow.appendChild(toneSeg);
+      themeBox.appendChild(toneRow);
+
+      const grid = el('div', 'theme-grid');
+      grid.dataset.setting = 'theme';
+      const tone = window.DnDTheme.currentTone();
+      for (const theme of window.DnDTheme.THEMES) {
+        const preview = tone === 'light' ? theme.previewLight : theme.preview;
+        const card = el('button', 'theme-card');
+        card.type = 'button';
+        card.dataset.themeId = theme.id;
+        if (theme.id === window.DnDTheme.current()) card.classList.add('is-active');
+        card.style.setProperty('--pv-bg', preview.bg);
+        card.style.setProperty('--pv-surface', preview.surface);
+        card.style.setProperty('--pv-accent', preview.accent);
+        card.style.setProperty('--pv-text', preview.text);
+        card.appendChild(el('span', 'theme-card__scene'));
+        card.appendChild(el('span', 'theme-card__label', theme.label));
+        card.appendChild(el('span', 'theme-card__note', theme.note));
+        card.addEventListener('click', () => {
+          window.DnDTheme.apply(theme.id);
+          renderThemeBox();
+        });
+        grid.appendChild(card);
+      }
+      themeBox.appendChild(grid);
+
+      const accentRow = el('div', 'settings__row');
+      accentRow.appendChild(el('span', 'settings__label', 'Акцент'));
+      const accents = el('div', 'accent-row');
+      const chosen = window.DnDTheme.accentFor(window.DnDTheme.current());
+      for (const accent of window.DnDTheme.accentChoices(window.DnDTheme.current())) {
+        const swatch = el('button', 'accent-swatch');
+        swatch.type = 'button';
+        swatch.dataset.setting = 'accent';
+        swatch.dataset.accent = accent.color;
+        swatch.title = accent.label;
+        swatch.setAttribute('aria-label', accent.label);
+        swatch.style.setProperty('--swatch', accent.color);
+        if (chosen === accent.color) swatch.classList.add('is-on');
+        swatch.addEventListener('click', () => {
+          window.DnDTheme.setAccent(window.DnDTheme.current(), accent.color);
+          renderThemeBox();
+        });
+        accents.appendChild(swatch);
+      }
+      const resetAccent = el('button', 'accent-reset', 'Как в теме');
+      resetAccent.type = 'button';
+      resetAccent.dataset.setting = 'accent-reset';
+      resetAccent.addEventListener('click', () => {
+        window.DnDTheme.clearAccent(window.DnDTheme.current());
+        renderThemeBox();
+      });
+      accents.appendChild(resetAccent);
+      accentRow.appendChild(accents);
+      themeBox.appendChild(accentRow);
+
+      themeBox.appendChild(settingsCheck(
+        'Минимализм: без текстур и орнамента',
+        window.DnDTheme.focusOn(),
+        'focus',
+        (on) => window.DnDTheme.setFocus(on)
+      ));
+      themeBox.appendChild(settingsCheck(
+        'Анимации интерфейса',
+        window.DnDTheme.motionOn(),
+        'motion',
+        (on) => window.DnDTheme.setMotion(on)
+      ));
+      themeBox.appendChild(el('div', 'box__note',
+        'Тема, тон и акцент меняются сразу у вас на этом компьютере и в окне листа персонажа.'));
+    };
+    renderThemeBox();
     box.appendChild(themeBox);
+
+    const soundBox = el('div', 'box');
+    soundBox.appendChild(el('div', 'box__title', 'Звук'));
+    const sound = window.DnDSound;
+    if (!sound) {
+      soundBox.appendChild(el('div', 'box__note', 'Звук недоступен в этом окне.'));
+    } else {
+      soundBox.appendChild(settingsCheck(
+        'Звук интерфейса',
+        sound.enabled(),
+        'sound',
+        (on) => sound.setEnabled(on)
+      ));
+      soundBox.appendChild(settingsCheck(
+        'Звуки темы на главном экране',
+        sound.ambientEnabled(),
+        'ambient',
+        (on) => sound.setAmbient(on)
+      ));
+
+      const skinRow = el('div', 'settings__row');
+      skinRow.appendChild(el('span', 'settings__label', 'Скин'));
+      const skinSelect = el('select', 'select settings__select');
+      skinSelect.dataset.setting = 'sound-skin';
+      for (const item of sound.SKINS) {
+        const option = el('option', null, item.label);
+        option.value = item.id;
+        skinSelect.appendChild(option);
+      }
+      skinSelect.value = sound.skin();
+      skinSelect.addEventListener('change', () => sound.setSkin(skinSelect.value));
+      skinRow.appendChild(skinSelect);
+      const testSound = el('button', 'btn btn--tiny settings__sound-test', 'Проверить');
+      testSound.type = 'button';
+      testSound.dataset.soundSkip = '';
+      testSound.addEventListener('click', () => sound.preview());
+      skinRow.appendChild(testSound);
+      const testAmbient = el('button', 'btn btn--tiny settings__sound-test', 'Атмосфера');
+      testAmbient.type = 'button';
+      testAmbient.dataset.soundSkip = '';
+      testAmbient.title = 'Послушать звуки выбранной темы четыре секунды';
+      testAmbient.addEventListener('click', () => sound.previewAmbient());
+      skinRow.appendChild(testAmbient);
+      soundBox.appendChild(skinRow);
+
+      const volumeRow = el('div', 'settings__row');
+      volumeRow.appendChild(el('span', 'settings__label', 'Громкость'));
+      const volume = el('input', 'settings__range');
+      volume.type = 'range';
+      volume.min = '0';
+      volume.max = '100';
+      volume.step = '5';
+      volume.value = String(Math.round(sound.volume() * 100));
+      volume.dataset.setting = 'sound-volume';
+      const volumeValue = el('span', 'settings__value', `${volume.value}%`);
+      volume.addEventListener('input', () => {
+        sound.setVolume(volume.value);
+        volumeValue.textContent = `${volume.value}%`;
+      });
+      volumeRow.appendChild(volume);
+      volumeRow.appendChild(volumeValue);
+      soundBox.appendChild(volumeRow);
+
+      const ambientRow = el('div', 'settings__row');
+      ambientRow.appendChild(el('span', 'settings__label', 'Громкость атмосферы'));
+      const ambientVolume = el('input', 'settings__range');
+      ambientVolume.type = 'range';
+      ambientVolume.min = '0';
+      ambientVolume.max = '100';
+      ambientVolume.step = '5';
+      ambientVolume.value = String(Math.round(sound.ambientVolume() * 100));
+      ambientVolume.dataset.setting = 'sound-ambient-volume';
+      const ambientVolumeValue = el('span', 'settings__value', `${ambientVolume.value}%`);
+      ambientVolume.addEventListener('input', () => {
+        sound.setAmbientVolume(ambientVolume.value);
+        ambientVolumeValue.textContent = `${ambientVolume.value}%`;
+      });
+      ambientRow.appendChild(ambientVolume);
+      ambientRow.appendChild(ambientVolumeValue);
+      soundBox.appendChild(ambientRow);
+      soundBox.appendChild(el('div', 'box__note',
+        'Щелчки не привязаны к теме. Атмосфера главного экрана подстраивается: '
+        + 'лес шумит ветром и птицами, океан дышит прибоем, магия звенит, '
+        + 'стимпанк шипит паром. Звук включается после первого клика.'));
+    }
+    box.appendChild(soundBox);
 
     const langBox = el('div', 'box');
     langBox.appendChild(el('div', 'box__title', 'Язык интерфейса'));
@@ -3113,6 +3498,10 @@ const gridRow = el('div', 'settings__row');
   bindUi();
   bindImportUi();
   updateConnBadge(false);
+  // Главный экран уже активен в разметке, поэтому сцену включаем сразу.
+  // Звук стартует после первого касания: браузер не даёт запустить Web Audio
+  // до жеста пользователя.
+  if (window.DnDSound) window.DnDSound.setScene('home');
   initHome().catch((error) => toast(`Ошибка запуска: ${error.message}`, 'error'));
 
 })();

@@ -4,14 +4,15 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' http: https: ws: wss:; font-src 'self' data:;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; font-src 'self' data:;"
     />
     <title>D&amp;D Стол</title>
     <script src="theme.js"></script>
+    <script src="sound.js"></script>
     <!-- Шрифты подключаются раньше стилей: иначе первый кадр рисуется
          запасным шрифтом и дёргается, когда приходит настоящий. -->
     <link rel="stylesheet" href="fonts/fonts.css" />
-    <!-- Оформление разбито на восемь частей по порядку номеров: CSS зависит
+    <!-- Оформление разбито на девять частей по порядку номеров: CSS зависит
          от порядка правил одинаковой специфичности, и перестановка частей
          молча изменила бы вид. Правится файл целиком, читается по части. -->
     <link rel="stylesheet" href="styles/01-tokens.css" />
@@ -22,12 +23,22 @@
     <link rel="stylesheet" href="styles/06-panels.css" />
     <link rel="stylesheet" href="styles/07-sheet.css" />
     <link rel="stylesheet" href="styles/08-theme-layer.css" />
+    <link rel="stylesheet" href="styles/09-theme-studio.css" />
   </head>
   <body>
     <div id="toasts" class="toasts"></div>
 
     <!-- ================= Экран 1: главный ================= -->
     <section id="screen-home" class="screen screen--centered is-active">
+      <div class="home-scene" aria-hidden="true">
+        <span class="home-scene__sky"></span>
+        <span class="home-scene__far"></span>
+        <span class="home-scene__mid"></span>
+        <span class="home-scene__near"></span>
+        <span class="home-scene__particles">
+          <i></i><i></i><i></i><i></i><i></i><i></i>
+        </span>
+      </div>
       <div class="home">
         <div class="home__brand">
           <div class="home__logo">D&amp;D</div>
@@ -42,13 +53,13 @@
             <h2 class="home__group__title">Мастеру</h2>
             <div class="home__cards">
               <button id="btn-go-create" class="card" type="button">
-                <span class="card__icon">✚</span>
+                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></span>
                 <span class="card__title">Создать новую кампанию</span>
                 <span class="card__text">Стать ДМ и поднять стол на этом компьютере</span>
               </button>
 
               <button id="btn-go-load" class="card" type="button">
-                <span class="card__icon">▤</span>
+                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 4.2h3.4l1.1 1.4H13v6.2H3z"/><path d="M3 4.2v7.6"/></svg></span>
                 <span class="card__title">Загрузить кампанию</span>
                 <span class="card__text">Продолжить сохранённую игру</span>
               </button>
@@ -59,13 +70,13 @@
             <h2 class="home__group__title">Игроку</h2>
             <div class="home__cards">
               <button id="btn-go-join" class="card" type="button">
-                <span class="card__icon">⇥</span>
+                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2.8 8h9.4"/><path d="m9.2 4.8 3.2 3.2-3.2 3.2"/><path d="M12.8 3v10"/></svg></span>
                 <span class="card__title">Подключиться к столу</span>
                 <span class="card__text">Войти по P2P-билету, который прислал мастер</span>
               </button>
 
               <button id="btn-go-sheet" class="card" type="button">
-                <span class="card__icon">✎</span>
+                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M11.8 2.8 13.2 4.2 6.4 11 3 12l1-3.4z"/><path d="M10.6 4 12 5.4"/></svg></span>
                 <span class="card__title">Создать лист персонажа</span>
                 <span class="card__text">Заранее, до стола. Потом выберете его при подключении</span>
               </button>

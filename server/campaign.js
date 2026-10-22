@@ -216,8 +216,46 @@ class CampaignStore {
     // Атомарная запись: сначала во временный файл, потом подмена.
     const tmp = `${target}.tmp`;
     await fsp.writeFile(tmp, payload, 'utf8');
+    // Предыдущая версия остаётся рядом: сбой записи или неудачная миграция не
+    // должны оставлять единственный испорченный файл.
+    try {
+      await fsp.copyFile(target, `${target}.bak`);
+    } catch {
+      // Первое сохранение: копировать нечего.
+    }
     await fsp.rename(tmp, target);
     return campaign;
+  }
+
+  /**
+   * Копия всей папки кампании: JSON и все картинки. Рядом с `campaigns`
+   * появляется `backups`, чтобы копия не попала в список кампаний стола.
+   * Держим пять последних копий: иначе папка данных растёт без предела.
+   * @param {string} campaignId
+   * @param {string} [label]
+   * @returns {Promise<string>} путь к копии
+   */
+  async backup(campaignId, label = '') {
+    const source = this.dirFor(campaignId);
+    const root = path.join(path.dirname(this.rootDir), 'backups');
+    await fsp.mkdir(root, { recursive: true });
+    const safe = String(label || campaignId)
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .slice(0, 60) || campaignId;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const dest = path.join(root, `${safe}-${stamp}`);
+    await fsp.cp(source, dest, { recursive: true });
+
+    const entries = (await fsp.readdir(root, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    while (entries.length > 5) {
+      await fsp.rm(path.join(root, entries.shift()), { recursive: true, force: true });
+    }
+    return dest;
   }
 
   /**

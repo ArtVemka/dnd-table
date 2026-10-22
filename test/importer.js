@@ -72,7 +72,24 @@ function makeAdventure(patch = {}) {
         { _id: 'journal-2', type: 'JournalEntry', name: 'Схема', text: { html: '<p>Слева — выход</p>' } }
       ],
       actors: [
-        { _id: 'actor-1', type: 'Actor', name: 'Вор Рамза', img: PNG_DATA_URL },
+        {
+          _id: 'actor-1',
+          type: 'Actor',
+          name: 'Вор Рамза',
+          img: PNG_DATA_URL,
+          system: {
+            attributes: {
+              ac: { value: 15 },
+              hp: { max: 22 },
+              movement: { walk: 30, climb: 15 }
+            },
+            abilities: {
+              str: { value: 14 }, dex: { value: 16 }, con: { value: 12 },
+              int: { value: 10 }, wis: { value: 8 }, cha: { value: 13 }
+            },
+            details: { cr: 0.5 }
+          }
+        },
         { _id: 'actor-2', type: 'Actor', name: 'Знахарка' }
       ],
       items: [{ _id: 'item-1', type: 'Item', name: 'Ключ от двери' }],
@@ -296,7 +313,11 @@ check('актёр попадает в справочник приключени�
   const actor = patch.adventure.actors.find((item) => item.sourceId === 'actor-1');
   assert.ok(actor, 'актёр должен попасть в справочник');
   assert.strictEqual(actor.name, 'Вор Рамза');
-  assert.strictEqual(actor.image, PNG_DATA_URL, 'картинка актёра не должна обрезаться по пути');
+  assert.strictEqual(actor.image, PNG_DATA_URL, 'картинка актёра не должна потеряться по пути');
+  assert.strictEqual(actor.statblock.ac, 15);
+  assert.strictEqual(actor.statblock.hp, 22);
+  assert.strictEqual(actor.statblock.abilities.str, 14);
+  assert.match(actor.statblock.speed, /30/);
   assert.strictEqual(patch.tokens.length, 0, 'актёр не должен становиться фишкой сам по себе');
 });
 

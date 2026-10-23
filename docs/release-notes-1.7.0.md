@@ -107,8 +107,8 @@
   шторке видно уведомление. Выход из-за стола останавливает службу.
 * Сборка: JDK 21, Android SDK 35, build-tools 35.0.0, Gradle 8.11.1.
 * Мост проверяется без эмулятора: `node test/android-bridge.js`; раскладка
-  на 412x900 проверяется через `npx electron test/android-layout.js` после
-  `assembleDebug`.
+  на 412x900, 1024x768 и 800x1024 проверяется через
+  `npx electron test/android-layout.js` после `assembleDebug`.
 * **Release-подпись.** CI собирает `assembleRelease` и прикрепляет APK к тегу,
   если в секретах лежит keystore. К релизу 1.7.0 приложен APK с debug-подписью:
   для установки и проверки, не для магазина.

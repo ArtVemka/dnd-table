@@ -148,6 +148,9 @@
       }
       return Promise.resolve();
     },
+    readClipboard: function readClipboard() {
+      return call('readClipboard');
+    },
 
     onCampaignSaved: function onCampaignSaved() {
       return function unsubscribe() {};
@@ -160,9 +163,33 @@
     }
   };
 
+  /**
+   * Длинный билет удобнее вставить кнопкой, чем целиком тащить через
+   * долгое нажатие в поле.
+   */
+  function setupPasteTicket() {
+    var button = document.getElementById('btn-paste-ticket');
+    var input = document.getElementById('join-p2p-ticket');
+    if (!button || !input) return;
+    button.hidden = false;
+    button.addEventListener('click', function onPasteTicket() {
+      global.desktop.readClipboard().then(function (result) {
+        if (!result || !result.ok || !result.text) {
+          var status = document.getElementById('join-status');
+          if (status) status.textContent = (result && result.error) || 'Буфер обмена пуст';
+          return;
+        }
+        input.value = String(result.text).trim();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+      });
+    });
+  }
+
   // На телефоне мастерских экранов нет: остаются вход за игрока, лист и настройки.
   function applyMobileLayout() {
     document.body.classList.add('is-android');
+    setupPasteTicket();
   }
 
   window.dndAndroidBack = function dndAndroidBack() {

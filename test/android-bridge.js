@@ -51,6 +51,19 @@ function createPage(options = {}) {
   const pending = new Map();
   const links = [];
   const storage = new Map(Object.entries(options.storage || {}));
+  const button = {
+    hidden: true,
+    handlers: {},
+    addEventListener(type, handler) { this.handlers[type] = handler; }
+  };
+  const input = {
+    value: '',
+    focused: false,
+    events: 0,
+    focus() { this.focused = true; },
+    dispatchEvent() { this.events += 1; }
+  };
+  const status = { textContent: '' };
   const window = {
     innerWidth: options.innerWidth || 412,
     innerHeight: options.innerHeight || 800,
@@ -68,6 +81,10 @@ function createPage(options = {}) {
         calls.push({ name: 'stopTunnel', id });
         pending.set(id, (json) => window.__androidResult(id, json));
       },
+      readClipboard(id) {
+        calls.push({ name: 'readClipboard', id });
+        pending.set(id, (json) => window.__androidResult(id, json));
+      },
       openExternal(url) {
         calls.push({ name: 'openExternal', url });
       }
@@ -82,7 +99,12 @@ function createPage(options = {}) {
     createElement(tag) {
       return { tagName: tag, rel: '', href: '', textContent: '' };
     },
-    getElementById() { return null; }
+    getElementById(id) {
+      if (id === 'btn-paste-ticket') return button;
+      if (id === 'join-p2p-ticket') return input;
+      if (id === 'join-status') return status;
+      return null;
+    }
   };
   const context = vm.createContext({
     window,
@@ -92,10 +114,14 @@ function createPage(options = {}) {
     JSON,
     String,
     Object,
-    Error
+    Error,
+    Event: class Event {
+      constructor(type) { this.type = type; }
+    },
+    setTimeout
   });
   vm.runInContext(source, context, { filename: bridgePath });
-  return { window, document, calls, pending, links, storage };
+  return { window, document, calls, pending, links, storage, button, input, status };
 }
 
 async function main() {
@@ -123,6 +149,32 @@ async function main() {
       storage: { 'dnd-table.rightHeight': '700' }
     });
     assert.strictEqual(stale.storage.has('dnd-table.rightHeight'), false);
+  });
+
+  await check('кнопка вставки берёт билет из буфера', async () => {
+    assert.strictEqual(page.button.hidden, false, 'кнопка вставки осталась скрытой');
+    const handler = page.button.handlers.click;
+    assert(handler, 'у кнопки нет обработчика');
+    handler();
+    for (const callback of page.pending.values()) {
+      callback('{"ok":true,"text":"  endpoint-abc  "}');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(page.input.value, 'endpoint-abc');
+    assert.strictEqual(page.input.events, 1, 'поле не узнало о вставке');
+    assert.strictEqual(page.input.focused, true, 'поле не получило фокус');
+  });
+
+  await check('пустой буфер объясняет, почему вставка не сработала', async () => {
+    page.input.value = '';
+    page.status.textContent = '';
+    page.button.handlers.click();
+    for (const callback of page.pending.values()) {
+      callback('{"ok":false,"error":"Буфер обмена пуст"}');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(page.input.value, '');
+    assert.match(page.status.textContent, /Буфер обмена пуст/);
   });
 
   await check('конфигурация и статус стола не требуют нативных вызовов', async () => {

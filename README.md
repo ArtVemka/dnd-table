@@ -63,7 +63,8 @@ QUIC-стримов iroh. iroh сам пробивает NAT — напряму�
 iroh-endpoint, который принимает подключения игроков. Игрок вставляет билет
 endpoint из панели «Приглашение игроков» на экране стола. У игрока поднимается
 локальный TCP-туннель, и socket.io направляется на `127.0.0.1:<локальный порт>`;
-дальше байты идут по QUIC до стола мастера.
+дальше байты идут по QUIC до стола мастера. Ключ iroh хранится в папке данных,
+поэтому после перезапуска мастера билет остаётся прежним.
 
 **Требования:** нужен доступ в интернет (iroh использует relay и discovery n0),
 плюс разрешение приложению на доступ к сети в брандмауэре Windows.
@@ -80,8 +81,9 @@ iroh. Мастер работает на компьютере, игрок вст
   на компьютере.
 * Лист персонажа можно заполнить до подключения и выбрать при входе.
 * Отдельное окно листа не открывается, лист правится во вкладке стола.
-* Свёрнутое приложение может усыпить туннель; после возврата подключение
-  поднимается заново.
+* Билет вставляется кнопкой из буфера обмена.
+* Пока игрок за столом, foreground service держит соединение в фоне и
+  показывает уведомление. Выход из-за стола останавливает службу.
 * Сборка: JDK 21, Android SDK 35, build-tools 35.0.0. `cd android` и
   `./gradlew assembleDebug`. APK появится в
   `android/app/build/outputs/apk/debug/`.
@@ -1027,6 +1029,7 @@ server/state.js         состояние стола + правила и нор
 server/campaign.js      файловое хранилище кампаний (JSON + папка изображений)
 server/socket.js        Express + Socket.IO: вся сетевая логика и проверка прав
 server/iroh-manager.js  P2P: endpoint, билеты, туннели игрока и мастера
+server/iroh-identity.js постоянный ключ iroh: билет не меняется после перезапуска
 renderer/index.html     экраны приложения
 renderer/styles/        оформление, восемь частей по порядку номеров
 renderer/dnd5e.js       правила D&D 5e 2014 и структура листа
@@ -1041,7 +1044,9 @@ renderer/app.js         контроллер: экраны, панели, IPC, �
 renderer/vendor/        socket.io-client (копируется из node_modules при установке)
 android/                клиент игрока: WebView + Kotlin-туннель iroh
 android/app/src/main/assets/android-bridge.js  window.desktop для WebView
+android/app/src/main/java/ru/dndstol/player/TunnelService.kt  служба фоновой сессии
 test/android-bridge.js  проверка моста Android без эмулятора
+test/iroh-identity.js  проверка сохранения ключа iroh
 scripts/copy-vendor.js  копирование клиента socket.io
 scripts/make-avatar.js  build/avatar-dm.svg -> renderer/avatar-dm.png
 test/integration.js     серверные тесты

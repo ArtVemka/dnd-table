@@ -1,9 +1,13 @@
 package ru.dndstol.player
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -71,19 +75,18 @@ class MainActivity : AppCompatActivity() {
             insets
         }
         webView.loadUrl("file:///android_asset/renderer/index.html")
-    }
 
-    override fun onResume() {
-        super.onResume()
-        webView.onResume()
-    }
-
-    override fun onPause() {
-        webView.onPause()
-        super.onPause()
+        // Уведомление нужно службе, которая держит соединение в фоне. Если
+        // игрок откажет, служба всё равно работает, просто без строки в шторке.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
     }
 
     override fun onDestroy() {
+        TunnelService.stop(this)
         tunnel.shutdown()
         webView.destroy()
         super.onDestroy()
@@ -117,11 +120,17 @@ class MainActivity : AppCompatActivity() {
     inner class Bridge {
         @JavascriptInterface
         fun joinP2p(id: String, ticket: String) {
+            // Службу поднимаем до туннеля, пока приложение точно на переднем
+            // плане: Android 12+ не разрешает стартовать её из фона.
+            runOnUiThread {
+                runCatching { TunnelService.start(this@MainActivity) }
+            }
             lifecycleScope.launch(Dispatchers.IO) {
                 val result = try {
                     val port = tunnel.start(ticket.trim())
                     JSONObject().put("ok", true).put("localPort", port)
                 } catch (t: Throwable) {
+                    runCatching { TunnelService.stop(this@MainActivity) }
                     JSONObject().put("ok", false).put("error", t.message ?: "Не удалось подключиться")
                 }
                 reply(id, result)
@@ -132,7 +141,30 @@ class MainActivity : AppCompatActivity() {
         fun stopTunnel(id: String) {
             lifecycleScope.launch(Dispatchers.IO) {
                 tunnel.shutdown()
+                runCatching { TunnelService.stop(this@MainActivity) }
                 reply(id, JSONObject().put("ok", true))
+            }
+        }
+
+        @JavascriptInterface
+        fun readClipboard(id: String) {
+            runOnUiThread {
+                val text = try {
+                    val manager = getSystemService(ClipboardManager::class.java)
+                    manager?.primaryClip
+                        ?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)
+                        ?.coerceToText(this@MainActivity)
+                        ?.toString()
+                } catch (_: Throwable) {
+                    null
+                }
+                val result = if (text.isNullOrBlank()) {
+                    JSONObject().put("ok", false).put("error", "Буфер обмена пуст")
+                } else {
+                    JSONObject().put("ok", true).put("text", text)
+                }
+                reply(id, result)
             }
         }
 

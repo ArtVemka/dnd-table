@@ -18,6 +18,7 @@
 
 const net = require('net');
 const path = require('path');
+const { loadOrCreateKey } = require('./iroh-identity');
 
 /**
  * Опубликованный @number0/iroh 1.1.0 содержит неверное поле `main`
@@ -48,6 +49,8 @@ const ALPN = Array.from(Buffer.from('dnd-table-p2p/1', 'utf8'));
 
 let endpoint = null;
 let stopped = true;
+/** Папка данных, в которой живёт постоянный ключ iroh. */
+let identityDir = null;
 /**
  * Бинд в процессе. Стол ДМ поднимает endpoint сам, а renderer тут же дёргает
  * iroh:start за билетом — без этой переменной оба вызова видели endpoint = null
@@ -73,6 +76,15 @@ function available() {
   return !!(iroh && iroh.Endpoint);
 }
 
+/**
+ * Указывает, где хранить ключ личности. Без этого каждый запуск создаёт новый
+ * endpoint и старые билеты перестают работать.
+ * @param {string} dir
+ */
+function setDataDir(dir) {
+  identityDir = dir || null;
+}
+
 function isRunning() {
   return !!(endpoint && !endpoint.isClosed());
 }
@@ -84,6 +96,14 @@ async function bindEndpoint() {
   binding = (async () => {
     const builder = iroh.Endpoint.builder();
     builder.applyN0(); // relay + discovery: прямой коннект, при неудаче — через relay
+    if (identityDir) {
+      try {
+        builder.secretKey(loadOrCreateKey(identityDir, iroh.SecretKey));
+      } catch (error) {
+        // Играть можно и со случайным ключом, просто билет сменится.
+        console.warn('[iroh] постоянный ключ недоступен:', error.message);
+      }
+    }
     builder.alpns([ALPN]);
     endpoint = await builder.bind();
     stopped = false;
@@ -319,6 +339,7 @@ async function connect(ticketStr) {
 
 module.exports = {
   available,
+  setDataDir,
   start,
   stop,
   createTicket,

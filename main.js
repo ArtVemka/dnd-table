@@ -26,6 +26,7 @@ function getIrohManager() {
       console.warn('[iroh] не удалось загрузить:', error.message);
       // Stub methods for graceful degradation when iroh is unavailable
       irohMgr = {
+        setDataDir: () => {},
         start: async () => ({ ok: false, error: 'P2P недоступен' }),
         stop: async () => ({ ok: true }),
         createTicket: () => ({ ok: false, error: 'P2P недоступен' }),
@@ -45,6 +46,15 @@ function getIrohManager() {
         },
         stopTunnelClient: async () => ({ ok: true })
       };
+    }
+  }
+  // Ключ личности живёт в папке данных: тогда после перезапуска мастера
+  // endpoint и билет остаются прежними.
+  if (typeof irohMgr.setDataDir === 'function') {
+    try {
+      irohMgr.setDataDir(resolveDataDir().dir);
+    } catch (error) {
+      console.warn('[iroh] не удалось выбрать папку для ключа:', error.message);
     }
   }
   return irohMgr;

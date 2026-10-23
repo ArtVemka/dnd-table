@@ -19,6 +19,13 @@ html.is-android #btn-open-datadir {
   display: none !important;
 }
 
+/* На телефоне вставлять длинный билет вручную неудобно. */
+html.is-android #btn-paste-ticket {
+  display: inline-flex;
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
 @media (max-width: 900px) {
   html.is-android body {
     overflow: hidden;

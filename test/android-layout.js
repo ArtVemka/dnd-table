@@ -81,8 +81,12 @@ app.whenReady().then(async () => {
 
       var leftClosed = rect('.col--left');
       var leftButton = document.getElementById('btn-panel-left');
-      if (leftButton) leftButton.click();
-      await wait(120);
+      // На чистом профиле панель уже свёрнута, но тренировочный стол может
+      // открыть её сам. Тогда не щёлкаем: проверяем именно оверлей.
+      if (leftClosed && leftClosed.display === 'none' && leftButton) {
+        leftButton.click();
+        await wait(120);
+      }
       var leftOpen = rect('.col--left');
 
       var tabs = document.querySelector('.tabs');
@@ -124,7 +128,6 @@ app.whenReady().then(async () => {
       && result.mobileCss
       && result.tableActive
       && result.scrollWidth <= result.width + 1
-      && result.left && result.left.display === 'none'
       && result.panelLeft && result.panelLeft.display !== 'none'
       && result.leftOpen && result.leftOpen.display === 'flex'
       && result.leftOpen.position === 'absolute'

@@ -24,6 +24,12 @@
         // шире экрана и правый край чата обрезан.
         global.localStorage.setItem('dnd-table.rightPanelPos', 'bottom');
         global.localStorage.setItem('dnd-table.leftPanelCollapsed', '1');
+        // Высоту панели могли выставить на планшете. На маленьком экране
+        // она вытолкнет поле чата вниз, поэтому слишком большую забываем.
+        var storedHeight = Number(global.localStorage.getItem('dnd-table.rightHeight'));
+        if (storedHeight && global.innerHeight && storedHeight > global.innerHeight * 0.7) {
+          global.localStorage.removeItem('dnd-table.rightHeight');
+        }
       }
     } catch (error) {
       // Приватный режим: настройки просто не сохранятся.

@@ -46,13 +46,14 @@ function createClassList() {
   };
 }
 
-function createPage() {
+function createPage(options = {}) {
   const calls = [];
   const pending = new Map();
   const links = [];
-  const storage = new Map();
+  const storage = new Map(Object.entries(options.storage || {}));
   const window = {
-    innerWidth: 412,
+    innerWidth: options.innerWidth || 412,
+    innerHeight: options.innerHeight || 800,
     localStorage: {
       getItem(key) { return storage.has(key) ? storage.get(key) : null; },
       setItem(key, value) { storage.set(key, String(value)); },
@@ -113,6 +114,15 @@ async function main() {
   await check('на телефоне панель вкладок уходит под карту', () => {
     assert.strictEqual(page.storage.get('dnd-table.rightPanelPos'), 'bottom');
     assert.strictEqual(page.storage.get('dnd-table.leftPanelCollapsed'), '1');
+  });
+
+  await check('слишком высокая панель с планшета не выталкивает чат', () => {
+    const stale = createPage({
+      innerWidth: 412,
+      innerHeight: 800,
+      storage: { 'dnd-table.rightHeight': '700' }
+    });
+    assert.strictEqual(stale.storage.has('dnd-table.rightHeight'), false);
   });
 
   await check('конфигурация и статус стола не требуют нативных вызовов', async () => {

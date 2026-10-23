@@ -5,6 +5,34 @@
   var nextId = 1;
 
   /**
+   * Мобильный слой грузится до app.js: иначе первый кадр рисуется настольной
+   * сеткой, а потом прыгает в узкую.
+   */
+  function setupMobileShell() {
+    try {
+      document.documentElement.classList.add('is-android');
+      var link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = '../android-mobile.css';
+      document.head.appendChild(link);
+    } catch (error) {
+      // Без мобильных стилей приложение всё равно откроется.
+    }
+    try {
+      if (global.innerWidth && global.innerWidth < 900) {
+        // На телефоне вкладки живут под картой, а не справа: иначе колонка
+        // шире экрана и правый край чата обрезан.
+        global.localStorage.setItem('dnd-table.rightPanelPos', 'bottom');
+        global.localStorage.setItem('dnd-table.leftPanelCollapsed', '1');
+      }
+    } catch (error) {
+      // Приватный режим: настройки просто не сохранятся.
+    }
+  }
+
+  setupMobileShell();
+
+  /**
    * Ответ из Kotlin. Мост зовёт эту функцию, когда туннель поднят или упал.
    * @param {string} id
    * @param {string} json
@@ -129,12 +157,6 @@
   // На телефоне мастерских экранов нет: остаются вход за игрока, лист и настройки.
   function applyMobileLayout() {
     document.body.classList.add('is-android');
-    var style = document.createElement('style');
-    style.textContent =
-      '.is-android .home__group:first-child,' +
-      '.is-android #home-datadir,' +
-      '.is-android #btn-open-datadir{display:none!important}';
-    document.head.appendChild(style);
   }
 
   window.dndAndroidBack = function dndAndroidBack() {

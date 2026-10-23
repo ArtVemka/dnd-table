@@ -1,0 +1,183 @@
+/*
+ * Мобильная раскладка клиента игрока.
+ *
+ * Настольная сетка рассчитана на широкое окно: слева участники, справа чат.
+ * На телефоне она не помещается, правый край уезжает за экран, а кнопки чата
+ * обрезаются. Здесь стол складывается в один столбец: карта сверху, панель
+ * вкладок снизу, левая колонка скрыта. Файл грузится только Android-мостом,
+ * поэтому настольная версия его не видит.
+ */
+
+html.is-android {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html.is-android .home__group:first-child,
+html.is-android #home-datadir,
+html.is-android #btn-open-datadir {
+  display: none !important;
+}
+
+@media (max-width: 900px) {
+  html.is-android body {
+    overflow: hidden;
+  }
+
+  html.is-android .screen--table.is-active {
+    overflow: hidden;
+  }
+
+  html.is-android .topbar {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 6px 8px;
+    padding: 8px 10px;
+  }
+
+  html.is-android .topbar__left,
+  html.is-android .topbar__right {
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  html.is-android .topbar__left {
+    flex: 1 1 100%;
+  }
+
+  html.is-android .topbar__right {
+    flex: 1 1 100%;
+  }
+
+  html.is-android .topbar__titles {
+    flex: 1 1 120px;
+    min-width: 0;
+  }
+
+  html.is-android .topbar__title {
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  html.is-android .topbar__sub {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  html.is-android #btn-save-campaign,
+  html.is-android #btn-stop-host {
+    display: none !important;
+  }
+
+  html.is-android .layout {
+    --right-row: var(--right-user-height, minmax(200px, 52vh));
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 6px var(--right-row);
+    grid-template-areas: "center" "gap" "right";
+    gap: 6px;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  html.is-android .layout.is-right-collapsed {
+    --right-row: 54px;
+  }
+
+  html.is-android .col--left {
+    display: none !important;
+  }
+
+  /* Участники не влезают третьей колонкой. Кнопка в шапке открывает их
+     поверх стола, не отнимая ширину у карты и чата. */
+  html.is-android .layout:not(.is-left-collapsed) .col--left {
+    display: flex !important;
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: min(340px, 86vw);
+    z-index: 30;
+    padding: 10px;
+    background: var(--bg);
+    box-shadow: 12px 0 24px var(--panel-shadow);
+    overflow: auto;
+  }
+
+  html.is-android .col--center,
+  html.is-android .col--right {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  html.is-android .col--right {
+    overflow: hidden;
+  }
+
+  /* Вкладок шесть, на телефон они не влезают. Пусть ряд прокручивается
+     пальцем, а не обрезается справа. */
+  html.is-android .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    container-type: normal;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  html.is-android .tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  html.is-android .tabs__btn {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 8px 10px;
+  }
+
+  html.is-android .chat__form {
+    gap: 4px;
+  }
+
+  html.is-android .chat__form .input {
+    min-width: 0;
+  }
+
+  html.is-android .chat__form .btn {
+    flex: none;
+    padding: 8px 10px;
+  }
+
+  html.is-android .chat__search-input {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  html.is-android #table-sub {
+    display: none;
+  }
+
+  html.is-android .topbar .btn {
+    font-size: 12px;
+    padding: 7px 8px;
+  }
+
+  html.is-android .topbar__title {
+    font-size: 14px;
+  }
+
+  html.is-android .panel {
+    padding: 9px;
+  }
+
+  html.is-android .tabs__btn {
+    padding: 8px 9px;
+    font-size: 12px;
+  }
+}

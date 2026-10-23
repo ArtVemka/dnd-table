@@ -33,11 +33,31 @@ const bridgePath = path.join(
 );
 const source = fs.readFileSync(bridgePath, 'utf8');
 
+function createClassList() {
+  const values = [];
+  return {
+    values,
+    add(value) {
+      if (!values.includes(value)) values.push(value);
+    },
+    contains(value) {
+      return values.includes(value);
+    }
+  };
+}
+
 function createPage() {
   const calls = [];
   const pending = new Map();
-  const styles = [];
+  const links = [];
+  const storage = new Map();
   const window = {
+    innerWidth: 412,
+    localStorage: {
+      getItem(key) { return storage.has(key) ? storage.get(key) : null; },
+      setItem(key, value) { storage.set(key, String(value)); },
+      removeItem(key) { storage.delete(key); }
+    },
     Android: {
       joinP2p(id, ticket) {
         calls.push({ name: 'joinP2p', id, ticket });
@@ -54,10 +74,13 @@ function createPage() {
   };
   const document = {
     readyState: 'complete',
-    body: { classList: { added: false, add() { this.added = true; } } },
-    head: { appendChild(node) { styles.push(node); } },
+    documentElement: { classList: createClassList() },
+    body: { classList: createClassList() },
+    head: { appendChild(node) { links.push(node); } },
     addEventListener() {},
-    createElement() { return { textContent: '' }; },
+    createElement(tag) {
+      return { tagName: tag, rel: '', href: '', textContent: '' };
+    },
     getElementById() { return null; }
   };
   const context = vm.createContext({
@@ -71,17 +94,25 @@ function createPage() {
     Error
   });
   vm.runInContext(source, context, { filename: bridgePath });
-  return { window, document, calls, pending, styles };
+  return { window, document, calls, pending, links, storage };
 }
 
 async function main() {
   const page = createPage();
 
-  await check('мост объявляет Android и прячет мастерские экраны', () => {
+  await check('мост объявляет Android и грузит мобильные стили', () => {
     assert.strictEqual(page.window.desktop.isAndroid, true);
     assert.strictEqual(page.window.desktop.isElectron, false);
-    assert.strictEqual(page.document.body.classList.added, true);
-    assert.ok(page.styles.length, 'не добавлено правило для мобильной раскладки');
+    assert(page.document.documentElement.classList.contains('is-android'));
+    assert(page.document.body.classList.contains('is-android'));
+    const css = page.links.find((node) => node.rel === 'stylesheet');
+    assert(css, 'не подключены мобильные стили');
+    assert.strictEqual(css.href, '../android-mobile.css');
+  });
+
+  await check('на телефоне панель вкладок уходит под карту', () => {
+    assert.strictEqual(page.storage.get('dnd-table.rightPanelPos'), 'bottom');
+    assert.strictEqual(page.storage.get('dnd-table.leftPanelCollapsed'), '1');
   });
 
   await check('конфигурация и статус стола не требуют нативных вызовов', async () => {

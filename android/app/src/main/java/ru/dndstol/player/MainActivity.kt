@@ -44,6 +44,10 @@ class MainActivity : AppCompatActivity() {
                 allowUniversalAccessFromFileURLs = true
                 mediaPlaybackRequiresUserGesture = false
                 cacheMode = WebSettings.LOAD_DEFAULT
+                // Без этого WebView игнорирует meta viewport и раскладывает
+                // страницу шире экрана: правый край чата уезжает за границу.
+                useWideViewPort = true
+                loadWithOverviewMode = false
             }
             addJavascriptInterface(Bridge(), "Android")
             webViewClient = object : WebViewClient() {

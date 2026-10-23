@@ -4,6 +4,58 @@
   var pending = Object.create(null);
   var nextId = 1;
 
+  var lastDeviceMode = '';
+
+  /**
+   * Телефон, планшет в портрете или планшет в альбоме.
+   * Планшетом считаем экран от 761 px по ширине и 600 px по высоте:
+   * телефон в альбомной ориентации сюда не попадает.
+   * @returns {'phone'|'tablet-portrait'|'tablet-landscape'}
+   */
+  function deviceMode() {
+    var width = Number(global.innerWidth) || 0;
+    var height = Number(global.innerHeight) || 0;
+    if (width >= 761 && height >= 600) {
+      return width > height ? 'tablet-landscape' : 'tablet-portrait';
+    }
+    return 'phone';
+  }
+
+  /**
+   * Раскладка по формату экрана. На планшете в альбоме панель вкладок
+   * уходит вправо, чтобы карта получила всю высоту. В портрете и на
+   * телефоне она остаётся снизу. Выбор панели запоминается в localStorage,
+   * чтобы app.js применил его при построении стола.
+   */
+  function syncDeviceLayout(force) {
+    var mode = deviceMode();
+    if (!force && mode === lastDeviceMode) return;
+    lastDeviceMode = mode;
+    var bottom = mode !== 'tablet-landscape';
+    try {
+      global.localStorage.setItem('dnd-table.rightPanelPos', bottom ? 'bottom' : 'right');
+      global.localStorage.setItem('dnd-table.leftPanelCollapsed', '1');
+      // Высоту панели могли выставить на другом экране. Слишком большая
+      // вытолкнет чат вниз, поэтому на телефоне и в портрете забываем её.
+      var storedHeight = Number(global.localStorage.getItem('dnd-table.rightHeight'));
+      var limit = mode === 'phone' ? 0.7 : (bottom ? 0.45 : 0.7);
+      if (storedHeight && global.innerHeight && storedHeight > global.innerHeight * limit) {
+        global.localStorage.removeItem('dnd-table.rightHeight');
+      }
+    } catch (error) {
+      // Приватный режим: настройки просто не сохранятся.
+    }
+    // app.js выставит классы сам, но при повороте он этого не делает.
+    // Поэтому сразу поправляем уже построенный стол, если он есть.
+    if (typeof document.querySelector === 'function') {
+      var layout = document.querySelector('.layout');
+      if (layout) {
+        layout.classList.toggle('is-right-bottom', bottom);
+        layout.classList.add('is-left-collapsed');
+      }
+    }
+  }
+
   /**
    * Мобильный слой грузится до app.js: иначе первый кадр рисуется настольной
    * сеткой, а потом прыгает в узкую.
@@ -18,25 +70,23 @@
     } catch (error) {
       // Без мобильных стилей приложение всё равно откроется.
     }
-    try {
-      if (global.innerWidth && global.innerWidth < 900) {
-        // На телефоне вкладки живут под картой, а не справа: иначе колонка
-        // шире экрана и правый край чата обрезан.
-        global.localStorage.setItem('dnd-table.rightPanelPos', 'bottom');
-        global.localStorage.setItem('dnd-table.leftPanelCollapsed', '1');
-        // Высоту панели могли выставить на планшете. На маленьком экране
-        // она вытолкнет поле чата вниз, поэтому слишком большую забываем.
-        var storedHeight = Number(global.localStorage.getItem('dnd-table.rightHeight'));
-        if (storedHeight && global.innerHeight && storedHeight > global.innerHeight * 0.7) {
-          global.localStorage.removeItem('dnd-table.rightHeight');
-        }
-      }
-    } catch (error) {
-      // Приватный режим: настройки просто не сохранятся.
-    }
+    syncDeviceLayout(true);
   }
 
   setupMobileShell();
+
+  var resizeTimer = 0;
+  if (typeof global.addEventListener === 'function') {
+    global.addEventListener('resize', function onAndroidResize() {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function afterAndroidResize() {
+        syncDeviceLayout(false);
+      }, 150);
+    });
+    global.addEventListener('orientationchange', function onAndroidOrientation() {
+      syncDeviceLayout(false);
+    });
+  }
 
   /**
    * Ответ из Kotlin. Мост зовёт эту функцию, когда туннель поднят или упал.

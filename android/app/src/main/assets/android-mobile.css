@@ -11,6 +11,21 @@
 html.is-android {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.is-android body {
+  overscroll-behavior: none;
+}
+
+/* Карта должна слушать палец, а не отдавать движение браузеру. */
+html.is-android .map-stage,
+html.is-android .map-surface {
+  touch-action: none;
+}
+
+html.is-android .map-surface {
+  will-change: transform;
 }
 
 html.is-android .home__group:first-child,
@@ -27,7 +42,7 @@ html.is-android #btn-scan-ticket {
   margin-top: 6px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1366px) {
   html.is-android body {
     overflow: hidden;
   }
@@ -163,6 +178,50 @@ html.is-android #btn-scan-ticket {
 
   html.is-android .chat__search-input {
     min-width: 0;
+  }
+
+}
+
+/*
+ * Планшет. В портрете остаётся одна колонка, но карте отдаём больше высоты,
+ * чем на телефоне. В альбоме панель вкладок уходит вправо: карта получает
+ * всю высоту, а чат и листы остаются под рукой.
+ */
+@media (min-width: 761px) and (min-height: 600px) {
+  html.is-android .layout {
+    --right-row: min(var(--right-user-height, 42vh), 46vh);
+    padding: 10px;
+    gap: 8px;
+  }
+
+  html.is-android .layout.is-right-collapsed {
+    --right-row: 54px;
+  }
+
+  html.is-android .layout:not(.is-left-collapsed) .col--left {
+    width: min(380px, 42vw);
+  }
+
+  html.is-android .tabs__btn {
+    min-height: 36px;
+  }
+}
+
+@media (min-width: 761px) and (min-height: 600px) and (orientation: landscape) {
+  html.is-android .layout,
+  html.is-android .layout.is-right-bottom {
+    --right-col: min(420px, max(300px, var(--right-user-width, 340px)));
+    grid-template-columns: minmax(0, 1fr) 6px var(--right-col);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "center gap right";
+  }
+
+  html.is-android .layout.is-right-collapsed {
+    --right-col: 54px;
+  }
+
+  html.is-android .col--right {
+    max-height: none;
   }
 }
 

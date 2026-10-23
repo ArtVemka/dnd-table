@@ -3453,7 +3453,15 @@
       assert(document.querySelector('#btn-save-campaign').hidden, 'у игрока видна кнопка сохранения кампании');
       assert(document.querySelector('#btn-stop-host').hidden, 'у игрока видна кнопка остановки стола');
       assert(document.querySelector('#addresses-panel').hidden, 'у игрока видны адреса для подключения');
+      assert(document.querySelector('#journal-panel').hidden, 'у игрока виден журнал мастера');
       assert(document.querySelectorAll('#players-root .player-row').length === 1, 'в тренировке игрок должен быть один');
+    });
+    check('в тренировке нет склада мастера, проверок и отмены', () => {
+      assert(document.querySelector('#btn-inventory-add').hidden, 'видна кнопка добавления предмета');
+      assert(document.querySelector('#roll-requests-panel').hidden, 'виден раздел проверок без ведущего');
+      assert(document.querySelector('#btn-undo').hidden, 'видна кнопка отмены без ведущего');
+      const inventory = document.querySelector('#inventory-panel');
+      assert(inventory.hidden, 'пустой склад занимает левую панель в тренировке');
     });
 
     document.querySelector('.tabs__btn[data-tab="sheet"]').click();
@@ -3958,7 +3966,154 @@
       assert(!document.querySelector('#btn-save-campaign').hidden, 'нет кнопки сохранения кампании');
       assert(!document.querySelector('#btn-stop-host').hidden, 'нет кнопки остановки стола');
       assert(!document.querySelector('#addresses-panel').hidden, 'нет панели приглашения');
+      assert(!document.querySelector('#journal-panel').hidden, 'нет панели журнала');
     });
+    check('журнал мастера пуст и готов к записи', () => {
+      assert(document.querySelector('#btn-journal-add'), 'нет кнопки добавления записи');
+      assert(document.querySelector('#journal-search'), 'нет поиска по журналу');
+      const list = document.querySelector('#journal-list');
+      assert(list, 'нет списка записей журнала');
+      assert(list.textContent.includes('Записей пока нет'), `неожиданное содержимое: ${list.textContent}`);
+    });
+
+    /* ------------------------------------ склад, проверки, отмена, поиск */
+
+    check('склад партии виден мастеру и готов к записи', () => {
+      assert(!document.querySelector('#inventory-panel').hidden, 'нет панели склада');
+      const add = document.querySelector('#btn-inventory-add');
+      assert(add && !add.hidden, 'нет кнопки добавления предмета');
+      assert(document.querySelector('#inventory-list'), 'нет списка склада');
+      assert(document.querySelector('#inventory-list').textContent.includes('Склад пуст'),
+        document.querySelector('#inventory-list').textContent);
+    });
+
+    // Предмет и запись журнала заводятся через интерфейс: они же понадобятся
+    // общему поиску, поэтому проверяем не только форму, но и результат.
+    document.querySelector('#btn-inventory-add').click();
+    const itemNameField = await waitFor(() => document.querySelector('#inventory-name-input'), 'форма предмета');
+    itemNameField.value = 'Верёвка';
+    document.querySelector('#inventory-panel .inventory-editor .btn--accent').click();
+    const inventoryRow = await waitFor(
+      () => [...document.querySelectorAll('#inventory-list .inventory-row')]
+        .find((row) => row.textContent.includes('Верёвка')),
+      'предмет в списке склада'
+    ).catch(() => null);
+    check('мастер добавляет предмет в общий склад', () => {
+      assert(inventoryRow, 'предмет не появился в списке');
+      assert(inventoryRow.textContent.includes('Общий склад'), `владелец: ${inventoryRow.textContent}`);
+      assert(document.querySelector('#inventory-panel .inventory-total'), 'нет общего веса склада');
+    });
+
+    document.querySelector('#btn-journal-add').click();
+    const journalTitleField = await waitFor(() => document.querySelector('#journal-title-input'), 'форма записи журнала');
+    journalTitleField.value = 'Старый мост';
+    document.querySelector('#journal-panel .journal-editor .btn--accent').click();
+    const journalRow = await waitFor(
+      () => [...document.querySelectorAll('#journal-list .journal-row')]
+        .find((row) => row.textContent.includes('Старый мост')),
+      'запись в журнале'
+    ).catch(() => null);
+    check('запись журнала создаётся из панели мастера', () => {
+      assert(journalRow, 'запись не появилась в списке');
+    });
+
+    check('у мастера есть раздел проверок и кнопка отмены', () => {
+      assert(!document.querySelector('#roll-requests-panel').hidden, 'нет раздела проверок');
+      const form = document.querySelector('#roll-request-form');
+      assert(form && !form.hidden, 'нет формы проверки');
+      assert(document.querySelector('#roll-request-label'), 'нет поля названия проверки');
+      assert(document.querySelector('#roll-request-dc'), 'нет поля сложности');
+      const undo = document.querySelector('#btn-undo');
+      assert(undo && !undo.hidden, 'нет кнопки отмены у мастера');
+    });
+
+    document.querySelector('#roll-request-label').value = 'Скрытность';
+    document.querySelector('#roll-request-dc').value = '15';
+    document.querySelector('#roll-request-form').dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true })
+    );
+    const banner = await waitFor(
+      () => {
+        const node = document.querySelector('#roll-request-banner');
+        return node && !node.hidden && node.textContent.includes('Скрытность') ? node : null;
+      },
+      'карточка проверки'
+    ).catch(() => null);
+    check('просьба мастера видна карточкой с кнопкой броска', () => {
+      assert(banner, 'карточка проверки не появилась');
+      assert(banner.textContent.includes('СЛ 15'), `сложность не попала: ${banner.textContent}`);
+      const roll = [...banner.querySelectorAll('button')].find((node) => node.textContent === 'Бросить');
+      assert(roll, 'в карточке нет кнопки «Бросить»');
+      const clear = [...document.querySelectorAll('#roll-requests-list button')]
+        .find((node) => node.textContent === 'Снять');
+      assert(clear, 'у мастера нет кнопки «Снять»');
+    });
+
+    // Поиск по кампании: и журнал, и склад должны находиться.
+    check('кнопка поиска есть в верхней панели', () => {
+      assert(document.querySelector('#btn-search'), 'нет кнопки поиска');
+    });
+    document.querySelector('#btn-search').click();
+    const searchField = await waitFor(
+      () => document.querySelector('#campaign-search-overlay input'),
+      'окно поиска'
+    );
+    searchField.value = 'Мост';
+    searchField.dispatchEvent(new Event('input', { bubbles: true }));
+    const journalHit = await waitFor(
+      () => [...document.querySelectorAll('#campaign-search-overlay .search-result')]
+        .find((row) => row.textContent.includes('Старый мост')),
+      'запись журнала в поиске'
+    ).catch(() => null);
+    check('общий поиск находит запись журнала', () => {
+      assert(journalHit, 'запись журнала не найдена');
+      assert(document.querySelector('#campaign-search-overlay').textContent.includes('Журнал'),
+        'нет группы журнала');
+    });
+
+    searchField.value = 'Верёвка';
+    searchField.dispatchEvent(new Event('input', { bubbles: true }));
+    const itemHit = await waitFor(
+      () => [...document.querySelectorAll('#campaign-search-overlay .search-result')]
+        .find((row) => row.textContent.includes('Верёвка')),
+      'предмет в поиске'
+    ).catch(() => null);
+    check('общий поиск находит предмет склада', () => {
+      assert(itemHit, 'предмет не найден');
+      assert(document.querySelector('#campaign-search-overlay').textContent.includes('Склад'),
+        'нет группы склада');
+    });
+
+    searchField.value = 'Мост';
+    searchField.dispatchEvent(new Event('input', { bubbles: true }));
+    searchField.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await wait(100);
+    check('выбор находки открывает запись журнала', () => {
+      assert(!document.querySelector('#campaign-search-overlay'), 'окно поиска не закрылось');
+      const field = document.querySelector('#journal-title-input');
+      assert(field && field.value === 'Старый мост', `открыта не та запись: ${field && field.value}`);
+      // Возвращаем панель журнала в список: редактор открыт, но черновик не нужен.
+      const cancel = [...document.querySelectorAll('#journal-panel .journal-editor button')]
+        .find((node) => node.textContent === 'Отмена');
+      if (cancel) cancel.click();
+    });
+
+    document.body.focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+    await waitFor(() => document.querySelector('#campaign-search-overlay'), 'поиск по Ctrl+K');
+    check('Ctrl+K открывает поиск', () => {
+      assert(document.querySelector('#campaign-search-overlay'), 'поиск не открылся');
+    });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    // Проверка проверок: снимаем просьбу, чтобы карточка не висела над вкладками.
+    const clearButton = [...document.querySelectorAll('#roll-requests-list button')]
+      .find((node) => node.textContent === 'Снять');
+    if (clearButton) clearButton.click();
+    await softWait(
+      () => document.querySelector('#roll-request-banner').hidden,
+      'карточка проверки убрана'
+    );
     check('панель приглашения не показывает ни одного сетевого адреса', () => {
       const panel = document.querySelector('#addresses-panel');
       assert(!/https?:\/\/(127\.0\.0\.1|10\.|192\.168\.)/.test(panel.textContent),
@@ -4344,6 +4499,26 @@
       assert(overlay.querySelector('.settings__textarea'), 'нет поля журнала');
       assert(overlay.textContent.includes('Журнал кампании'), 'нет раздела журнала');
       assert(byText(overlay, 'Экспорт сессии в Markdown'), 'нет кнопки выгрузки сессии');
+    });
+    check('в настройках есть доступность: масштаб, контраст и палитра', () => {
+      const overlay = settingsOverlay();
+      assert(overlay.textContent.includes('Доступность'), 'нет раздела доступности');
+      assert(overlay.textContent.includes('Полный английский интерфейс пока не готов'),
+        'нет оговорки про английский');
+      const scale = overlay.querySelector('[data-setting="a11y-scale"]');
+      assert(scale, 'нет выбора масштаба');
+      const values = [...scale.options].map((option) => option.value);
+      assert.deepStrictEqual(values, ['0.9', '1', '1.15', '1.3'], `ступени масштаба: ${values.join(', ')}`);
+      assert(overlay.querySelector('[data-setting="a11y-contrast"]'), 'нет высокого контраста');
+      assert(overlay.querySelector('[data-setting="a11y-colorblind"]'), 'нет палитры для дальтоников');
+    });
+    check('настройки доступности применяются сразу и запоминаются', () => {
+      const box = settingsOverlay().querySelector('[data-setting="a11y-contrast"]');
+      box.click();
+      assert(document.documentElement.dataset.a11yContrast === 'on', 'контраст не применился к html');
+      assert(window.localStorage.getItem('dnd-table.a11yContrast') === 'on', 'контраст не сохранён');
+      box.click();
+      assert(document.documentElement.dataset.a11yContrast === 'off', 'контраст не снялся');
     });
 
     document.querySelector('.modal-overlay [data-setting="grid"]').click();
@@ -5237,8 +5412,11 @@
     // tokenHidden, и как tokenCreated, и в списке могла бы появиться вторая
     // строка той же фишки.
     const rowsBeforeReveal = document.querySelectorAll('#tab-tokens .token-row').length;
-    const revealButton = [...document.querySelectorAll('#tab-tokens .token-row button')]
-      .find((node) => node.textContent === 'Скрыта');
+    const smokeRow = [...document.querySelectorAll('#tab-tokens .token-row')]
+      .find((node) => node.textContent.includes('Смоук-фишка'));
+    const revealButton = smokeRow
+      ? [...smokeRow.querySelectorAll('button')].find((node) => node.textContent === 'Скрыта')
+      : null;
     check('у скрытой фишки есть кнопка показа', () => {
       assert(revealButton, 'нет кнопки «Скрыта» у фишки');
     });
@@ -5267,8 +5445,11 @@
     // И обратно: спрятать показанную фишку. Игрок должен получить уведомление,
     // чтобы убрать её у себя с карты.
     playerInbox.hidden.length = 0;
-    const hideButton = [...document.querySelectorAll('#tab-tokens .token-row button')]
-      .find((node) => node.textContent === 'Видна');
+    const revealedRow = [...document.querySelectorAll('#tab-tokens .token-row')]
+      .find((node) => node.textContent.includes('Смоук-фишка'));
+    const hideButton = revealedRow
+      ? [...revealedRow.querySelectorAll('button')].find((node) => node.textContent === 'Видна')
+      : null;
     check('у показанной фишки есть кнопка скрытия', () => {
       assert(hideButton, 'нет кнопки «Видна» у фишки');
     });

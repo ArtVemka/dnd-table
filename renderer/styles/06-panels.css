@@ -1245,3 +1245,343 @@
   flex: 1;
   font-size: 12.5px;
 }
+
+/* ------------------------------------------------------------- Журнал */
+/* Записи мастера: слева в столе и в отдельном окне. Список и редактор
+   используют одни и те же классы, чтобы правка выглядела одинаково. */
+
+.journal-panel {
+  gap: 8px;
+}
+
+.journal-panel__bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.journal-panel__search {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+
+.journal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 34vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.journal-list--wide {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+}
+
+.journal-empty {
+  font-size: 12px;
+  padding: 4px 2px;
+}
+
+.journal-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.journal-row:hover {
+  border-color: var(--accent);
+}
+
+.journal-row__kind {
+  flex: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--gold);
+}
+
+.journal-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.journal-row__title {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.journal-row__tags {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.journal-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.journal-editor .input,
+.journal-editor .select {
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+
+.journal-editor__text {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.journal-editor__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.journal-editor__actions .btn--danger {
+  margin-left: auto;
+}
+
+/* Окно журнала: список занимает всю высоту, поиск стоит над ним. */
+.journal-window__body {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.journal-window__search {
+  flex: none;
+}
+
+/* ------------------------------------------------------- Общий склад */
+/* Список тот же, что у журнала, поэтому формы и строки переиспользуют его
+   классы: правка выглядит одинаково в обоих разделах. */
+
+.inventory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 34vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.inventory-total {
+  font-size: 11px;
+  padding: 0 2px;
+}
+
+.inventory-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+button.inventory-row {
+  cursor: pointer;
+}
+
+button.inventory-row:hover {
+  border-color: var(--accent);
+}
+
+.inventory-row.is-hit {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.inventory-row__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.inventory-row__name {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.inventory-row__qty {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.inventory-row__attunement {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--gold);
+}
+
+.inventory-row__meta {
+  font-size: 11px;
+}
+
+.inventory-row__notes {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.inventory-editor .settings__check {
+  font-size: 12.5px;
+}
+
+/* ------------------------------------------------- Проверки мастера */
+/* Мастер просит бросок, игроки видят карточку и бросают тем же путём, что
+   и из панели кубиков. */
+
+.roll-request-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.roll-request-form .input {
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+
+.roll-request-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.roll-request-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.roll-request-row__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.roll-request-row__formula {
+  font-size: 11px;
+}
+
+.roll-request-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.roll-request-banner__title {
+  font-family: var(--font-title);
+  font-size: 15px;
+  color: var(--accent-hover);
+}
+
+.roll-request-banner__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.roll-request-banner__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* Свёрнутая панель оставляет только иконки вкладок: карточке там не место. */
+.layout.is-right-collapsed .roll-request-banner {
+  display: none;
+}
+
+/* ------------------------------------------------- Поиск по кампании */
+
+.modal--search {
+  max-width: 560px;
+  max-height: 80vh;
+}
+
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 60px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.search-group__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--gold);
+  padding-top: 4px;
+}
+
+.search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-result:hover,
+.search-result:focus-visible {
+  border-color: var(--accent);
+}
+
+.search-result__title {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.search-result__note {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}

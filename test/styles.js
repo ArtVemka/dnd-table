@@ -280,7 +280,7 @@ check('темы всё ещё красят опасное и успех по-р�
 check('каждая часть оформления подключена в разметке', () => {
   // Пропавшая часть не даёт ошибки в консоли окна и тихо оставляет кусок
   // интерфейса неоформленным, поэтому сверяем списком, а не «открылось ли окно».
-  for (const page of ['index.html', 'sheet-window.html']) {
+  for (const page of ['index.html', 'sheet-window.html', 'journal-window.html']) {
     const html = fs.readFileSync(path.join(repo, 'renderer', page), 'utf8');
     for (const file of order) {
       if (!html.includes(`styles/${file}`)) {

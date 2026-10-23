@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; font-src 'self' data:;"
+    />
+    <title>Журнал кампании</title>
+    <script src="theme.js"></script>
+    <link rel="stylesheet" href="fonts/fonts.css" />
+    <link rel="stylesheet" href="styles/01-tokens.css" />
+    <link rel="stylesheet" href="styles/02-screens.css" />
+    <link rel="stylesheet" href="styles/03-controls.css" />
+    <link rel="stylesheet" href="styles/04-layout.css" />
+    <link rel="stylesheet" href="styles/05-map.css" />
+    <link rel="stylesheet" href="styles/06-panels.css" />
+    <link rel="stylesheet" href="styles/07-sheet.css" />
+    <link rel="stylesheet" href="styles/08-theme-layer.css" />
+    <link rel="stylesheet" href="styles/09-theme-studio.css" />
+  </head>
+  <body class="sheet-window journal-window">
+    <div id="toasts" class="toasts"></div>
+
+    <header class="sheet-window__bar">
+      <div class="sheet-window__titles">
+        <div id="journal-title" class="sheet-window__title">Журнал кампании</div>
+        <div id="journal-sub" class="sheet-window__sub muted">подключаемся к столу…</div>
+      </div>
+      <div class="sheet-window__actions">
+        <span id="journal-conn" class="badge badge--muted">…</span>
+        <button id="btn-journal-new" class="btn btn--accent btn--tiny" type="button">Добавить</button>
+        <button id="btn-journal-refresh" class="btn btn--tiny" type="button">Обновить</button>
+      </div>
+    </header>
+
+    <main class="sheet-window__body journal-window__body">
+      <input id="journal-search" class="input journal-window__search" type="search"
+             placeholder="Поиск по заголовку, тегам и тексту" aria-label="Поиск по журналу" />
+      <div id="journal-list" class="journal-list journal-list--wide"></div>
+    </main>
+
+    <script src="vendor/socket.io.min.js"></script>
+    <script src="journal-window.js"></script>
+  </body>
+</html>

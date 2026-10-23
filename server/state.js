@@ -64,6 +64,15 @@ const LIMITS = {
   maxDmNote: 4000,
   /** Журнал кампании: длиннее одной сессии, но не бесконечный. */
   maxJournal: 20000,
+  maxJournalEntries: 300,
+  maxJournalTitle: 120,
+  maxJournalText: 8000,
+  maxJournalTags: 8,
+  maxJournalTag: 32,
+  maxInventoryItems: 500,
+  maxInventoryName: 120,
+  maxInventoryNotes: 1000,
+  maxRollRequests: 20,
   /** Строк атак в листе: больше двадцати за бой всё равно не пригодится. */
   maxSheetAttacks: 20,
   maxLevel: 20,
@@ -689,6 +698,14 @@ class RoomState {
     this.chatHistory = [];
     /** Заметки мастера по кампании, не путать с импортированным журналом. */
     this.journal = '';
+    /** @type {object[]} структурированный журнал: NPC, места, квесты, фракции, предметы. */
+    this.journalEntries = [];
+    /** @type {object[]} общий склад партии. */
+    this.inventory = [];
+    /** @type {object[]} просьбы мастера бросить проверку. */
+    this.rollRequests = [];
+    /** @type {string[]} снимки карты, фишек и боя для отмены действий мастера. */
+    this.undoStack = [];
     /**
      * Импортированное внешнее приключение: журнал, предметы, таблицы, NPC.
      * null, пока приключение не импортировано (в том числе у кампаний
@@ -781,6 +798,9 @@ class RoomState {
     this.initiative = normalizeInitiative(data.initiative);
     this.combat = { enabled: Boolean(data.combat && data.combat.enabled) };
     this.adventure = normalizeAdventure(data.adventure);
+    this.journalEntries = normalizeJournalEntries(data.journalEntries);
+    this.inventory = normalizeInventory(data.inventory);
+    this.rollRequests = normalizeRollRequests(data.rollRequests);
   }
 
   /* ----------------------------------------------------------- инициатива */
@@ -1262,6 +1282,9 @@ fogMask: normalizeFog(source.fogMask),
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory),
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory),
       journal: this.journal,
+      journalEntries: this.journalEntries,
+      inventory: this.inventory,
+      rollRequests: this.rollRequests,
       adventure: this.adventure,
       savedAt: new Date().toISOString()
     };
@@ -1530,8 +1553,98 @@ fogMask: normalizeFog(source.fogMask),
         .filter((message) => isDm || !message.whisper || message.playerId === viewer.playerId),
       // Журнал кампании — заготовки мастера. Игроку он не нужен и не должен
       // утекать в снимок состояния.
-      journal: isDm ? this.journal : ''
+      journal: isDm ? this.journal : '',
+      journalEntries: isDm ? this.journalEntries : [],
+      inventory: this.inventory,
+      rollRequests: this.rollRequests
     };
+  }
+
+  saveJournalEntry(input) {
+    const entry = normalizeJournalEntry(input);
+    if (!entry) return null;
+    const index = this.journalEntries.findIndex((item) => item.id === entry.id);
+    if (index >= 0) {
+      this.journalEntries[index] = entry;
+    } else {
+      this.journalEntries.push(entry);
+      if (this.journalEntries.length > LIMITS.maxJournalEntries) this.journalEntries.shift();
+    }
+    this.markDirty();
+    return entry;
+  }
+
+  deleteJournalEntry(id) {
+    const next = this.journalEntries.filter((item) => item.id !== id);
+    if (next.length === this.journalEntries.length) return false;
+    this.journalEntries = next;
+    this.markDirty();
+    return true;
+  }
+
+  saveInventoryItem(input) {
+    const item = normalizeInventoryItem(input);
+    if (!item) return null;
+    const index = this.inventory.findIndex((entry) => entry.id === item.id);
+    if (index >= 0) {
+      this.inventory[index] = item;
+    } else {
+      this.inventory.push(item);
+      if (this.inventory.length > LIMITS.maxInventoryItems) this.inventory.shift();
+    }
+    this.markDirty();
+    return item;
+  }
+
+  deleteInventoryItem(id) {
+    const next = this.inventory.filter((item) => item.id !== id);
+    if (next.length === this.inventory.length) return false;
+    this.inventory = next;
+    this.markDirty();
+    return true;
+  }
+
+  addRollRequest(input) {
+    const request = normalizeRollRequest(input);
+    if (!request) return null;
+    this.rollRequests.push(request);
+    if (this.rollRequests.length > LIMITS.maxRollRequests) this.rollRequests.shift();
+    this.markDirty();
+    return request;
+  }
+
+  clearRollRequest(id) {
+    const next = this.rollRequests.filter((item) => item.id !== id);
+    if (next.length === this.rollRequests.length) return false;
+    this.rollRequests = next;
+    this.markDirty();
+    return true;
+  }
+
+  pushUndo() {
+    this.undoStack.push(JSON.stringify({
+      maps: this.maps,
+      tokens: this.tokens,
+      initiative: this.initiative,
+      // Какая карта показана, живёт отдельно от вкладок: без этих двух полей
+      // отмена показа карты вернула бы заготовку, но оставила её на столе.
+      activeMap: this.activeMap,
+      activeMapId: this.activeMapId
+    }));
+    if (this.undoStack.length > 20) this.undoStack.shift();
+  }
+
+  undoLast() {
+    const snapshot = this.undoStack.pop();
+    if (!snapshot) return false;
+    const data = JSON.parse(snapshot);
+    this.maps = data.maps;
+    this.tokens = data.tokens;
+    this.initiative = data.initiative;
+    if ('activeMap' in data) this.activeMap = data.activeMap;
+    if ('activeMapId' in data) this.activeMapId = data.activeMapId;
+    this.markDirty();
+    return true;
   }
 
   markDirty() {
@@ -1545,6 +1658,119 @@ function newTokenId() {
 
 function newMapId() {
   return `m-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+const JOURNAL_KINDS = ['npc', 'location', 'quest', 'faction', 'item'];
+
+function newJournalId() {
+  return `j-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+function newInventoryId() {
+  return `i-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+function newRollRequestId() {
+  return `r-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+function normalizeJournalTags(value) {
+  const tags = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(value) ? value : []) {
+    const tag = sanitizeText(raw, LIMITS.maxJournalTag).trim();
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+    if (tags.length >= LIMITS.maxJournalTags) break;
+  }
+  return tags;
+}
+
+function normalizeJournalEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const title = sanitizeText(entry.title, LIMITS.maxJournalTitle).trim();
+  if (!title) return null;
+  const id = typeof entry.id === 'string' && /^j-[0-9a-f]{12}$/.test(entry.id)
+    ? entry.id
+    : newJournalId();
+  return {
+    id,
+    kind: JOURNAL_KINDS.includes(entry.kind) ? entry.kind : 'npc',
+    title,
+    text: sanitizeText(entry.text, LIMITS.maxJournalText),
+    tags: normalizeJournalTags(entry.tags),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function normalizeJournalEntries(list) {
+  const entries = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    const entry = normalizeJournalEntry(item);
+    if (entry) entries.push(entry);
+    if (entries.length >= LIMITS.maxJournalEntries) break;
+  }
+  return entries;
+}
+
+function normalizeInventoryItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const name = sanitizeText(item.name, LIMITS.maxInventoryName).trim();
+  if (!name) return null;
+  const id = typeof item.id === 'string' && /^i-[0-9a-f]{12}$/.test(item.id)
+    ? item.id
+    : newInventoryId();
+  const qty = Number.isFinite(Number(item.qty)) ? Math.round(Number(item.qty)) : 1;
+  const weight = Number.isFinite(Number(item.weight)) ? Number(item.weight) : 0;
+  return {
+    id,
+    name,
+    qty: Math.max(0, Math.min(9999, qty)),
+    weight: Math.round(Math.max(0, Math.min(99999, weight)) * 100) / 100,
+    ownerId: typeof item.ownerId === 'string' ? item.ownerId.slice(0, 64) : '',
+    attunement: Boolean(item.attunement),
+    notes: sanitizeText(item.notes, LIMITS.maxInventoryNotes)
+  };
+}
+
+function normalizeInventory(list) {
+  const items = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    const entry = normalizeInventoryItem(item);
+    if (entry) items.push(entry);
+    if (items.length >= LIMITS.maxInventoryItems) break;
+  }
+  return items;
+}
+
+function normalizeRollRequest(item) {
+  if (!item || typeof item !== 'object') return null;
+  const label = sanitizeText(item.label, 120).trim();
+  if (!label) return null;
+  const rawDc = item.dc === null || item.dc === undefined || item.dc === '' ? null : Number(item.dc);
+  const id = typeof item.id === 'string' && /^r-[0-9a-f]{12}$/.test(item.id)
+    ? item.id
+    : newRollRequestId();
+  return {
+    id,
+    label,
+    dc: rawDc === null || !Number.isFinite(rawDc) ? null : Math.max(1, Math.min(40, Math.round(rawDc))),
+    formula: sanitizeText(item.formula, 120).trim(),
+    createdAt: new Date().toISOString(),
+    by: sanitizeText(item.by, 40).trim()
+  };
+}
+
+function normalizeRollRequests(list) {
+  const requests = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    const request = normalizeRollRequest(item);
+    if (request) requests.push(request);
+    if (requests.length >= LIMITS.maxRollRequests) break;
+  }
+  return requests;
 }
 
 module.exports = {

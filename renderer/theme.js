@@ -15,6 +15,12 @@
   const FOCUS_KEY = 'dnd-table.focus';
   const MOTION_KEY = 'dnd-table.motion';
   const ACCENT_KEY = 'dnd-table.accents';
+  /** Доступность: масштаб, контраст и безопасная для дальтоников палитра. */
+  const SCALE_KEY = 'dnd-table.a11yScale';
+  const CONTRAST_KEY = 'dnd-table.a11yContrast';
+  const COLORBLIND_KEY = 'dnd-table.a11yColorblind';
+  /** Разрешённые масштабы: ступени выбраны так, чтобы интерфейс не разъезжался. */
+  const SCALES = [0.9, 1, 1.15, 1.3];
   const DEFAULT_THEME = 'standart';
   const DEFAULT_TONE = 'dark';
 
@@ -172,6 +178,20 @@
     return read(MOTION_KEY, 'on') !== 'off';
   }
 
+  /** Масштаб интерфейса: 0.9, 1, 1.15 или 1.3. */
+  function fontScale() {
+    const value = Number(read(SCALE_KEY, '1'));
+    return SCALES.includes(value) ? value : 1;
+  }
+
+  function contrastOn() {
+    return read(CONTRAST_KEY, 'off') === 'on';
+  }
+
+  function colorblindOn() {
+    return read(COLORBLIND_KEY, 'off') === 'on';
+  }
+
   /** @param {string} theme @returns {object[]} */
   function accentChoices(theme) {
     const source = THEMES.find((item) => item.id === theme) || THEMES[0];
@@ -226,6 +246,13 @@
     root.dataset.tone = currentTone();
     root.dataset.focus = focusOn() ? 'on' : 'off';
     root.dataset.motion = motionOn() ? 'on' : 'off';
+    // Масштаб — атрибутом, чтобы CSS не знал про localStorage: так же в окне
+    // журнала и листа, где этот файл общий.
+    const scale = fontScale();
+    if (scale === 1) delete root.dataset.a11yScale;
+    else root.dataset.a11yScale = String(scale);
+    root.dataset.a11yContrast = contrastOn() ? 'on' : 'off';
+    root.dataset.a11yColorblind = colorblindOn() ? 'on' : 'off';
     applyAccent(current());
   }
 
@@ -277,6 +304,28 @@
     notify();
   }
 
+  /** @param {number} scale */
+  function setFontScale(scale) {
+    const value = Number(scale);
+    write(SCALE_KEY, String(SCALES.includes(value) ? value : 1));
+    applyState();
+    notify();
+  }
+
+  /** @param {boolean} on */
+  function setContrast(on) {
+    write(CONTRAST_KEY, on ? 'on' : 'off');
+    applyState();
+    notify();
+  }
+
+  /** @param {boolean} on */
+  function setColorblind(on) {
+    write(COLORBLIND_KEY, on ? 'on' : 'off');
+    applyState();
+    notify();
+  }
+
   /**
    * @param {string} theme
    * @param {string} color пустая строка возвращает цвет темы
@@ -302,7 +351,8 @@
   // страницы. Событие storage приходит в чужие окна при изменении хранилища,
   // поэтому смена темы, тона и режима в главном окне сразу видна и в листе.
   try {
-    const watched = new Set([STORAGE_KEY, TONE_KEY, FOCUS_KEY, MOTION_KEY, ACCENT_KEY]);
+    const watched = new Set([STORAGE_KEY, TONE_KEY, FOCUS_KEY, MOTION_KEY, ACCENT_KEY,
+      SCALE_KEY, CONTRAST_KEY, COLORBLIND_KEY]);
     global.addEventListener('storage', (event) => {
       if (!watched.has(event.key)) return;
       applyState();
@@ -319,6 +369,10 @@
     FOCUS_KEY,
     MOTION_KEY,
     ACCENT_KEY,
+    SCALE_KEY,
+    CONTRAST_KEY,
+    COLORBLIND_KEY,
+    SCALES,
     DEFAULT_THEME,
     DEFAULT_TONE,
     THEMES,
@@ -326,12 +380,18 @@
     currentTone,
     focusOn,
     motionOn,
+    fontScale,
+    contrastOn,
+    colorblindOn,
     accentFor,
     accentChoices,
     apply,
     setTone,
     setFocus,
     setMotion,
+    setFontScale,
+    setContrast,
+    setColorblind,
     setAccent,
     clearAccent
   };

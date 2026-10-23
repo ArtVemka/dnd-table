@@ -67,7 +67,10 @@ grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetP
       combat: { enabled: false },
       diceHistory: [],
       chatHistory: [],
-      journal: ''
+      journal: '',
+      journalEntries: [],
+      inventory: [],
+      rollRequests: []
     },
     viewedSheetPlayerId: null,
     sheetShownFor: null,
@@ -102,6 +105,12 @@ grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetP
   let tokenPanel = null;
 let initiativePanel = null;
 let surfacePanel = null;
+/** Какая запись журнала открыта на правку: null, 'new' или id записи. */
+let journalEditingId = null;
+/** Поиск по журналу живёт в окне: серверу он не нужен. */
+let journalQuery = '';
+/** Какой предмет склада открыт на правку: null, 'new' или id предмета. */
+let inventoryEditingId = null;
 /**
  * Редактор листа на экране подготовки. Лист сохраняется в библиотеку сам, при
  * правке поля, поэтому сохранять его нужно помнить только между открытиями.
@@ -379,6 +388,31 @@ let chosenSheetId = null;
     return slots;
   }
 
+  /** Снимок стола в форму, с которой работает окно. */
+  function roomFromState(state) {
+    return {
+      players: state.players || [],
+      sheets: state.sheets || {},
+      maps: normalizeMapSlots(state.maps),
+      activeMap: state.activeMap || null,
+      activeMapId: state.activeMapId || null,
+      grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
+      tokens: state.tokens || [],
+      initiative: state.initiative || { entries: [], turnId: null, round: 1 },
+      // Режим боя приходит в снимке состояния. Без него при переподключении
+      // окно считало бой выключенным, хотя на столе он шёл: кнопка «Бой»
+      // показывала «выкл», нажатие слало «включить», сервер видел то же
+      // самое значение и молчал, и кнопка выглядела сломанной.
+      combat: state.combat || { enabled: false },
+      diceHistory: state.diceHistory || [],
+      chatHistory: state.chatHistory || [],
+      journal: state.journal || '',
+      journalEntries: state.journalEntries || [],
+      inventory: state.inventory || [],
+      rollRequests: state.rollRequests || []
+    };
+  }
+
   /**
    * Сервер отдаёт картинки относительным путём (/files/<имя>) — так он хранится
    * и в кампании. Окно открыто по file://, поэтому для показа путь нужно
@@ -643,24 +677,7 @@ let chosenSheetId = null;
       app.role = you.role;
       app.playerId = you.playerId;
       requestedSheets.clear();
-      app.room = {
-        players: state.players || [],
-        sheets: state.sheets || {},
-        maps: normalizeMapSlots(state.maps),
-        activeMap: state.activeMap || null,
-        activeMapId: state.activeMapId || null,
-        grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
-        tokens: state.tokens || [],
-        initiative: state.initiative || { entries: [], turnId: null, round: 1 },
-        // Режим боя приходит в снимке состояния. Без него при переподключении
-        // окно считало бой выключенным, хотя на столе он шёл: кнопка «Бой»
-        // показывала «выкл», нажатие слало «включить», сервер видел то же
-        // самое значение и молчал, и кнопка выглядела сломанной.
-        combat: state.combat || { enabled: false },
-        diceHistory: state.diceHistory || [],
-        chatHistory: state.chatHistory || [],
-        journal: state.journal || ''
-      };
+      app.room = roomFromState(state);
       app.campaign = state.campaign || app.campaign;
       // Приключение приходит только мастеру; игроку сервер шлёт null.
       app.adventure = state.adventure || null;
@@ -692,6 +709,34 @@ let chosenSheetId = null;
       }
       // Заготовку листа, заполненную без стола, можно перенести на стол.
       if (app.role === 'player') offerDraftSheet();
+    });
+
+    // Сервер сам присылает свежий снимок, когда состояние меняется целиком
+    // (например, после импорта приключения). Собираем его тем же помощником,
+    // что и при входе, иначе окно осталось бы со старыми данными.
+    socket.on('stateReload', (state) => {
+      app.room = roomFromState(state);
+      app.adventure = state.adventure || null;
+      renderAll();
+      updateConnBadge(true);
+    });
+
+    // Записи журнала приходят только мастеру. Окно журнала в отдельной вкладке
+    // шлёт сохранение и получает свежий список этим же событием.
+    socket.on('journalUpdated', (entries) => {
+      app.room.journalEntries = Array.isArray(entries) ? entries : [];
+      renderJournalPanel();
+    });
+
+    // Склад и просьбы о бросках приходят всем: игроки их только читают.
+    socket.on('inventoryUpdated', (items) => {
+      app.room.inventory = Array.isArray(items) ? items : [];
+      renderInventoryPanel();
+    });
+
+    socket.on('rollRequestUpdated', (requests) => {
+      app.room.rollRequests = Array.isArray(requests) ? requests : [];
+      renderRollRequests();
     });
 
     /* --- события стола --- */
@@ -2020,6 +2065,11 @@ let chosenSheetId = null;
     $('#btn-save-campaign').hidden = !isDm;
     $('#btn-stop-host').hidden = !isDm;
     $('#addresses-panel').hidden = !isDm;
+    $('#journal-panel').hidden = !isDm || app.training;
+    $('#btn-undo').hidden = !isDm;
+    renderJournalPanel();
+    renderInventoryPanel();
+    renderRollRequests();
     $('#role-badge').textContent = isDm ? 'ДМ' : 'Игрок';
     $('#role-badge').className = `badge ${isDm ? 'badge--dm' : 'badge--player'}`;
     if (isDm) renderAddresses();
@@ -2047,6 +2097,671 @@ let chosenSheetId = null;
     const training = Boolean(app.training) && online;
     badge.textContent = training ? 'без сети' : (online ? 'на связи' : 'нет связи');
     badge.className = `badge ${training ? 'badge--train' : (online ? 'badge--on' : 'badge--off')}`;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Журнал кампании
+   * ------------------------------------------------------------------ */
+
+  /** Подписи видов записей. Ключи совпадают с серверными. */
+  const JOURNAL_KINDS = [
+    ['npc', 'НПС'],
+    ['location', 'Место'],
+    ['quest', 'Задание'],
+    ['faction', 'Фракция'],
+    ['item', 'Предмет']
+  ];
+
+  function journalKindLabel(kind) {
+    const found = JOURNAL_KINDS.find(([key]) => key === kind);
+    return found ? found[1] : 'НПС';
+  }
+
+  function journalEntries() {
+    return app.room && Array.isArray(app.room.journalEntries) ? app.room.journalEntries : [];
+  }
+
+  /** Найденная запись или null: список мог обновиться из другого окна. */
+  function journalEntry(id) {
+    return journalEntries().find((entry) => entry.id === id) || null;
+  }
+
+  function journalMatches(entry, query) {
+    if (!query) return true;
+    const haystack = [entry.title, entry.text, ...(entry.tags || [])].join(' ').toLowerCase();
+    return haystack.includes(query);
+  }
+
+  /**
+   * Рисует панель журнала: поиск, список записей и открытый редактор.
+   * Игроку панель не нужна: записи мастеру сервер и не присылает.
+   */
+  function renderJournalPanel() {
+    const panel = $('#journal-panel');
+    if (!panel) return;
+    panel.hidden = !(app.role === 'dm' && app.room && !app.training);
+    const list = $('#journal-list');
+    if (!list) return;
+    list.innerHTML = '';
+    if (panel.hidden) return;
+
+    const query = journalQuery.trim().toLowerCase();
+    const entries = journalEntries()
+      .filter((entry) => journalMatches(entry, query))
+      .slice()
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+
+    const editor = journalEditingId ? journalEditorNode(journalEditingId) : null;
+    if (editor) list.appendChild(editor);
+
+    if (!entries.length) {
+      list.appendChild(el('div', 'journal-empty muted',
+        query ? 'Ничего не найдено' : 'Записей пока нет'));
+      return;
+    }
+
+    for (const entry of entries) {
+      const row = el('button', 'journal-row');
+      row.type = 'button';
+      row.appendChild(el('span', 'journal-row__kind', journalKindLabel(entry.kind)));
+      const main = el('span', 'journal-row__main');
+      main.appendChild(el('span', 'journal-row__title', entry.title));
+      if (entry.tags && entry.tags.length) {
+        main.appendChild(el('span', 'journal-row__tags', entry.tags.join(' · ')));
+      }
+      row.appendChild(main);
+      row.addEventListener('click', () => {
+        journalEditingId = entry.id;
+        renderJournalPanel();
+      });
+      list.appendChild(row);
+    }
+  }
+
+  /** Редактор записи: та же форма и для новой, и для правки существующей. */
+  function journalEditorNode(id) {
+    const isNew = id === 'new';
+    const entry = isNew ? null : journalEntry(id);
+    if (!isNew && !entry) {
+      journalEditingId = null;
+      return null;
+    }
+
+    const form = el('form', 'journal-editor');
+    const title = el('input', 'input');
+    title.id = 'journal-title-input';
+    title.name = 'title';
+    title.placeholder = 'Заголовок';
+    title.maxLength = 120;
+    title.value = (entry && entry.title) || '';
+    title.setAttribute('aria-label', 'Заголовок записи');
+
+    const kind = el('select', 'select');
+    kind.name = 'kind';
+    kind.setAttribute('aria-label', 'Вид записи');
+    for (const [value, label] of JOURNAL_KINDS) {
+      const option = el('option', null, label);
+      option.value = value;
+      kind.appendChild(option);
+    }
+    kind.value = (entry && entry.kind) || 'npc';
+
+    const tags = el('input', 'input');
+    tags.name = 'tags';
+    tags.placeholder = 'Теги через запятую';
+    tags.value = entry && entry.tags ? entry.tags.join(', ') : '';
+    tags.setAttribute('aria-label', 'Теги через запятую');
+
+    const text = el('textarea', 'input journal-editor__text');
+    text.name = 'text';
+    text.rows = 5;
+    text.placeholder = 'Что известно: имена, связи, тайны, планы…';
+    text.value = (entry && entry.text) || '';
+    text.setAttribute('aria-label', 'Текст записи');
+
+    form.appendChild(title);
+    form.appendChild(kind);
+    form.appendChild(tags);
+    form.appendChild(text);
+
+    const actions = el('div', 'journal-editor__actions');
+    const save = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
+    save.type = 'submit';
+    const cancel = el('button', 'btn btn--ghost btn--tiny', 'Отмена');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => {
+      journalEditingId = null;
+      renderJournalPanel();
+    });
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+
+    if (entry) {
+      const remove = el('button', 'btn btn--danger btn--ghost btn--tiny', 'Удалить');
+      remove.type = 'button';
+      remove.addEventListener('click', () => deleteJournalEntry(entry.id));
+      actions.appendChild(remove);
+    }
+    form.appendChild(actions);
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      saveJournalEntry({
+        ...(entry ? { id: entry.id } : {}),
+        kind: kind.value,
+        title: title.value.trim(),
+        text: text.value,
+        tags: tags.value.split(',').map((tag) => tag.trim()).filter(Boolean)
+      });
+    });
+
+    return form;
+  }
+
+  function saveJournalEntry(payload) {
+    if (!payload.title) return toast('Нужен заголовок записи', 'error');
+    if (!app.socket || !app.connected) return toast('Нет соединения со столом', 'error');
+    app.socket.emit('saveJournalEntry', payload, (result) => {
+      if (!result || !result.ok) {
+        return toast((result && result.error) || 'Не удалось сохранить запись', 'error');
+      }
+      journalEditingId = null;
+      renderJournalPanel();
+    });
+  }
+
+  function deleteJournalEntry(id) {
+    if (!app.socket || !app.connected) return toast('Нет соединения со столом', 'error');
+    app.socket.emit('deleteJournalEntry', { id }, (result) => {
+      if (!result || !result.ok) {
+        return toast((result && result.error) || 'Не удалось удалить запись', 'error');
+      }
+      journalEditingId = null;
+      renderJournalPanel();
+    });
+  }
+
+  /** Открывает журнал отдельным окном: мастер может держать его рядом. */
+  async function detachJournal() {
+    if (app.role !== 'dm') return;
+    if (!desktop || !desktop.openJournalWindow) {
+      return toast('Отдельное окно журнала здесь недоступно', 'error');
+    }
+    const result = await desktop.openJournalWindow({
+      role: 'dm',
+      url: app.serverUrl || '',
+      title: 'Журнал кампании'
+    });
+    if (!result || !result.ok) {
+      return toast((result && result.error) || 'Не удалось открыть окно журнала', 'error');
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Общий склад партии
+   * ------------------------------------------------------------------ */
+
+  function inventoryItems() {
+    return app.room && Array.isArray(app.room.inventory) ? app.room.inventory : [];
+  }
+
+  /** Имя владельца предмета: пустой ownerId — общий склад. */
+  function inventoryOwnerLabel(ownerId) {
+    if (!ownerId) return 'Общий склад';
+    const player = (app.room.players || []).find((item) => item.playerId === ownerId);
+    return player ? player.name : 'Общий склад';
+  }
+
+  function inventoryPanelVisible() {
+    if (!app.room) return false;
+    // В тренировке ДМа нет и склад наполнить некому: пустая панель только мешает.
+    if (app.training && !inventoryItems().length) return false;
+    return true;
+  }
+
+  /**
+   * Склад партии: список и форма мастера.
+   *
+   * Игроки видят тот же список без кнопок: сервер всё равно не примет от них
+   * правку, а лишние поля только сбивали бы.
+   */
+  function renderInventoryPanel() {
+    const panel = $('#inventory-panel');
+    if (!panel) return;
+    const isDm = app.role === 'dm';
+    panel.hidden = !inventoryPanelVisible();
+    const add = $('#btn-inventory-add');
+    if (add) add.hidden = !isDm;
+    const list = $('#inventory-list');
+    if (!list) return;
+    list.innerHTML = '';
+    if (panel.hidden) return;
+
+    if (isDm && inventoryEditingId) {
+      const editor = inventoryEditorNode(inventoryEditingId);
+      if (editor) list.appendChild(editor);
+    }
+
+    const items = inventoryItems();
+    if (!items.length) {
+      list.appendChild(el('div', 'journal-empty muted', 'Склад пуст'));
+      return;
+    }
+
+    const total = items.reduce((sum, item) => sum + (Number(item.weight) || 0) * (Number(item.qty) || 0), 0);
+    list.appendChild(el('div', 'inventory-total muted',
+      `Всего: ${Math.round(total * 100) / 100} фнт.`));
+
+    for (const item of items) {
+      const row = el(isDm ? 'button' : 'div', 'inventory-row');
+      row.dataset.itemId = item.id;
+      if (isDm) row.type = 'button';
+      const head = el('div', 'inventory-row__head');
+      head.appendChild(el('span', 'inventory-row__name', item.name));
+      if (item.qty !== 1) head.appendChild(el('span', 'inventory-row__qty', `× ${item.qty}`));
+      if (item.attunement) {
+        const mark = el('span', 'inventory-row__attunement', 'настройка');
+        mark.title = 'Требует настройки';
+        head.appendChild(mark);
+      }
+      row.appendChild(head);
+      const meta = [];
+      if (Number(item.weight)) meta.push(`${item.weight} фнт.`);
+      meta.push(inventoryOwnerLabel(item.ownerId));
+      row.appendChild(el('div', 'inventory-row__meta muted', meta.join(' · ')));
+      if (item.notes) row.appendChild(el('div', 'inventory-row__notes', item.notes));
+      if (isDm) {
+        row.addEventListener('click', () => {
+          inventoryEditingId = item.id;
+          renderInventoryPanel();
+          const field = $('#inventory-name-input');
+          if (field) field.focus();
+        });
+      }
+      list.appendChild(row);
+    }
+  }
+
+  /** Форма предмета: одна и та же для нового и для правки. */
+  function inventoryEditorNode(id) {
+    const isNew = id === 'new';
+    const item = isNew ? null : inventoryItems().find((entry) => entry.id === id);
+    if (!isNew && !item) {
+      inventoryEditingId = null;
+      return null;
+    }
+
+    const form = el('form', 'journal-editor inventory-editor');
+    const name = el('input', 'input');
+    name.id = 'inventory-name-input';
+    name.placeholder = 'Название предмета';
+    name.maxLength = 120;
+    name.value = (item && item.name) || '';
+    name.setAttribute('aria-label', 'Название предмета');
+
+    const qty = el('input', 'input');
+    qty.type = 'number';
+    qty.min = '0';
+    qty.max = '9999';
+    qty.placeholder = 'Кол-во';
+    qty.value = String(item ? item.qty : 1);
+    qty.setAttribute('aria-label', 'Количество');
+
+    const weight = el('input', 'input');
+    weight.type = 'number';
+    weight.min = '0';
+    weight.step = '0.01';
+    weight.placeholder = 'Вес, фнт.';
+    weight.value = String(item && item.weight ? item.weight : 0);
+    weight.setAttribute('aria-label', 'Вес в фунтах');
+
+    const owner = el('select', 'select');
+    owner.setAttribute('aria-label', 'Владелец');
+    const shared = el('option', null, 'Общий склад');
+    shared.value = '';
+    owner.appendChild(shared);
+    for (const player of app.room.players || []) {
+      if (player.role === 'dm') continue;
+      const option = el('option', null, player.name);
+      option.value = player.playerId;
+      owner.appendChild(option);
+    }
+    owner.value = (item && item.ownerId) || '';
+
+    const attuneLabel = el('label', 'settings__check');
+    const attune = el('input');
+    attune.type = 'checkbox';
+    attune.checked = Boolean(item && item.attunement);
+    attuneLabel.appendChild(attune);
+    attuneLabel.appendChild(el('span', null, 'Требует настройки'));
+
+    const notes = el('input', 'input');
+    notes.placeholder = 'Заметка: где лежит, кому отдали…';
+    notes.maxLength = 400;
+    notes.value = (item && item.notes) || '';
+    notes.setAttribute('aria-label', 'Заметка о предмете');
+
+    form.appendChild(name);
+    form.appendChild(qty);
+    form.appendChild(weight);
+    form.appendChild(owner);
+    form.appendChild(attuneLabel);
+    form.appendChild(notes);
+
+    const actions = el('div', 'journal-editor__actions');
+    const save = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
+    save.type = 'submit';
+    const cancel = el('button', 'btn btn--ghost btn--tiny', 'Отмена');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => {
+      inventoryEditingId = null;
+      renderInventoryPanel();
+    });
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    if (item) {
+      const remove = el('button', 'btn btn--danger btn--ghost btn--tiny', 'Удалить');
+      remove.type = 'button';
+      remove.addEventListener('click', () => deleteInventoryItem(item.id));
+      actions.appendChild(remove);
+    }
+    form.appendChild(actions);
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      saveInventoryItem({
+        ...(item ? { id: item.id } : {}),
+        name: name.value.trim(),
+        qty: Number(qty.value),
+        weight: Number(weight.value),
+        ownerId: owner.value,
+        attunement: attune.checked,
+        notes: notes.value.trim()
+      });
+    });
+
+    return form;
+  }
+
+  function saveInventoryItem(payload) {
+    if (!payload.name) return toast('Нужно название предмета', 'error');
+    if (!app.socket || !app.connected) return toast('Нет соединения со столом', 'error');
+    app.socket.emit('saveInventoryItem', payload, (result) => {
+      if (!result || !result.ok) {
+        return toast((result && result.error) || 'Не удалось сохранить предмет', 'error');
+      }
+      inventoryEditingId = null;
+      renderInventoryPanel();
+    });
+  }
+
+  function deleteInventoryItem(id) {
+    if (!app.socket || !app.connected) return toast('Нет соединения со столом', 'error');
+    app.socket.emit('deleteInventoryItem', { id }, (result) => {
+      if (!result || !result.ok) {
+        return toast((result && result.error) || 'Не удалось убрать предмет', 'error');
+      }
+      inventoryEditingId = null;
+      renderInventoryPanel();
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Просьбы о бросках
+   * ------------------------------------------------------------------ */
+
+  function rollRequests() {
+    return app.room && Array.isArray(app.room.rollRequests) ? app.room.rollRequests : [];
+  }
+
+  /** Подпись проверки: название и, если задана, сложность. */
+  function rollRequestLabel(request) {
+    return request.dc ? `${request.label} (СЛ ${request.dc})` : request.label;
+  }
+
+  function requestRoll(request) {
+    const formula = (request.formula || '1d20').trim() || '1d20';
+    if (!dicePanel) return toast('Кубики ещё не готовы', 'error');
+    toast(`Бросок: ${rollRequestLabel(request)}`);
+    dicePanel.roll(formula);
+  }
+
+  /**
+   * Проверки: форма и список у мастера, крупная карточка у всех.
+   *
+   * В тренировке ведущего нет, поэтому раздел скрыт целиком.
+   */
+  function renderRollRequests() {
+    const requests = rollRequests();
+    const isDm = app.role === 'dm';
+    const panel = $('#roll-requests-panel');
+    if (panel) {
+      panel.hidden = !(isDm && app.room && !app.training);
+      const form = $('#roll-request-form');
+      if (form) form.hidden = panel.hidden;
+      const list = $('#roll-requests-list');
+      if (list) {
+        list.innerHTML = '';
+        if (!panel.hidden) {
+          if (!requests.length) {
+            list.appendChild(el('div', 'journal-empty muted', 'Активных проверок нет'));
+          }
+          for (const request of requests) {
+            const row = el('div', 'roll-request-row');
+            row.appendChild(el('span', 'roll-request-row__label', rollRequestLabel(request)));
+            if (request.formula) {
+              row.appendChild(el('span', 'roll-request-row__formula muted', request.formula));
+            }
+            const clear = el('button', 'btn btn--ghost btn--tiny', 'Снять');
+            clear.type = 'button';
+            clear.addEventListener('click', () => clearRollRequest(request.id));
+            row.appendChild(clear);
+            list.appendChild(row);
+          }
+        }
+      }
+    }
+
+    const banner = $('#roll-request-banner');
+    if (!banner) return;
+    banner.innerHTML = '';
+    banner.hidden = !(app.room && requests.length && !app.training);
+    if (banner.hidden) return;
+    banner.appendChild(el('div', 'roll-request-banner__title', 'Мастер просит бросок'));
+    for (const request of requests) {
+      const row = el('div', 'roll-request-banner__row');
+      row.appendChild(el('span', 'roll-request-banner__label', rollRequestLabel(request)));
+      const roll = el('button', 'btn btn--accent btn--tiny', 'Бросить');
+      roll.type = 'button';
+      roll.addEventListener('click', () => requestRoll(request));
+      row.appendChild(roll);
+      banner.appendChild(row);
+    }
+  }
+
+  function sendRollRequest() {
+    if (!app.socket || !app.connected) return toast('Нет соединения со столом', 'error');
+    const label = $('#roll-request-label').value.trim();
+    if (!label) return toast('Нужно название проверки', 'error');
+    const dc = $('#roll-request-dc').value.trim();
+    const formula = $('#roll-request-formula').value.trim();
+    app.socket.emit('rollRequest', {
+      label,
+      dc: dc ? Number(dc) : null,
+      formula
+    }, (result) => {
+      if (!result || !result.ok) {
+        return toast((result && result.error) || 'Не удалось попросить бросок', 'error');
+      }
+      $('#roll-request-label').value = '';
+      $('#roll-request-dc').value = '';
+      $('#roll-request-formula').value = '';
+    });
+  }
+
+  function clearRollRequest(id) {
+    if (!app.socket || !app.connected) return toast('Нет соединения со столом', 'error');
+    app.socket.emit('rollRequestClear', { id }, (result) => {
+      if (!result || !result.ok) {
+        return toast((result && result.error) || 'Не удалось снять проверку', 'error');
+      }
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Поиск по кампании
+   * ------------------------------------------------------------------ */
+
+  /** Всё, что ищется: журнал, чат с подписями картинок и склад. */
+  function campaignSearchResults(query) {
+    const text = String(query || '').trim().toLowerCase();
+    if (!text) return [];
+    const groups = [];
+    const match = (...parts) => parts.join(' ').toLowerCase().includes(text);
+
+    const journal = journalEntries()
+      .filter((entry) => match(entry.title, entry.text, ...(entry.tags || [])))
+      .slice(0, 6);
+    if (journal.length) {
+      groups.push({
+        title: 'Журнал',
+        items: journal.map((entry) => ({
+          key: `journal-${entry.id}`,
+          title: entry.title,
+          note: entry.text || journalKindLabel(entry.kind),
+          open: () => {
+            if (app.role !== 'dm') return;
+            journalEditingId = entry.id;
+            renderJournalPanel();
+            const box = $('#journal-panel');
+            if (box) box.scrollIntoView({ block: 'nearest' });
+          }
+        }))
+      });
+    }
+
+    const chat = app.room.chatHistory
+      .filter((message) => match(message.from || '', message.text || ''))
+      .slice(-6)
+      .reverse()
+      .map((message) => ({
+        key: `chat-${message.time}-${message.playerId}`,
+        title: message.from || 'Стол',
+        note: message.text || 'Картинка',
+        open: () => {
+          if (panelCollapsed(RIGHT_COLLAPSED_KEY)) setPanelCollapsed('right', false);
+          activateTab('chat');
+          if (!chatPanel) return;
+          if (chatPanel.searchInput) chatPanel.searchInput.value = text;
+          chatPanel.setQuery(text);
+          const hit = $('#tab-chat .chat__msg.is-hit');
+          if (hit) hit.scrollIntoView({ block: 'center' });
+        }
+      }));
+    if (chat.length) groups.push({ title: 'Чат', items: chat });
+
+    const inventory = inventoryItems()
+      .filter((item) => match(item.name, item.notes))
+      .slice(0, 6)
+      .map((item) => ({
+        key: `inventory-${item.id}`,
+        title: item.name,
+        note: [item.notes, inventoryOwnerLabel(item.ownerId)].filter(Boolean).join(' · '),
+        open: () => {
+          const panel = $('#inventory-panel');
+          if (panel) panel.scrollIntoView({ block: 'nearest' });
+          renderInventoryPanel();
+          const row = document.querySelector(`#inventory-list [data-item-id="${item.id}"]`);
+          if (!row) return;
+          row.classList.add('is-hit');
+          row.scrollIntoView({ block: 'center' });
+          setTimeout(() => row.classList.remove('is-hit'), 2000);
+        }
+      }));
+    if (inventory.length) groups.push({ title: 'Склад', items: inventory });
+
+    return groups;
+  }
+
+  /** Модальное окно поиска: открывается кнопкой и Ctrl+K. */
+  function openSearch() {
+    if (!app.room) return;
+    const existing = $('#campaign-search-overlay');
+    if (existing) {
+      const field = existing.querySelector('input');
+      if (field) field.focus();
+      return;
+    }
+
+    const overlay = el('div', 'modal-overlay');
+    overlay.id = 'campaign-search-overlay';
+    const box = el('div', 'modal modal--search');
+    box.appendChild(el('div', 'modal__title', 'Поиск по кампании'));
+    const input = el('input', 'input');
+    input.type = 'search';
+    input.placeholder = 'Журнал, чат, склад…';
+    input.setAttribute('aria-label', 'Поиск по кампании');
+    box.appendChild(input);
+    const results = el('div', 'search-results');
+    box.appendChild(results);
+    overlay.appendChild(box);
+
+    const close = () => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('pointerdown', (event) => {
+      if (event.target === overlay) close();
+    });
+
+    const render = () => {
+      results.innerHTML = '';
+      const query = input.value;
+      if (!query.trim()) {
+        results.appendChild(el('div', 'journal-empty muted', 'Начните печатать: ищем в журнале, чате и на складе'));
+        return;
+      }
+      const groups = campaignSearchResults(query);
+      if (!groups.length) {
+        results.appendChild(el('div', 'journal-empty muted', 'Ничего не найдено'));
+        return;
+      }
+      for (const group of groups) {
+        results.appendChild(el('div', 'search-group__title', group.title));
+        for (const item of group.items) {
+          const row = el('button', 'search-result');
+          row.type = 'button';
+          row.dataset.searchKey = item.key;
+          row.appendChild(el('span', 'search-result__title', item.title));
+          if (item.note) row.appendChild(el('span', 'search-result__note muted', item.note));
+          row.addEventListener('click', () => {
+            close();
+            item.open();
+          });
+          results.appendChild(row);
+        }
+      }
+    };
+
+    input.addEventListener('input', render);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        const first = results.querySelector('.search-result');
+        if (first) first.click();
+      }
+    });
+
+    document.body.appendChild(overlay);
+    input.focus();
+    // Старый запрос мог остаться в поле после перерисовки: рисуем сразу.
+    render();
   }
 
   /**
@@ -2438,6 +3153,43 @@ let chosenSheetId = null;
     langBox.appendChild(el('div', 'box__note',
       'Сейчас приложение только на русском. Переключатель заработает здесь, когда добавим второй язык.'));
     box.appendChild(langBox);
+
+    const a11yBox = el('div', 'box');
+    a11yBox.appendChild(el('div', 'box__title', 'Доступность'));
+    const a11yScaleRow = el('div', 'settings__row');
+    a11yScaleRow.appendChild(el('span', 'settings__label', 'Масштаб'));
+    const scaleSelect = el('select', 'select settings__select');
+    scaleSelect.dataset.setting = 'a11y-scale';
+    for (const scale of window.DnDTheme.SCALES) {
+      const option = el('option', null, scale === 1 ? 'Обычный (100%)' : `${Math.round(scale * 100)}%`);
+      option.value = String(scale);
+      scaleSelect.appendChild(option);
+    }
+    scaleSelect.value = String(window.DnDTheme.fontScale());
+    scaleSelect.addEventListener('change', () => {
+      window.DnDTheme.setFontScale(Number(scaleSelect.value));
+    });
+    a11yScaleRow.appendChild(scaleSelect);
+    a11yBox.appendChild(a11yScaleRow);
+
+    a11yBox.appendChild(settingsCheck(
+      'Высокий контраст: ярче текст и рамки',
+      window.DnDTheme.contrastOn(),
+      'a11y-contrast',
+      (on) => window.DnDTheme.setContrast(on)
+    ));
+    a11yBox.appendChild(settingsCheck(
+      'Палитра для дальтоников: успех и опасность не красным и зелёным',
+      window.DnDTheme.colorblindOn(),
+      'a11y-colorblind',
+      (on) => window.DnDTheme.setColorblind(on)
+    ));
+    // Настройки общие с окном журнала и листа: theme.js там тот же, а значит,
+    // масштаб и контраст подхватятся и в них без отдельного кода.
+    a11yBox.appendChild(el('div', 'box__note',
+      'Применяется сразу на этом компьютере и в окнах журнала и листа. '
+      + 'Полный английский интерфейс пока не готов.'));
+    box.appendChild(a11yBox);
 
     const tableBox = el('div', 'box');
     tableBox.appendChild(el('div', 'box__title', 'Стол'));
@@ -3104,6 +3856,12 @@ const gridRow = el('div', 'settings__row');
         }
         return;
       }
+      // Ctrl+K — поиск по всей кампании, а не только по чату.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !typing) {
+        event.preventDefault();
+        openSearch();
+        return;
+      }
       if (typing || event.ctrlKey || event.metaKey || event.altKey) return;
 
       const index = Number(event.key) - 1;
@@ -3128,6 +3886,17 @@ const gridRow = el('div', 'settings__row');
    * Действия на экране стола
    * ------------------------------------------------------------------ */
 
+  /** Отмена последнего действия мастера: сервер присылает свежий снимок. */
+  function undoDmAction() {
+    if (!app.socket || !app.connected) return toast('Нет соединения со столом', 'error');
+    app.socket.emit('undoDmAction', {}, (result) => {
+      if (!result || !result.ok) {
+        return toast((result && result.error) || 'Нечего отменять', 'error');
+      }
+      toast('Действие отменено', 'ok');
+    });
+  }
+
   async function leaveTable() {
     if (app.role === 'dm' && app.host) {
       const answer = await modal({
@@ -3147,7 +3916,7 @@ const gridRow = el('div', 'settings__row');
       players: [], sheets: {}, maps: normalizeMapSlots(null),
       activeMap: null, grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetPerCell, offsetX: 0, offsetY: 0 },
       tokens: [], initiative: { entries: [], turnId: null, round: 1 }, combat: { enabled: false },
-      diceHistory: [], chatHistory: [], journal: ''
+      diceHistory: [], chatHistory: [], journal: '', journalEntries: [], inventory: [], rollRequests: []
     };
     app.sheetShownFor = null;
     app.viewedSheetPlayerId = null;
@@ -3294,11 +4063,34 @@ const gridRow = el('div', 'settings__row');
     $('#btn-save-campaign').addEventListener('click', saveCampaign);
     $('#btn-stop-host').addEventListener('click', stopHost);
     $('#btn-leave').addEventListener('click', leaveTable);
+    $('#btn-search').addEventListener('click', openSearch);
+    $('#btn-undo').addEventListener('click', undoDmAction);
+    $('#btn-inventory-add').addEventListener('click', () => {
+      inventoryEditingId = 'new';
+      renderInventoryPanel();
+      const field = $('#inventory-name-input');
+      if (field) field.focus();
+    });
+    $('#roll-request-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      sendRollRequest();
+    });
 
     $('#btn-open-datadir').addEventListener('click', () => desktop.openDataDir());
     $('#btn-settings-home').addEventListener('click', openSettings);
     $('#btn-settings-table').addEventListener('click', openSettings);
     $('#addresses-toggle').addEventListener('click', toggleAddresses);
+    $('#btn-journal-add').addEventListener('click', () => {
+      journalEditingId = 'new';
+      renderJournalPanel();
+      const field = $('#journal-title-input');
+      if (field) field.focus();
+    });
+    $('#btn-journal-detach').addEventListener('click', detachJournal);
+    $('#journal-search').addEventListener('input', (event) => {
+      journalQuery = event.target.value;
+      renderJournalPanel();
+    });
     $('#btn-panel-left').addEventListener('click', () => setPanelCollapsed('left', !panelCollapsed(LEFT_COLLAPSED_KEY)));
     $('#btn-panel-right').addEventListener('click', () => setPanelCollapsed('right', !panelCollapsed(RIGHT_COLLAPSED_KEY)));
 

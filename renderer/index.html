@@ -213,6 +213,10 @@
         <div class="topbar__right">
           <span id="conn-badge" class="badge badge--muted">—</span>
           <span id="role-badge" class="badge">—</span>
+          <button id="btn-search" class="btn btn--ghost btn--tiny" type="button"
+                  title="Поиск по кампании (Ctrl+K)">Поиск</button>
+          <button id="btn-undo" class="btn btn--ghost btn--tiny" type="button"
+                  title="Отменить последнее действие мастера" hidden>Отменить</button>
           <button id="btn-panel-right" class="btn btn--ghost btn--tiny" type="button">Панель ▸</button>
           <button id="btn-settings-table" class="btn btn--ghost btn--tiny" type="button">⚙ Настройки</button>
           <button id="btn-save-campaign" class="btn btn--accent" type="button">Сохранить кампанию</button>
@@ -225,6 +229,41 @@
           <div class="panel">
             <div class="panel__title">Участники</div>
             <div id="players-root"></div>
+          </div>
+
+          <div class="panel journal-panel" id="journal-panel" hidden>
+            <div class="panel__title panel__title--row">
+              <span>Журнал</span>
+              <button id="btn-journal-detach" class="btn btn--ghost btn--tiny" type="button">Открыть окно</button>
+            </div>
+            <div class="journal-panel__bar">
+              <button id="btn-journal-add" class="btn btn--ghost btn--tiny" type="button">Добавить</button>
+              <input id="journal-search" class="input journal-panel__search" type="search"
+                     placeholder="Поиск" aria-label="Поиск по журналу" />
+            </div>
+            <div id="journal-list" class="journal-list"></div>
+          </div>
+
+          <div class="panel inventory-panel" id="inventory-panel" hidden>
+            <div class="panel__title panel__title--row">
+              <span>Общий склад</span>
+              <button id="btn-inventory-add" class="btn btn--ghost btn--tiny" type="button" hidden>Добавить</button>
+            </div>
+            <div id="inventory-list" class="inventory-list"></div>
+          </div>
+
+          <div class="panel roll-requests-panel" id="roll-requests-panel" hidden>
+            <div class="panel__title">Проверки</div>
+            <form id="roll-request-form" class="roll-request-form" hidden>
+              <input id="roll-request-label" class="input" type="text" maxlength="120"
+                     placeholder="Например, Скрытность" aria-label="Название проверки" />
+              <input id="roll-request-dc" class="input" type="number" min="1" max="40"
+                     placeholder="СЛ" aria-label="Сложность, необязательно" />
+              <input id="roll-request-formula" class="input" type="text" maxlength="40"
+                     placeholder="1d20 (необязательно)" aria-label="Формула броска" />
+              <button class="btn btn--accent btn--tiny" type="submit">Попросить бросок</button>
+            </form>
+            <div id="roll-requests-list" class="roll-request-list"></div>
           </div>
 
           <div class="panel" id="addresses-panel">
@@ -257,6 +296,7 @@
              aria-orientation="vertical" aria-label="Ширина правой панели" tabindex="0"></div>
 
         <aside class="col col--right">
+          <div id="roll-request-banner" class="roll-request-banner" hidden></div>
           <div class="tabs">
             <button class="tabs__btn is-active" data-tab="chat" type="button">
               <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 3.5h10V10H7.5L4.5 13v-3H3z"/></svg></span><span class="tabs__label">Чат</span>

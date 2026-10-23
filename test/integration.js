@@ -66,7 +66,8 @@ const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
   'tokensUpdated', 'mapPing',
-  'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated'
+  'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
+  'journalUpdated', 'inventoryUpdated', 'rollRequestUpdated', 'stateReload'
 ];
 
 /**
@@ -2879,6 +2880,211 @@ async function main() {
     assert.strictEqual(room.snapshotFor({ playerId: 'dm', role: ROLE_DM }).journal, journalText);
     assert.strictEqual(room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).journal, '');
   });
+
+  const journalEntry = await new Promise((resolve) => {
+    dm.emit('saveJournalEntry', {
+      kind: 'location',
+      title: 'Старый мост',
+      text: 'Под мостом тайник с долговой распиской.',
+      tags: ['мост', 'тайник', 'мост']
+    }, resolve);
+  });
+  await waitFor(() => room.journalEntries.length === 1, 'запись журнала мастера');
+  check('мастер создаёт структурированную запись журнала', () => {
+    assert.strictEqual(journalEntry.ok, true);
+    assert.strictEqual(journalEntry.entry.kind, 'location');
+    assert.strictEqual(journalEntry.entry.title, 'Старый мост');
+    assert.deepStrictEqual(journalEntry.entry.tags, ['мост', 'тайник']);
+    assert.ok(journalEntry.entry.id.startsWith('j-'));
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'saveJournalEntry', { kind: 'quest', title: 'Игроку нельзя' });
+  const deniedEntry = await waitFor(
+    () => p1.log.errorMessage.find((item) => /только ДМ/.test(item.message)),
+    'отказ игроку на запись журнала'
+  );
+  check('запись журнала создаёт только мастер', () => {
+    assert.match(deniedEntry.message, /только ДМ/);
+    assert.strictEqual(room.journalEntries.length, 1);
+  });
+
+  const requestedJournal = await new Promise((resolve) => {
+    dm.once('journalUpdated', resolve);
+    dm.emit('journalRequest');
+  });
+  check('journalRequest отдаёт мастеру записи журнала', () => {
+    assert.strictEqual(requestedJournal.length, 1);
+    assert.strictEqual(requestedJournal[0].title, 'Старый мост');
+  });
+
+  const playerJournalBefore = p1.log.journalUpdated.length;
+  emit(p1, 'journalRequest');
+  await wait(120);
+  check('journalRequest игроку записей не отдаёт', () => {
+    assert.strictEqual(p1.log.journalUpdated.length, playerJournalBefore);
+  });
+
+  check('записи журнала не попадают в снимок игрока', () => {
+    assert.strictEqual(
+      room.snapshotFor({ playerId: 'dm', role: ROLE_DM }).journalEntries.length, 1);
+    assert.strictEqual(
+      room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).journalEntries.length, 0);
+  });
+
+  await new Promise((resolve) => {
+    dm.emit('deleteJournalEntry', { id: journalEntry.entry.id }, resolve);
+  });
+  await waitFor(() => room.journalEntries.length === 0, 'удаление записи журнала');
+  check('мастер удаляет запись журнала', () => {
+    assert.strictEqual(room.journalEntries.length, 0);
+  });
+
+  /* ------------------------------------------ склад, проверки и отмена */
+
+  console.log('\nОбщий склад, просьбы о бросках и отмена');
+
+  p1.log.errorMessage.length = 0;
+  const deniedItem = await new Promise((resolve) => {
+    p1.emit('saveInventoryItem', { name: 'Игроку нельзя', qty: 1, weight: 0 }, resolve);
+  });
+  check('предмет на склад кладёт только мастер', () => {
+    assert.strictEqual(deniedItem.ok, false);
+    assert.match(deniedItem.error, /только ДМ/);
+    assert.strictEqual(room.inventory.length, 0);
+  });
+
+  p2.log.inventoryUpdated.length = 0;
+  const itemAck = await new Promise((resolve) => {
+    dm.emit('saveInventoryItem', {
+      name: 'Верёвка',
+      qty: 2,
+      weight: 10,
+      ownerId: 'p-test-0001',
+      attunement: true,
+      notes: 'Лежит в мешке у Артёма'
+    }, resolve);
+  });
+  const itemBroadcast = await waitFor(
+    () => p2.log.inventoryUpdated.find((list) => list.length === 1),
+    'рассылка склада игрокам'
+  );
+  check('мастер добавляет предмет, и его видят все', () => {
+    assert.strictEqual(itemAck.ok, true);
+    assert.strictEqual(itemAck.item.name, 'Верёвка');
+    assert.strictEqual(itemAck.item.qty, 2);
+    assert.strictEqual(itemAck.item.ownerId, 'p-test-0001');
+    assert.strictEqual(itemAck.item.attunement, true);
+    assert.strictEqual(itemBroadcast[0].name, 'Верёвка');
+    assert.strictEqual(
+      room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).inventory.length, 1);
+  });
+
+  const itemUpdateAck = await new Promise((resolve) => {
+    dm.emit('saveInventoryItem', {
+      id: itemAck.item.id, name: 'Верёвка', qty: 1, weight: 10, ownerId: '', attunement: false, notes: ''
+    }, resolve);
+  });
+  await waitFor(
+    () => room.inventory.length === 1 && room.inventory[0].qty === 1,
+    'правка предмета'
+  );
+  check('предмет правится на месте, а не добавляется вторым', () => {
+    assert.strictEqual(itemUpdateAck.ok, true);
+    assert.strictEqual(room.inventory.length, 1);
+    assert.strictEqual(room.inventory[0].qty, 1);
+    assert.strictEqual(room.inventory[0].ownerId, '');
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'deleteInventoryItem', { id: itemAck.item.id });
+  const deniedDelete = await waitFor(
+    () => p1.log.errorMessage.find((item) => /только ДМ/.test(item.message)),
+    'отказ игроку на удаление предмета'
+  );
+  check('предмет убирает только мастер', () => {
+    assert.match(deniedDelete.message, /только ДМ/);
+    assert.strictEqual(room.inventory.length, 1);
+  });
+
+  p1.log.errorMessage.length = 0;
+  const deniedRequest = await new Promise((resolve) => {
+    p1.emit('rollRequest', { label: 'Игроку нельзя' }, resolve);
+  });
+  check('попросить бросок может только мастер', () => {
+    assert.strictEqual(deniedRequest.ok, false);
+    assert.match(deniedRequest.error, /только ДМ/);
+    assert.strictEqual(room.rollRequests.length, 0);
+  });
+
+  p2.log.rollRequestUpdated.length = 0;
+  const requestAck = await new Promise((resolve) => {
+    dm.emit('rollRequest', { label: 'Скрытность', dc: 15, formula: '1d20+3' }, resolve);
+  });
+  const requestBroadcast = await waitFor(
+    () => p2.log.rollRequestUpdated.find((list) => list.length === 1),
+    'рассылка проверки игрокам'
+  );
+  check('мастер просит бросок, и просьбу видят все', () => {
+    assert.strictEqual(requestAck.ok, true);
+    assert.strictEqual(requestAck.request.label, 'Скрытность');
+    assert.strictEqual(requestAck.request.dc, 15);
+    assert.strictEqual(requestAck.request.formula, '1d20+3');
+    assert.strictEqual(requestBroadcast[0].label, 'Скрытность');
+  });
+
+  const clearAck = await new Promise((resolve) => {
+    dm.emit('rollRequestClear', { id: requestAck.request.id }, resolve);
+  });
+  await waitFor(() => room.rollRequests.length === 0, 'снятие проверки');
+  check('мастер снимает проверку', () => {
+    assert.strictEqual(clearAck.ok, true);
+    assert.strictEqual(room.rollRequests.length, 0);
+  });
+
+  // Отмена: двигаем фишку и возвращаем её на прежнее место.
+  emit(dm, 'createToken', { name: 'Отменяемая', mapType: 'battle' });
+  const undoToken = await waitFor(
+    () => room.tokens.find((token) => token.name === 'Отменяемая'),
+    'фишка для отмены'
+  );
+  const startX = undoToken.x;
+  const startY = undoToken.y;
+  emit(dm, 'moveToken', { tokenId: undoToken.id, x: 0.12, y: 0.34 });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === undoToken.id).x === 0.12,
+    'фишка сдвинута'
+  );
+  dm.log.stateReload.length = 0;
+  const undoAck = await new Promise((resolve) => {
+    dm.emit('undoDmAction', {}, resolve);
+  });
+  await waitFor(() => dm.log.stateReload.length > 0, 'снимок после отмены');
+  check('мастер отменяет ход фишки', () => {
+    assert.strictEqual(undoAck.ok, true);
+    const restored = room.tokens.find((token) => token.id === undoToken.id);
+    assert.strictEqual(restored.x, startX);
+    assert.strictEqual(restored.y, startY);
+    assert.strictEqual(dm.log.stateReload[dm.log.stateReload.length - 1].tokens
+      .find((token) => token.id === undoToken.id).x, startX, 'игроки не получили снимок');
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'undoDmAction', {});
+  const deniedUndo = await waitFor(
+    () => p1.log.errorMessage.find((item) => /только ДМ/.test(item.message)),
+    'отказ игроку на отмену'
+  );
+  check('отменять действия мастера может только мастер', () => {
+    assert.match(deniedUndo.message, /только ДМ/);
+  });
+
+  emit(dm, 'deleteToken', { tokenId: undoToken.id });
+  await waitFor(() => !room.tokens.some((token) => token.id === undoToken.id), 'уборка фишки отмены');
+  await new Promise((resolve) => {
+    dm.emit('deleteInventoryItem', { id: itemAck.item.id }, resolve);
+  });
+  await waitFor(() => room.inventory.length === 0, 'уборка склада');
 
   /* -------------------------------------------- сохранение и загрузка */
 

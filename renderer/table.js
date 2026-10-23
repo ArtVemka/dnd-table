@@ -1847,14 +1847,16 @@
      * фишки увеличиваются вместе, как если бы наклонились к столу. Размеры
      * клетки и фишек при этом остаются теми же относительно карты.
      */
-    applyZoom() {
+    applyZoom(skipRoute) {
       this.surface.style.transform = `translate(-50%, -50%) translate(${this.pan.x}px, ${this.pan.y}px) scale(${this.zoom})`;
       if (this.zoomValue) this.zoomValue.textContent = `${Math.round(this.zoom * 100)}%`;
       if (this.zoomBar) this.zoomBar.classList.toggle('is-zoomed', this.zoom !== 1);
       this.surface.classList.toggle('is-panned', this.pan.x !== 0 || this.pan.y !== 0);
       // Маршрут задан в долях карты, но линия и подпись двигаются вместе с
       // подложкой: без перерисовки они остались бы на старом месте.
-      this.paintRoute();
+      // При перетаскивании карты слой едет вместе с ней, и пересчёт маршрута
+      // на каждом движении только тормозит палец.
+      if (!skipRoute) this.paintRoute();
     }
 
     setZoom(zoom) {
@@ -1910,13 +1912,14 @@
       const move = (moveEvent) => {
         this.pan.x = pan.x + (moveEvent.clientX - startX);
         this.pan.y = pan.y + (moveEvent.clientY - startY);
-        this.applyZoom();
+        this.applyZoom(true);
       };
       const up = () => {
         this.stage.classList.remove('is-panning');
         this.stage.removeEventListener('pointermove', move);
         this.stage.removeEventListener('pointerup', up);
         this.stage.removeEventListener('pointercancel', up);
+        this.applyZoom();
       };
       this.stage.addEventListener('pointermove', move);
       this.stage.addEventListener('pointerup', up);

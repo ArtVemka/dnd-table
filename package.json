@@ -43,6 +43,7 @@
       "main.js",
       "preload.js",
       "preload-sheet.js",
+      "preload-journal.js",
       "package.json",
       "server/**/*",
       "renderer/**/*",

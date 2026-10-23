@@ -57,6 +57,9 @@ contextBridge.exposeInMainWorld('desktop', {
   // Лист персонажа в отдельном окне
   openSheetWindow: (request) => ipcRenderer.invoke('sheet:openWindow', request),
 
+  // Журнал кампании в отдельном окне
+  openJournalWindow: (request) => ipcRenderer.invoke('journal:openWindow', request),
+
   // Файлы
   openDataDir: () => ipcRenderer.invoke('shell:openDataDir'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),

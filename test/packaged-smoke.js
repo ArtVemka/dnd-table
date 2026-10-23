@@ -44,6 +44,7 @@ const REQUIRED_FILES = [
   'main.js',
   'preload.js',
   'preload-sheet.js',
+  'preload-journal.js',
   'renderer/index.html',
   // Оформление разбито на девять частей и подключается по порядку номеров.
   // Если хоть одна не попала в пакет, страница откроется без оформления вовсе,
@@ -79,6 +80,8 @@ const REQUIRED_FILES = [
   'renderer/sheet.js',
   'renderer/sheet-window.html',
   'renderer/sheet-window.js',
+  'renderer/journal-window.html',
+  'renderer/journal-window.js',
   'renderer/table.js',
   'renderer/local-table.js',
   // Справочник предметов для ссылок на dnd.su. Без него панель импортированного
@@ -107,8 +110,15 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * Завершение процесса с гарантированной досылкой вывода: process.exit() может
  * обрезать буфер stdout, если тот пишется в пайп, и тогда отчёт теряется.
  */
+let launchRoot = null;
+
 function finish(code) {
   process.exitCode = code;
+  if (launchRoot) {
+    try {
+      fs.rmSync(launchRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
+    } catch { /* временная копия */ }
+  }
   setTimeout(() => process.exit(code), 400);
 }
 
@@ -411,7 +421,14 @@ async function checkPortableRun(options) {
 }
 
 async function main() {
-  const exe = process.argv[2] ? path.resolve(process.argv[2]) : findExe();
+  let exe = process.argv[2] ? path.resolve(process.argv[2]) : findExe();
+  if (!process.argv[2]) {
+    // Chromium иногда падает на старте, если папка сборки лежит на диске
+    // с запретом удаления дочерних файлов. Запускаем копию, как у получателя.
+    launchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-pack-launch-'));
+    fs.cpSync(DIST_UNPACKED, launchRoot, { recursive: true });
+    exe = path.join(launchRoot, path.basename(exe));
+  }
   const asarPath = path.join(path.dirname(exe), 'resources', 'app.asar');
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-packaged-'));
   let failed = 0;

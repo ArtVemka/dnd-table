@@ -82,6 +82,12 @@ let mainWindow = null;
  * @type {Map<string, {window: BrowserWindow, context: object}>}
  */
 const sheetWindows = new Map();
+/**
+ * Отдельные окна журнала: id -> { window, context }. Журнал ведёт только
+ * мастер, поэтому окно подключается к запущенному столу с его hostKey.
+ * @type {Map<string, {window: BrowserWindow, context: object}>}
+ */
+const journalWindows = new Map();
 /** @type {CampaignStore|null} */
 let store = null;
 /** Текущая кампания (созданная или загруженная, ещё не обязательно запущенная). */
@@ -250,6 +256,62 @@ function closeSheetWindows() {
 }
 
 /* -------------------------------------------------------------------------- *
+ * Отдельное окно журнала кампании
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Открывает журнал в своём окне: мастер держит его рядом со столом и не
+ * занимает им левую колонку.
+ *
+ * @param {{title?: string}} request
+ * @returns {{ok: boolean, error?: string, id?: string}}
+ */
+function openJournalWindow(request = {}) {
+  // Стол запускает только мастер, и hostKey берём у него же: окно журнала
+  // должно войти в комнату мастеров, а не пересказывать секрет из renderer.
+  if (!host) return { ok: false, error: 'Стол не запущен: журнал открывать не из чего' };
+
+  const id = crypto.randomUUID();
+  const title = String(request.title || 'Журнал кампании').slice(0, 120);
+  const context = {
+    url: host.localUrl,
+    hostKey: host.hostKey,
+    title
+  };
+
+  const window = new BrowserWindow({
+    width: 760,
+    height: 720,
+    minWidth: 420,
+    minHeight: 360,
+    title,
+    backgroundColor: '#15110d',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-journal.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      spellcheck: false,
+      additionalArguments: [`--journal-context-id=${id}`]
+    }
+  });
+
+  journalWindows.set(id, { window, context });
+  window.loadFile(path.join(__dirname, 'renderer', 'journal-window.html'));
+  window.on('closed', () => journalWindows.delete(id));
+  return { ok: true, id };
+}
+
+/** Закрывает окна журнала: стол погас, подключаться им больше не к чему. */
+function closeJournalWindows() {
+  for (const { window } of journalWindows.values()) {
+    if (!window.isDestroyed()) window.close();
+  }
+  journalWindows.clear();
+}
+
+/* -------------------------------------------------------------------------- *
  * Автосохранение
  * -------------------------------------------------------------------------- */
 
@@ -338,6 +400,7 @@ async function stopHost() {
   stopIrohForTable();
   // Стол гаснет — отдельные окна листов подключать больше не к чему.
   closeSheetWindows();
+  closeJournalWindows();
   await server.close();
   host = null;
   stopAutosave();
@@ -356,6 +419,7 @@ async function startHost() {
   // имеют: они подключались не к столу, а к своему черновику. Закрываем их,
   // чтобы человек не правил сразу два разных листа.
   closeSheetWindows();
+  closeJournalWindows();
 
   const room = new RoomState(currentCampaign);
   const hostKey = crypto.randomBytes(24).toString('hex');
@@ -629,6 +693,14 @@ function registerIpc() {
 
   ipcMain.handle('sheet:context', async (event, id) => {
     const entry = sheetWindows.get(String(id || ''));
+    return entry ? entry.context : null;
+  });
+
+  // Журнал кампании в отдельном окне.
+  ipcMain.handle('journal:openWindow', async (event, request) => openJournalWindow(request || {}));
+
+  ipcMain.handle('journal:context', async (event, id) => {
+    const entry = journalWindows.get(String(id || ''));
     return entry ? entry.context : null;
   });
 

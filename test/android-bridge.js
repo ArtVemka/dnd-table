@@ -72,6 +72,7 @@ function createPage(options = {}) {
   const window = {
     innerWidth: options.innerWidth || 412,
     innerHeight: options.innerHeight || 800,
+    addEventListener() {},
     localStorage: {
       getItem(key) { return storage.has(key) ? storage.get(key) : null; },
       setItem(key, value) { storage.set(key, String(value)); },
@@ -159,6 +160,18 @@ async function main() {
       storage: { 'dnd-table.rightHeight': '700' }
     });
     assert.strictEqual(stale.storage.has('dnd-table.rightHeight'), false);
+  });
+
+  await check('на планшете в альбоме панель стоит справа', () => {
+    const tablet = createPage({ innerWidth: 1024, innerHeight: 768 });
+    assert.strictEqual(tablet.storage.get('dnd-table.rightPanelPos'), 'right');
+    assert.strictEqual(tablet.storage.get('dnd-table.leftPanelCollapsed'), '1');
+  });
+
+  await check('на планшете в портрете панель остаётся снизу', () => {
+    const tablet = createPage({ innerWidth: 800, innerHeight: 1280 });
+    assert.strictEqual(tablet.storage.get('dnd-table.rightPanelPos'), 'bottom');
+    assert.strictEqual(tablet.storage.get('dnd-table.leftPanelCollapsed'), '1');
   });
 
   await check('кнопка вставки берёт билет из буфера', async () => {

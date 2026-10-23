@@ -221,6 +221,18 @@ async function createTableServer(options) {
     });
   };
 
+  // Отмена действия мастера меняет сразу карты, фишки и бой. Один снимок
+  // каждому подключённому проще и надёжнее, чем собирать это из пяти событий.
+  const broadcastSnapshot = () => {
+    for (const client of io.sockets.sockets.values()) {
+      if (!client.data || !client.data.role) continue;
+      client.emit('stateReload', room.snapshotFor({
+        playerId: client.data.playerId,
+        role: client.data.role
+      }));
+    }
+  };
+
   /**
    * Находит карту среди вкладок стола.
    *
@@ -761,6 +773,7 @@ async function createTableServer(options) {
         const fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
         // Новая карта добавляется к уже загруженным, а не заменяет их: в одной
         // вкладке можно держать хоть десяток локаций и переключаться между ними.
+        room.pushUndo();
         const map = {
           id: newMapId(),
           url: `/files/${fileName}`,
@@ -819,6 +832,7 @@ async function createTableServer(options) {
       if (index < 0) return emitError(socket, 'Карта не найдена');
       const wasPresented = room.activeMap === type && room.activeMapId === requested;
 
+      room.pushUndo();
       slot.items.splice(index, 1);
       if (slot.activeId === requested) {
         // Соседняя карта становится выбором мастера. Показывать её игрокам
@@ -918,6 +932,7 @@ socket.on('setGrid', (payload) => {
       if (!item) return emitError(socket, 'Карта не найдена');
       const wasPublished = item.published !== false;
       // Показ — единственное действие, которое открывает карту игрокам.
+      room.pushUndo();
       item.published = true;
       slot.activeId = mapId;
       room.activeMap = type;
@@ -1002,6 +1017,7 @@ socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       const { type, item } = findMapItem(payload);
       if (!item) return emitError(socket, 'Карта не найдена');
+      room.pushUndo();
       room.openMapFog(item, Number(payload && payload.x), Number(payload && payload.y), Number(payload && payload.radius));
       markDirty();
       broadcastMapUpdate(type);
@@ -1012,6 +1028,7 @@ socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       const { type, item } = findMapItem(payload);
       if (!item) return emitError(socket, 'Карта не найдена');
+      room.pushUndo();
       room.setWholeMapFog(item, Boolean(payload && payload.open));
       markDirty();
       broadcastMapUpdate(type);
@@ -1049,6 +1066,7 @@ socket.on('setGrid', (payload) => {
       if (!changed) return;
       const limited = normalizeSurface(surface);
       if (!Object.keys(limited.cells).length && !Object.keys(item.surface.cells).length) return;
+      room.pushUndo();
       item.surface = limited;
       markDirty();
       broadcastMapUpdate(type);
@@ -1060,6 +1078,7 @@ socket.on('setGrid', (payload) => {
       const { type, item } = findMapItem(payload);
       if (!item) return emitError(socket, 'Карта не найдена');
       if (!item.surface || !Object.keys(item.surface.cells).length) return;
+      room.pushUndo();
       item.surface = { cells: {} };
       markDirty();
       broadcastMapUpdate(type);
@@ -1166,6 +1185,7 @@ socket.on('setGrid', (payload) => {
         color: payload && payload.color
       });
       if (!template) return;
+      room.pushUndo();
       item.templates.push(template);
       markDirty();
       broadcastMapUpdate(type);
@@ -1177,9 +1197,9 @@ socket.on('setGrid', (payload) => {
       if (!item) return emitError(socket, 'Карта не найдена');
       const templateId = String((payload && payload.templateId) || '');
       const list = Array.isArray(item.templates) ? item.templates : [];
-      const before = list.length;
+      if (!list.some((template) => template.id === templateId)) return;
+      room.pushUndo();
       item.templates = list.filter((template) => template.id !== templateId);
-      if (item.templates.length === before) return;
       markDirty();
       broadcastMapUpdate(type);
     });
@@ -1189,6 +1209,7 @@ socket.on('setGrid', (payload) => {
       const { type, item } = findMapItem(payload);
       if (!item) return emitError(socket, 'Карта не найдена');
       if (!Array.isArray(item.templates) || !item.templates.length) return;
+      room.pushUndo();
       item.templates = [];
       markDirty();
       broadcastMapUpdate(type);
@@ -1307,6 +1328,7 @@ socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       const token = findToken(payload && payload.tokenId);
       if (!token) return emitError(socket, 'Фишка не найдена');
+      room.pushUndo();
       room.setTokenConditions(token, payload && payload.conditions, payload && payload.conditionDurations);
       markDirty();
       emitToken('tokenUpdated', token);
@@ -1320,6 +1342,7 @@ socket.on('setGrid', (payload) => {
         return emitError(socket, `У фишки «${token.name}» нет прочности`);
       }
       const before = token.hp;
+      if (Number(payload && payload.hp) !== before) room.pushUndo();
       room.setTokenHp(token, payload && payload.hp);
       markDirty();
       emitToken('tokenUpdated', token);
@@ -1636,6 +1659,9 @@ socket.on('setGrid', (payload) => {
       const x = clampNumber(payload && payload.x, 0, 1, token.x);
       const y = clampNumber(payload && payload.y, 0, 1, token.y);
       if (x === token.x && y === token.y) return;
+      // Отмена общая на стол: мастер может вернуть и своё движение, и ход
+      // игрока своей фишкой.
+      room.pushUndo();
       token.x = x;
       token.y = y;
       markDirty();
@@ -1665,6 +1691,7 @@ socket.on('setGrid', (payload) => {
         && (!token.mapId || token.mapId === room.activeMapId)) {
         return emitError(socket, 'Фишка уже на этой карте');
       }
+      room.pushUndo();
       token.mapType = room.activeMap;
       token.mapId = room.activeMapId;
       token.x = 0.5;
@@ -1992,6 +2019,107 @@ socket.on('rollDice', (payload) => {
       room.journal = sanitizeText(payload && payload.text, LIMITS.maxJournal);
       markDirty();
       if (typeof ack === 'function') ack({ ok: true, text: room.journal });
+    });
+
+    socket.on('saveJournalEntry', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const entry = room.saveJournalEntry(payload || {});
+      if (!entry) {
+        emitError(socket, 'Нужен заголовок записи');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Нужен заголовок записи' });
+        return;
+      }
+      io.to('dm-sockets').emit('journalUpdated', room.journalEntries);
+      if (typeof ack === 'function') ack({ ok: true, entry });
+    });
+
+    socket.on('deleteJournalEntry', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      if (!room.deleteJournalEntry(payload && payload.id)) {
+        emitError(socket, 'Запись не найдена');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Запись не найдена' });
+        return;
+      }
+      io.to('dm-sockets').emit('journalUpdated', room.journalEntries);
+      if (typeof ack === 'function') ack({ ok: true });
+    });
+
+    socket.on('journalRequest', () => {
+      if (!requireDm(socket)) return;
+      socket.emit('journalUpdated', room.journalEntries);
+    });
+
+    socket.on('saveInventoryItem', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const item = room.saveInventoryItem(payload || {});
+      if (!item) {
+        emitError(socket, 'Нужно название предмета');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Нужно название предмета' });
+        return;
+      }
+      io.to('table').emit('inventoryUpdated', room.inventory);
+      if (typeof ack === 'function') ack({ ok: true, item });
+    });
+
+    socket.on('deleteInventoryItem', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      if (!room.deleteInventoryItem(payload && payload.id)) {
+        emitError(socket, 'Предмет не найден');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Предмет не найден' });
+        return;
+      }
+      io.to('table').emit('inventoryUpdated', room.inventory);
+      if (typeof ack === 'function') ack({ ok: true });
+    });
+
+    socket.on('rollRequest', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const request = room.addRollRequest(payload || {});
+      if (!request) {
+        emitError(socket, 'Нужно название проверки');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Нужно название проверки' });
+        return;
+      }
+      io.to('table').emit('rollRequestUpdated', room.rollRequests);
+      if (typeof ack === 'function') ack({ ok: true, request });
+    });
+
+    socket.on('rollRequestClear', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      room.clearRollRequest(payload && payload.id);
+      io.to('table').emit('rollRequestUpdated', room.rollRequests);
+      if (typeof ack === 'function') ack({ ok: true });
+    });
+
+    socket.on('undoDmAction', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      if (!room.undoLast()) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Нечего отменять' });
+        return;
+      }
+      broadcastSnapshot();
+      if (typeof ack === 'function') ack({ ok: true });
     });
 
     socket.on('ping', (payload) => {

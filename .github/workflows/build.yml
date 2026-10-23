@@ -149,6 +149,7 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox test/android-layout.js
 
       - name: Подготовить ключ подписи
+        id: keystore
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
@@ -160,14 +161,16 @@ jobs:
           set -euo pipefail
           for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
             if [ -z "${!name}" ]; then
-              echo "::error::Не задан секрет $name"
-              exit 1
+              echo "::warning::Нет секрета $name, к релизу пойдёт debug APK"
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
           done
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Собрать подписанный release APK
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && steps.keystore.outputs.ready == 'true'
         working-directory: android
         env:
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
@@ -183,8 +186,13 @@ jobs:
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
           mkdir -p release
-          cp android/app/build/outputs/apk/release/app-release.apk \
-            "release/DND-Table-${version}-android.apk"
+          if [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk \
+              "release/DND-Table-${version}-android.apk"
+          else
+            cp android/app/build/outputs/apk/debug/app-debug.apk \
+              "release/DND-Table-${version}-android-debug.apk"
+          fi
           ls -la release/*.apk
 
       - name: Прикрепить APK
@@ -192,7 +200,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dnd-table-android
-          path: release/DND-Table-*-android.apk
+          path: release/DND-Table-*-android*.apk
           retention-days: 30
 
   release:

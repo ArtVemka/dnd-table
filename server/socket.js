@@ -1162,7 +1162,8 @@ socket.on('setGrid', (payload) => {
         x: payload && payload.x,
         y: payload && payload.y,
         size: payload && payload.size,
-        rotation: payload && payload.rotation
+        rotation: payload && payload.rotation,
+        color: payload && payload.color
       });
       if (!template) return;
       item.templates.push(template);
@@ -1941,6 +1942,56 @@ socket.on('rollDice', (payload) => {
       } else {
         io.emit('chatMessage', message);
       }
+    });
+
+    /**
+     * Хендаут картинкой: мастер показывает письмо, портрет или обрывок карты.
+     * Файл хранится в папке кампании, в историю чата уходит только URL.
+     */
+    socket.on('chatImage', async (payload) => {
+      if (!requireDm(socket)) return;
+      const decoded = decodeImage(payload && payload.image, LIMITS.maxImageBytes);
+      if (decoded.error) return emitError(socket, decoded.error);
+
+      let fileName;
+      try {
+        fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
+      } catch (error) {
+        emitError(socket, error && error.quota ? error.message : 'Не получилось сохранить изображение');
+        onLog(`Ошибка сохранения картинки в чат: ${error.message}`);
+        return;
+      }
+
+      const text = sanitizeText(payload && payload.text, LIMITS.maxChatLength).trim();
+      const message = {
+        from: socket.data.name,
+        playerId: socket.data.playerId,
+        role: socket.data.role,
+        text,
+        image: `/files/${fileName}`,
+        time: new Date().toISOString()
+      };
+      room.chatHistory.push(message);
+      if (room.chatHistory.length > LIMITS.maxChatHistory) {
+        room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
+      }
+      markDirty();
+      io.emit('chatMessage', message);
+      onLog(`Мастер отправил изображение в чат`);
+    });
+
+    /**
+     * Журнал кампании: свободные заметки мастера. Хранится в кампании и
+     * приходит только мастеру, игрокам он не нужен.
+     */
+    socket.on('saveJournal', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      room.journal = sanitizeText(payload && payload.text, LIMITS.maxJournal);
+      markDirty();
+      if (typeof ack === 'function') ack({ ok: true, text: room.journal });
     });
 
     socket.on('ping', (payload) => {

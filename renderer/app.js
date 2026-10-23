@@ -66,7 +66,8 @@ grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetP
       initiative: { entries: [], turnId: null, round: 1 },
       combat: { enabled: false },
       diceHistory: [],
-      chatHistory: []
+      chatHistory: [],
+      journal: ''
     },
     viewedSheetPlayerId: null,
     sheetShownFor: null,
@@ -350,6 +351,20 @@ let chosenSheetId = null;
     }
     app.socket.emit(event, payload);
     return true;
+  }
+
+  /**
+   * Хендаут в чат: картинка сохраняется в папку кампании, в ленте остаётся URL.
+   * Текст из поля ввода идёт подписью, поэтому его не нужно вводить заново.
+   */
+  async function uploadChatImage(file, text) {
+    const read = await readImageFile(file);
+    if (read.canceled) return false;
+    if (read.error) {
+      toast(read.error, 'error');
+      return false;
+    }
+    return emit('chatImage', { image: read.dataUrl, text: text || '' });
   }
 
   /** Каждая вкладка карт хранит свой список картинок: {items, activeId}. */
@@ -643,7 +658,8 @@ let chosenSheetId = null;
         // самое значение и молчал, и кнопка выглядела сломанной.
         combat: state.combat || { enabled: false },
         diceHistory: state.diceHistory || [],
-        chatHistory: state.chatHistory || []
+        chatHistory: state.chatHistory || [],
+        journal: state.journal || ''
       };
       app.campaign = state.campaign || app.campaign;
       // Приключение приходит только мастеру; игроку сервер шлёт null.
@@ -1076,7 +1092,8 @@ let chosenSheetId = null;
           x: template.x,
           y: template.y,
           size: template.size,
-          rotation: template.rotation
+          rotation: template.rotation,
+          color: template.color
         }),
         onDeleteMapTemplate: (type, mapId, templateId) => emit('deleteMapTemplate', { type, mapId, templateId }),
         onClearMapTemplates: (type, mapId) => emit('clearMapTemplates', { type, mapId }),
@@ -1138,6 +1155,9 @@ let chosenSheetId = null;
         // Шёпот есть только у игрока за настоящим столом: у мастера нет
         // адресата, а в тренировке нет ведущего.
         canWhisper: () => app.role === 'player' && !app.training,
+        // Хендауты показывает мастер: у игрока нет ни кнопки, ни права.
+        canAttach: () => app.role === 'dm' && !app.training,
+        onImage: uploadChatImage,
         // Запрос поиска живёт в контроллере, а не в панели: снимок стола
         // приходит по переподключению, и подсветка должна восстановиться.
         onQuery: (value) => { app.chatQuery = value; },
@@ -2069,6 +2089,19 @@ let chosenSheetId = null;
     info.appendChild(el('div', 'addr__meta muted',
       'Скопируйте и отправьте игрокам: они вставляют его в приложении и подключаются напрямую.'));
     row.appendChild(info);
+    // QR рисует main-процесс: в renderer нет библиотеки кодирования.
+    if (window.desktop && window.desktop.irohTicketQr) {
+      const qr = el('img', 'addr__qr');
+      qr.alt = 'QR-код P2P-билета';
+      qr.hidden = true;
+      row.appendChild(qr);
+      window.desktop.irohTicketQr(ticket).then((result) => {
+        if (result && result.ok && result.dataUrl) {
+          qr.src = result.dataUrl;
+          qr.hidden = false;
+        }
+      }).catch(() => {});
+    }
     block.appendChild(row);
     root.appendChild(block);
     applyAddressesCollapsed();
@@ -2126,6 +2159,13 @@ let chosenSheetId = null;
         toast(`Копия кампании: ${result.dir}`, 'ok');
       });
       appBox.appendChild(backupButton);
+      if (app.role) {
+        const exportButton = el('button', 'btn btn--tiny', 'Экспорт сессии в Markdown');
+        exportButton.type = 'button';
+        exportButton.title = 'Журнал, чат и броски в одном файле';
+        exportButton.addEventListener('click', exportSession);
+        appBox.appendChild(exportButton);
+      }
     }
 
     // Имя за столом. У мастера оно по умолчанию «Мастер», и под таким именем
@@ -2158,6 +2198,33 @@ let chosenSheetId = null;
         ? 'Меняется сразу у всех участников стола.'
         : 'Сохранится и пригодится, когда вы запустите стол или подключитесь.'));
     box.appendChild(appBox);
+
+    if (app.role === 'dm' && app.room) {
+      const journalBox = el('div', 'box');
+      journalBox.appendChild(el('div', 'box__title', 'Журнал кампании'));
+      const journal = el('textarea', 'input settings__textarea');
+      journal.rows = 8;
+      journal.value = app.room.journal || '';
+      journal.placeholder = 'Что случилось в этой кампании: сюжет, обещания, планы на следующую игру…';
+      journalBox.appendChild(journal);
+      const saveJournal = el('button', 'btn btn--tiny', 'Сохранить журнал');
+      saveJournal.type = 'button';
+      saveJournal.addEventListener('click', () => {
+        app.room.journal = journal.value;
+        if (!app.socket || !app.connected) {
+          toast('Журнал сохранится вместе с кампанией', 'ok');
+          return;
+        }
+        app.socket.emit('saveJournal', { text: journal.value }, (result) => {
+          if (result && result.ok) toast('Журнал сохранён', 'ok');
+          else toast((result && result.error) || 'Не удалось сохранить журнал', 'error');
+        });
+      });
+      journalBox.appendChild(saveJournal);
+      journalBox.appendChild(el('div', 'box__note',
+        'Журнал видит только мастер. Он сохраняется вместе с кампанией.'));
+      box.appendChild(journalBox);
+    }
 
     /** Строка с галочкой: одинаково выглядит для движения, фокуса и звука. */
     const settingsCheck = (label, checked, setting, onChange) => {
@@ -3080,7 +3147,7 @@ const gridRow = el('div', 'settings__row');
       players: [], sheets: {}, maps: normalizeMapSlots(null),
       activeMap: null, grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetPerCell, offsetX: 0, offsetY: 0 },
       tokens: [], initiative: { entries: [], turnId: null, round: 1 }, combat: { enabled: false },
-      diceHistory: [], chatHistory: []
+      diceHistory: [], chatHistory: [], journal: ''
     };
     app.sheetShownFor = null;
     app.viewedSheetPlayerId = null;
@@ -3095,6 +3162,61 @@ const gridRow = el('div', 'settings__row');
   async function initHomeData() {
     const status = await desktop.hostStatus();
     if (!status.running) app.host = null;
+  }
+
+  /** Собирает Markdown сессии: журнал, чат и броски. */
+  function sessionMarkdown() {
+    const campaign = app.campaign || {};
+    const lines = [
+      `# ${campaign.name || 'Кампания'}`,
+      '',
+      `Экспорт: ${new Date().toLocaleString('ru-RU')}`,
+      ''
+    ];
+    if (app.role === 'dm') {
+      lines.push('## Журнал', '', app.room.journal || '(пусто)', '');
+    }
+    lines.push('## Чат', '');
+    for (const message of app.room.chatHistory || []) {
+      const time = message.time
+        ? new Date(message.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+        : '';
+      const author = message.from || (message.system ? 'Стол' : '');
+      let text = String(message.text || '').replace(/\n/g, ' ');
+      if (message.image) {
+        const url = assetUrl(message.image);
+        text += `${text ? ' ' : ''}[картинка](${url})`;
+      }
+      if (!text) continue;
+      lines.push(`- ${time ? `${time} ` : ''}${author ? `**${author}**: ` : ''}${text}`);
+    }
+    lines.push('', '## Броски', '');
+    for (const roll of app.room.diceHistory || []) {
+      const time = roll.time
+        ? new Date(roll.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+        : '';
+      const name = roll.playerName || '';
+      const dice = window.DnDDice;
+      const text = dice ? dice.describeRoll(roll) : `бросок ${roll.formula || ''}`;
+      lines.push(`- ${time ? `${time} ` : ''}${name ? `**${name}**: ` : ''}${text}`);
+    }
+    return lines.join('\n');
+  }
+
+  function exportSession() {
+    const name = String((app.campaign && app.campaign.name) || 'campaign')
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .slice(0, 60);
+    const blob = new Blob([sessionMarkdown()], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = el('a');
+    link.href = url;
+    link.download = `${name || 'campaign'}-${new Date().toISOString().slice(0, 10)}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('Сессия выгружена в Markdown', 'ok');
   }
 
   async function saveCampaign() {

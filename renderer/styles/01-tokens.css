@@ -99,6 +99,8 @@
   --expertise-soft: color-mix(in srgb, var(--gold) 18%, transparent);
   /* Затемнение под модальным окном и под заблокированным полем. */
   --scrim: color-mix(in srgb, var(--bg-deep) 74%, transparent);
+  /* Светлое поверх затемнения: подпись и подложка картинки в лайтбоксе. */
+  --on-scrim: #fff;
 --disabled-bg: color-mix(in srgb, var(--bg-deep) 26%, transparent);
   /* Лёгкая подсветка строки под курсором: от текста, а не белым, иначе на
      светлой теме строки выбеливались бы. */

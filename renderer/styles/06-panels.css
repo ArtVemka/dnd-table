@@ -875,6 +875,79 @@
   flex: 1;
 }
 
+.chat__attach {
+  white-space: nowrap;
+}
+
+.chat__image-button {
+  display: block;
+  margin: 2px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
+.chat__image {
+  display: block;
+  max-width: min(100%, 340px);
+  max-height: 240px;
+  object-fit: contain;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.chat-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim);
+}
+
+.chat-lightbox__box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(92vw, 1100px);
+  max-height: 92vh;
+}
+
+.chat-lightbox__image {
+  display: block;
+  max-width: 100%;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background: var(--on-scrim);
+}
+
+.chat-lightbox__caption {
+  color: var(--on-scrim);
+  font-size: 13px;
+  text-align: center;
+}
+
+.chat-lightbox__close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 /* --------------------------------------------------------------- Кубики */
 
 .dice__quick {

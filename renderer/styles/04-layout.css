@@ -636,6 +636,15 @@ body.is-resizing * {
   min-width: 0;
 }
 
+.addr__qr {
+  width: 140px;
+  height: 140px;
+  flex: none;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
 .addr__url {
   font-family: Consolas, "Courier New", monospace;
   font-size: 12.5px;

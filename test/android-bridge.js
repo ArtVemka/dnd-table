@@ -56,6 +56,11 @@ function createPage(options = {}) {
     handlers: {},
     addEventListener(type, handler) { this.handlers[type] = handler; }
   };
+  const scanButton = {
+    hidden: true,
+    handlers: {},
+    addEventListener(type, handler) { this.handlers[type] = handler; }
+  };
   const input = {
     value: '',
     focused: false,
@@ -85,6 +90,10 @@ function createPage(options = {}) {
         calls.push({ name: 'readClipboard', id });
         pending.set(id, (json) => window.__androidResult(id, json));
       },
+      scanQr(id) {
+        calls.push({ name: 'scanQr', id });
+        pending.set(id, (json) => window.__androidResult(id, json));
+      },
       openExternal(url) {
         calls.push({ name: 'openExternal', url });
       }
@@ -101,6 +110,7 @@ function createPage(options = {}) {
     },
     getElementById(id) {
       if (id === 'btn-paste-ticket') return button;
+      if (id === 'btn-scan-ticket') return scanButton;
       if (id === 'join-p2p-ticket') return input;
       if (id === 'join-status') return status;
       return null;
@@ -121,7 +131,7 @@ function createPage(options = {}) {
     setTimeout
   });
   vm.runInContext(source, context, { filename: bridgePath });
-  return { window, document, calls, pending, links, storage, button, input, status };
+  return { window, document, calls, pending, links, storage, button, scanButton, input, status };
 }
 
 async function main() {
@@ -175,6 +185,23 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.strictEqual(page.input.value, '');
     assert.match(page.status.textContent, /Буфер обмена пуст/);
+  });
+
+  await check('кнопка QR отдаёт распознанный билет', async () => {
+    assert.strictEqual(page.scanButton.hidden, false, 'кнопка QR осталась скрытой');
+    const handler = page.scanButton.handlers.click;
+    assert(handler, 'у кнопки QR нет обработчика');
+    page.input.value = '';
+    page.input.events = 0;
+    handler();
+    for (const callback of page.pending.values()) {
+      callback('{"ok":true,"text":"  endpoint-qr  "}');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const call = page.calls.find((item) => item.name === 'scanQr');
+    assert(call, 'Kotlin не получил запрос сканера');
+    assert.strictEqual(page.input.value, 'endpoint-qr');
+    assert.strictEqual(page.input.events, 1, 'поле не узнало о QR-билете');
   });
 
   await check('конфигурация и статус стола не требуют нативных вызовов', async () => {

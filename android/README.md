@@ -8,7 +8,8 @@
 ## Что умеет
 
 * Вход за игрока по билету мастера, тот же протокол `dnd-table-p2p/1`.
-* Билет вставляется кнопкой из буфера обмена.
+* Билет вставляется кнопкой из буфера обмена или сканируется QR-кодом с экрана
+  мастера.
 * Карта, фишки, чат, кубики, порядок боя, свет, туман и лист персонажа.
 * Лист можно заполнить до подключения и выбрать при входе.
 * Темы, звук и настройки работают как на компьютере.
@@ -36,10 +37,32 @@ cd android
 
 APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+Release-сборка подписывается ключом из переменных окружения. Без них
+`assembleRelease` собирается debug-ключом, чтобы локальная проверка не падала.
+
+```bash
+export ANDROID_KEYSTORE_FILE=/path/to/release.keystore
+export ANDROID_KEYSTORE_PASSWORD=...
+export ANDROID_KEY_ALIAS=...
+export ANDROID_KEY_PASSWORD=...
+./gradlew assembleRelease
+```
+
+CI берёт ключ из секретов `ANDROID_KEYSTORE_BASE64`,
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` и `ANDROID_KEY_PASSWORD`,
+собирает `assembleRelease` на теге и прикрепляет APK к релизу. Keystore в
+репозиторий не попадает.
+
 Проверка моста без Android:
 
 ```bash
 node test/android-bridge.js
+```
+
+Проверка мобильной раскладки после `assembleDebug`:
+
+```bash
+npx electron test/android-layout.js
 ```
 
 ## Как устроено

@@ -57,6 +57,11 @@ function collectFileRefs(state) {
   }
   for (const token of Array.isArray(state && state.tokens) ? state.tokens : []) add(token && token.imageUrl);
   for (const player of Array.isArray(state && state.players) ? state.players : []) add(player && player.avatar);
+  // Картинки-хендауты живут в истории чата, но файл у них тот же, что у карт
+  // и портретов. Без этой строки свалка удалила бы отправленное мастером.
+  for (const message of Array.isArray(state && state.chatHistory) ? state.chatHistory : []) {
+    add(message && message.image);
+  }
   const adventure = state && state.adventure ? state.adventure : {};
   for (const actor of Array.isArray(adventure.actors) ? adventure.actors : []) add(actor && actor.image);
   for (const item of Array.isArray(adventure.items) ? adventure.items : []) add(item && item.image);
@@ -169,6 +174,7 @@ class CampaignStore {
         tokens: [],
         diceHistory: [],
         chatHistory: [],
+        journal: '',
         savedAt: now
       }
     };

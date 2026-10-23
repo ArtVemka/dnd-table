@@ -2528,6 +2528,12 @@ body::after {
   opacity: 0.8;
 }
 
+.map-grid-menu__color {
+  width: 48px;
+  height: 28px;
+  padding: 2px;
+}
+
 .map-template__toggle.is-on {
   border-color: var(--accent);
   color: var(--accent-hover);

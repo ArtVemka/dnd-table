@@ -1617,6 +1617,16 @@
         assert.strictEqual(sent[0].template.kind, 'sphere');
         assert.strictEqual(sent[0].template.size, 20);
         assert(mapView.templateLayer.querySelector('.map-template--sphere'), 'сфера не нарисована');
+        mapView.templateDraft = { kind: 'square', size: 20, color: '#66ccff' };
+        mapView.surface.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, clientX: x, clientY: y
+        }));
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: x + 80, clientY: y }));
+        window.dispatchEvent(new PointerEvent('pointerup', {}));
+        assert.strictEqual(sent.length, 2, `квадрат не ушёл на стол: ${sent.length}`);
+        const square = mapView.templateLayer.querySelector('.map-template--square');
+        assert(square, 'квадрат не нарисован');
+        assert.strictEqual(square.getAttribute('stroke'), '#66ccff');
         delete mapView.handlers.onAddMapTemplate;
       });
     });
@@ -2628,6 +2638,42 @@
     check('чат отправляет введённый текст', () => {
       assert(sentText === 'Проверка связи', `отправлено: ${sentText}`);
       assert(chatHost.querySelector('.chat__form input').value === '', 'поле не очищено');
+    });
+
+    const imageHost = document.createElement('div');
+    sandbox.appendChild(imageHost);
+    const imagePanel = new window.TableUI.ChatPanel(imageHost, {
+      canAttach: () => true,
+      resolveUrl: (url) => (url && url.startsWith('/') ? `http://стол${url}` : (url || ''))
+    });
+    imagePanel.renderAll([{
+      from: 'Мастер',
+      role: 'dm',
+      text: 'Письмо от барона',
+      image: '/files/handout.png',
+      time: '2026-01-01T10:05:00Z'
+    }]);
+    check('картинка-хендаут показывается в чате и открывается целиком', () => {
+      const button = imageHost.querySelector('.chat__image-button');
+      assert(button, 'нет кнопки-картинки');
+      const thumb = button.querySelector('img');
+      assert.strictEqual(thumb.getAttribute('src'), 'http://стол/files/handout.png');
+      assert(!imageHost.querySelector('.chat__attach').hidden, 'у мастера нет кнопки прикрепления');
+      button.click();
+      const overlay = document.querySelector('.chat-lightbox');
+      assert(overlay, 'лайтбокс не открылся');
+      assert.strictEqual(overlay.querySelector('img').getAttribute('src'), 'http://стол/files/handout.png');
+      overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      assert(!document.querySelector('.chat-lightbox'), 'Escape не закрыл лайтбокс');
+    });
+
+    const playerImageHost = document.createElement('div');
+    const playerImagePanel = new window.TableUI.ChatPanel(playerImageHost, {
+      canAttach: () => false
+    });
+    playerImagePanel.renderAll([]);
+    check('у игрока нет кнопки прикрепления картинки', () => {
+      assert(playerImageHost.querySelector('.chat__attach').hidden, 'кнопка видна игроку');
     });
 
     const diceHost = document.createElement('div');
@@ -4293,6 +4339,12 @@
       assert(grid && !grid.disabled, 'настройка сетки недоступна ДМ');
       assert(cell && !cell.disabled, 'настройка размера клетки недоступна ДМ');
     });
+    check('в настройках есть журнал кампании и выгрузка сессии', () => {
+      const overlay = settingsOverlay();
+      assert(overlay.querySelector('.settings__textarea'), 'нет поля журнала');
+      assert(overlay.textContent.includes('Журнал кампании'), 'нет раздела журнала');
+      assert(byText(overlay, 'Экспорт сессии в Markdown'), 'нет кнопки выгрузки сессии');
+    });
 
     document.querySelector('.modal-overlay [data-setting="grid"]').click();
     await waitFor(() => playerInbox.grid && playerInbox.grid.enabled === true, 'сетка у игрока');
@@ -5170,7 +5222,10 @@
       assert(document.querySelectorAll('#tab-tokens .token-row').length >= 1, 'фишка не появилась');
     });
     check('новая фишка скрыта, и игрок о ней не знает', () => {
-      assert(playerInbox.tokens.length === 0, `игрок получил скрытую фишку: ${playerInbox.tokens.length}`);
+      assert(
+        !playerInbox.tokens.some((token) => token.name === 'Смоук-фишка'),
+        'игрок получил скрытую фишку'
+      );
       const row = [...document.querySelectorAll('#tab-tokens .token-row')]
         .find((node) => node.textContent.includes('Смоук-фишка'));
       assert(row && row.classList.contains('token-row--hidden'), 'у мастера фишка не помечена как скрытая');
@@ -5189,12 +5244,13 @@
     });
     revealButton.click();
     await waitFor(
-      () => playerInbox.tokens.length === 1,
+      () => playerInbox.tokens.some((token) => token.name === 'Смоук-фишка'),
       'показ фишки игрокам'
     );
+    const smokeToken = playerInbox.tokens.find((token) => token.name === 'Смоук-фишка');
     check('показанная фишка доехала до игрока', () => {
-      assert(playerInbox.tokens[0].name === 'Смоук-фишка', 'имя фишки');
-      assert(playerInbox.tokens[0].hidden === false, 'фишка осталась скрытой');
+      assert(smokeToken, 'фишка не пришла игроку');
+      assert(smokeToken.hidden === false, 'фишка осталась скрытой');
     });
     check('после показа в списке мастера не появилось дубля', () => {
       const rows = [...document.querySelectorAll('#tab-tokens .token-row')]
@@ -5206,7 +5262,7 @@
         'в списке фишек изменилось число строк'
       );
     });
-    const smokeTokenId = playerInbox.tokens[0].id;
+    const smokeTokenId = smokeToken.id;
 
     // И обратно: спрятать показанную фишку. Игрок должен получить уведомление,
     // чтобы убрать её у себя с карты.

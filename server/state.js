@@ -62,6 +62,8 @@ const LIMITS = {
   maxSpellSlotsPerLevel: 9,
   /** Заметка мастера: столько же, сколько заметки в листе. */
   maxDmNote: 4000,
+  /** Журнал кампании: длиннее одной сессии, но не бесконечный. */
+  maxJournal: 20000,
   /** Строк атак в листе: больше двадцати за бой всё равно не пригодится. */
   maxSheetAttacks: 20,
   maxLevel: 20,
@@ -228,13 +230,14 @@ function clampSlotArray(raw) {
 }
 
 /** Виды шаблонов заклинаний и их пределы. */
-const TEMPLATE_KINDS = ['sphere', 'cone', 'line'];
+const TEMPLATE_KINDS = ['sphere', 'cone', 'line', 'square'];
 const TEMPLATE_LIMITS = { maxPerMap: 20, minSize: 5, maxSize: 120 };
 
 /**
- * Приводит шаблон к безопасному виду: вид, центр, размер в футах и поворот.
+ * Приводит шаблон к безопасному виду: вид, центр, размер в футах, поворот
+ * и цвет. Пустой цвет означает цвет по виду из оформления.
  * @param {unknown} raw
- * @returns {{id: string, kind: string, x: number, y: number, size: number, rotation: number}|null}
+ * @returns {{id: string, kind: string, x: number, y: number, size: number, rotation: number, color: string}|null}
  */
 function normalizeTemplate(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -245,7 +248,10 @@ function normalizeTemplate(raw) {
     x: clampNumber(value.x, 0, 1, 0.5),
     y: clampNumber(value.y, 0, 1, 0.5),
     size: clampInt(value.size, TEMPLATE_LIMITS.minSize, TEMPLATE_LIMITS.maxSize, 20),
-    rotation: clampInt(value.rotation, 0, 359, 0)
+    rotation: clampInt(value.rotation, 0, 359, 0),
+    color: typeof value.color === 'string' && /^#[0-9a-f]{6}$/i.test(value.color)
+      ? value.color
+      : ''
   };
 }
 
@@ -681,6 +687,8 @@ class RoomState {
     this.diceHistory = [];
     /** @type {object[]} */
     this.chatHistory = [];
+    /** Заметки мастера по кампании, не путать с импортированным журналом. */
+    this.journal = '';
     /**
      * Импортированное внешнее приключение: журнал, предметы, таблицы, NPC.
      * null, пока приключение не импортировано (в том числе у кампаний
@@ -769,6 +777,7 @@ class RoomState {
     this.chatHistory = Array.isArray(data.chatHistory)
       ? data.chatHistory.slice(-LIMITS.maxChatHistory)
       : [];
+    this.journal = sanitizeText(data.journal, LIMITS.maxJournal);
     this.initiative = normalizeInitiative(data.initiative);
     this.combat = { enabled: Boolean(data.combat && data.combat.enabled) };
     this.adventure = normalizeAdventure(data.adventure);
@@ -1252,6 +1261,7 @@ fogMask: normalizeFog(source.fogMask),
       combat: this.combat,
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory),
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory),
+      journal: this.journal,
       adventure: this.adventure,
       savedAt: new Date().toISOString()
     };
@@ -1517,7 +1527,10 @@ fogMask: normalizeFog(source.fogMask),
       // Шёпот игрока мастеру отдаём только мастеру и самому игроку: остальным
       // его не видно ни в ленте, ни после переподключения.
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory)
-        .filter((message) => isDm || !message.whisper || message.playerId === viewer.playerId)
+        .filter((message) => isDm || !message.whisper || message.playerId === viewer.playerId),
+      // Журнал кампании — заготовки мастера. Игроку он не нужен и не должен
+      // утекать в снимок состояния.
+      journal: isDm ? this.journal : ''
     };
   }
 

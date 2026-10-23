@@ -19,6 +19,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanIntentResult
+import com.journeyapps.barcodescanner.ScanOptions
 import computer.iroh.IrohAndroid
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -27,6 +30,21 @@ import org.json.JSONObject
 class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var tunnel: IrohTunnel
+    private var pendingScanId: String? = null
+
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result: ScanIntentResult ->
+        val id = pendingScanId
+        pendingScanId = null
+        if (id != null) {
+            val contents = result.contents
+            val payload = if (contents.isNullOrBlank()) {
+                JSONObject().put("ok", false).put("error", "QR-код не распознан")
+            } else {
+                JSONObject().put("ok", true).put("text", contents)
+            }
+            reply(id, payload)
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Suppress("DEPRECATION")
@@ -165,6 +183,28 @@ class MainActivity : AppCompatActivity() {
                     JSONObject().put("ok", true).put("text", text)
                 }
                 reply(id, result)
+            }
+        }
+
+        @JavascriptInterface
+        fun scanQr(id: String) {
+            runOnUiThread {
+                if (pendingScanId != null) {
+                    reply(id, JSONObject().put("ok", false).put("error", "Сканер уже открыт"))
+                    return@runOnUiThread
+                }
+                pendingScanId = id
+                try {
+                    val options = ScanOptions()
+                    options.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    options.setPrompt("Наведите камеру на QR-код билета")
+                    options.setBeepEnabled(false)
+                    options.setOrientationLocked(false)
+                    scanLauncher.launch(options)
+                } catch (t: Throwable) {
+                    pendingScanId = null
+                    reply(id, JSONObject().put("ok", false).put("error", t.message ?: "Не удалось открыть сканер"))
+                }
             }
         }
 

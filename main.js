@@ -560,6 +560,25 @@ function registerIpc() {
     }
   });
 
+  // QR-код для мастера: билет длинный, и на телефон его проще навести
+  // камерой, чем пересылать текстом. Картинку рисует main-процесс.
+  ipcMain.handle('iroh:ticket-qr', async (event, ticketStr) => {
+    const ticket = typeof ticketStr === 'string' ? ticketStr.trim() : '';
+    if (!ticket) return { ok: false, error: 'Нет билета' };
+    if (ticket.length > 2000) return { ok: false, error: 'Билет слишком длинный для QR-кода' };
+    try {
+      const dataUrl = await require('qrcode').toDataURL(ticket, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 240,
+        color: { dark: '#101418', light: '#ffffff' }
+      });
+      return { ok: true, dataUrl };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
   ipcMain.handle('iroh:connect', async (event, ticketStr) => {
     try {
       if (!ticketStr || typeof ticketStr !== 'string') {

@@ -653,6 +653,13 @@
   min-width: 150px;
 }
 
+.settings__textarea {
+  width: 100%;
+  min-height: 160px;
+  margin: 8px 0;
+  resize: vertical;
+}
+
 /* ------------------------------------------- Лист в отдельном окне */
 
 .sheet-window {

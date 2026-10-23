@@ -2135,15 +2135,16 @@ async function main() {
   const templateId = 'tpl-test-1';
   emit(dm, 'addMapTemplate', {
     type: fogType, mapId: fogMap.id, templateId,
-    kind: 'cone', x: 0.4, y: 0.5, size: 30, rotation: 90
+    kind: 'square', x: 0.4, y: 0.5, size: 30, rotation: 90, color: '#66ccff'
   });
   await waitFor(() => litMap().templates && litMap().templates.length === 1, 'шаблон дошёл до стола');
-  check('шаблон сохраняет вид, размер и поворот', () => {
+  check('квадратный шаблон сохраняет вид, размер, поворот и цвет', () => {
     const template = litMap().templates[0];
     assert.strictEqual(template.id, templateId);
-    assert.strictEqual(template.kind, 'cone');
+    assert.strictEqual(template.kind, 'square');
     assert.strictEqual(template.size, 30);
     assert.strictEqual(template.rotation, 90);
+    assert.strictEqual(template.color, '#66ccff');
   });
 
   p1.log.errorMessage.length = 0;
@@ -2821,9 +2822,62 @@ async function main() {
     assert.ok(!other.chatHistory.some((message) => message.whisper));
   });
 
+  p1.log.errorMessage.length = 0;
+  p2.log.chatMessage.length = 0;
+  emit(p1, 'chatImage', { image: PNG_1PX, text: 'Игроку нельзя' });
+  const deniedImage = await waitFor(
+    () => p1.log.errorMessage.find((item) => /только ДМ/.test(item.message)),
+    'отказ игроку на картинку'
+  );
+  check('картинку в чат отправляет только мастер', () => {
+    assert.match(deniedImage.message, /только ДМ/);
+    assert.strictEqual(p2.log.chatMessage.length, 0);
+  });
+
+  p2.log.chatMessage.length = 0;
+  dm.log.chatMessage.length = 0;
+  emit(dm, 'chatImage', { image: PNG_1PX, text: 'Письмо от барона' });
+  const handout = await waitFor(() => p2.log.chatMessage[0], 'картинка-хендаут в чате');
+  const handoutFile = path.basename(handout.image || '');
+  const handoutResponse = await httpGet(`${url}${handout.image}`);
+  check('мастер отправляет картинку, файл лежит в кампании и раздаётся', () => {
+    assert.strictEqual(handout.role, 'dm');
+    assert.strictEqual(handout.text, 'Письмо от барона');
+    assert.match(handout.image, /^\/files\/[A-Za-z0-9_.-]+$/);
+    assert.ok(fs.existsSync(path.join(root, 'campaigns', campaign.id, 'files', handoutFile)), 'файла нет');
+    assert.strictEqual(handoutResponse.status, 200);
+    assert.ok(handoutResponse.body.length > 8, 'пустой ответ файла');
+  });
+  const dmHandout = await waitFor(
+    () => dm.log.chatMessage.find((message) => message.image === handout.image),
+    'картинка у мастера'
+  );
+  check('картинку-хендаут видит и сам мастер', () => {
+    assert.ok(dmHandout);
+  });
+
   const { ack: longJoin } = await open({ name: 'Я'.repeat(120), playerId: 'p-long' });
   check('слишком длинное имя обрезается до 40 символов', () => {
     assert.strictEqual(longJoin.you.name.length, 40);
+  });
+
+  const journalText = 'Журнал мастера: сожжённая мельница, долг барона и тайник под мостом.';
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'saveJournal', { text: 'Игроку нельзя' });
+  const deniedJournal = await waitFor(
+    () => p1.log.errorMessage.find((item) => /только ДМ/.test(item.message)),
+    'отказ игроку на журнал'
+  );
+  check('журнал кампании правит только мастер', () => {
+    assert.match(deniedJournal.message, /только ДМ/);
+    assert.strictEqual(room.journal, '');
+  });
+
+  emit(dm, 'saveJournal', { text: journalText });
+  await waitFor(() => room.journal === journalText, 'сохранение журнала мастером');
+  check('журнал виден мастеру и скрыт от игрока', () => {
+    assert.strictEqual(room.snapshotFor({ playerId: 'dm', role: ROLE_DM }).journal, journalText);
+    assert.strictEqual(room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).journal, '');
   });
 
   /* -------------------------------------------- сохранение и загрузка */
@@ -2895,15 +2949,19 @@ async function main() {
   fs.mkdirSync(path.join(root, 'campaigns', sweepId, 'files'), { recursive: true });
   const keepName = await store.saveImage(sweepId, Buffer.from('keep'), 'png');
   const dropName = await store.saveImage(sweepId, Buffer.from('drop'), 'png');
+  const chatKeepName = await store.saveImage(sweepId, Buffer.from('chat'), 'png');
   const sweepRemoved = await store.sweepFiles(sweepId, {
     maps: { world: { items: [{ url: `/files/${keepName}` }] }, battle: { items: [] }, sketch: { items: [] } },
     tokens: [],
     players: [],
+    chatHistory: [{ image: `/files/${chatKeepName}` }],
     adventure: null
   }, { keepMs: 0 });
   check('свалка удаляет файл без ссылок и оставляет нужный', () => {
     assert.strictEqual(sweepRemoved, 1);
     assert.ok(fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', keepName)));
+    assert.ok(fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', chatKeepName)),
+      'картинка из чата удалена как мусор');
     assert.ok(!fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', dropName)));
   });
 
@@ -2955,6 +3013,11 @@ async function main() {
     assert.ok(restored.diceHistory.length > 0, 'нет истории бросков');
     assert.ok(restored.chatHistory.some((message) => message.isRoll), 'нет объявления броска в чате');
     assert.ok(restored.chatHistory.some((message) => message.text === 'Привет, стол!'), 'нет обычного сообщения');
+    assert.ok(
+      restored.chatHistory.some((message) => message.image && /^\/files\//.test(message.image)),
+      'нет картинки-хендаута в чате'
+    );
+    assert.strictEqual(restored.journal, journalText, 'журнал мастера не пережил загрузку');
   });
   check('все игроки после перезапуска помечены офлайн', () => {
     assert.ok(restored.players.size >= 4);

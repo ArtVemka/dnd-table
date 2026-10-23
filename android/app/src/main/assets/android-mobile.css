@@ -20,7 +20,8 @@ html.is-android #btn-open-datadir {
 }
 
 /* На телефоне вставлять длинный билет вручную неудобно. */
-html.is-android #btn-paste-ticket {
+html.is-android #btn-paste-ticket,
+html.is-android #btn-scan-ticket {
   display: inline-flex;
   align-self: flex-start;
   margin-top: 6px;

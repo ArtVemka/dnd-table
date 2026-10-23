@@ -151,6 +151,9 @@
     readClipboard: function readClipboard() {
       return call('readClipboard');
     },
+    scanQr: function scanQr() {
+      return call('scanQr');
+    },
 
     onCampaignSaved: function onCampaignSaved() {
       return function unsubscribe() {};
@@ -164,26 +167,51 @@
   };
 
   /**
-   * Длинный билет удобнее вставить кнопкой, чем целиком тащить через
-   * долгое нажатие в поле.
+   * Длинный билет удобнее вставить кнопкой или навести камеру на QR, чем
+   * целиком тащить через долгое нажатие в поле.
    */
   function setupPasteTicket() {
-    var button = document.getElementById('btn-paste-ticket');
+    var paste = document.getElementById('btn-paste-ticket');
+    var scan = document.getElementById('btn-scan-ticket');
     var input = document.getElementById('join-p2p-ticket');
-    if (!button || !input) return;
-    button.hidden = false;
-    button.addEventListener('click', function onPasteTicket() {
-      global.desktop.readClipboard().then(function (result) {
-        if (!result || !result.ok || !result.text) {
-          var status = document.getElementById('join-status');
-          if (status) status.textContent = (result && result.error) || 'Буфер обмена пуст';
-          return;
-        }
-        input.value = String(result.text).trim();
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.focus();
+    if (!input) return;
+
+    function fillTicket(text) {
+      input.value = String(text).trim();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+    }
+
+    function showError(result, fallback) {
+      var status = document.getElementById('join-status');
+      if (status) status.textContent = (result && result.error) || fallback;
+    }
+
+    if (paste) {
+      paste.hidden = false;
+      paste.addEventListener('click', function onPasteTicket() {
+        global.desktop.readClipboard().then(function (result) {
+          if (!result || !result.ok || !result.text) {
+            showError(result, 'Буфер обмена пуст');
+            return;
+          }
+          fillTicket(result.text);
+        });
       });
-    });
+    }
+
+    if (scan) {
+      scan.hidden = false;
+      scan.addEventListener('click', function onScanTicket() {
+        global.desktop.scanQr().then(function (result) {
+          if (!result || !result.ok || !result.text) {
+            showError(result, 'QR-код не распознан');
+            return;
+          }
+          fillTicket(result.text);
+        });
+      });
+    }
   }
 
   // На телефоне мастерских экранов нет: остаются вход за игрока, лист и настройки.

@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('desktop', {
   irohStart: () => ipcRenderer.invoke('iroh:start'),
   irohStop: () => ipcRenderer.invoke('iroh:stop'),
   irohCreateTicket: () => ipcRenderer.invoke('iroh:create-ticket'),
+  irohTicketQr: (ticketStr) => ipcRenderer.invoke('iroh:ticket-qr', ticketStr),
   irohConnect: (ticketStr) => ipcRenderer.invoke('iroh:connect', ticketStr),
   irohListPeers: () => ipcRenderer.invoke('iroh:list-peers'),
   irohGetStatus: () => ipcRenderer.invoke('iroh:get-status'),

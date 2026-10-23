@@ -1198,7 +1198,7 @@
       const templateKindRow = el('label', 'map-grid-menu__row');
       templateKindRow.appendChild(el('span', 'map-grid-menu__label', 'Фигура'));
       const templateKind = el('select', 'select map-template-menu__kind');
-      for (const [id, label] of [['sphere', 'Сфера'], ['cone', 'Конус'], ['line', 'Линия']]) {
+      for (const [id, label] of [['sphere', 'Сфера'], ['cone', 'Конус'], ['line', 'Линия'], ['square', 'Квадрат']]) {
         const option = el('option', null, label);
         option.value = id;
         templateKind.appendChild(option);
@@ -1217,8 +1217,16 @@
       this.templateSize = templateSize;
       templateSizeRow.appendChild(templateSize);
       templateMenu.appendChild(templateSizeRow);
+      const templateColorRow = el('label', 'map-grid-menu__row');
+      templateColorRow.appendChild(el('span', 'map-grid-menu__label', 'Цвет'));
+      const templateColor = el('input', 'input map-grid-menu__color');
+      templateColor.type = 'color';
+      templateColor.value = '#6aa9ff';
+      this.templateColor = templateColor;
+      templateColorRow.appendChild(templateColor);
+      templateMenu.appendChild(templateColorRow);
       templateMenu.appendChild(el('div', 'map-grid-menu__note',
-        'Протяните по карте от центра сферы или вершины конуса: направление протяжки задаёт поворот.'));
+        'Протяните по карте от центра сферы или квадрата, либо от вершины конуса или линии: направление протяжки задаёт поворот.'));
       const templatePlace = el('button', 'btn btn--accent btn--tiny', 'Поставить');
       templatePlace.type = 'button';
       templatePlace.addEventListener('click', () => this.startTemplatePlacement());
@@ -3557,13 +3565,16 @@
     startTemplatePlacement() {
       const kind = this.templateKind ? this.templateKind.value : 'sphere';
       const size = Math.max(5, Math.min(120, Math.round(Number(this.templateSize && this.templateSize.value) || 20)));
-      this.templateDraft = { kind, size };
+      const color = this.templateColor && /^#[0-9a-f]{6}$/i.test(this.templateColor.value)
+        ? this.templateColor.value
+        : '#6aa9ff';
+      this.templateDraft = { kind, size, color };
       this.templateMenu.hidden = true;
       if (this.templateButton) this.templateButton.classList.remove('is-on');
       this.surface.classList.add('is-templating');
       if (this.handlers.onNotice) {
-        this.handlers.onNotice(kind === 'sphere'
-          ? 'Нажмите на центр сферы и потяните, чтобы задать радиус'
+        this.handlers.onNotice(kind === 'sphere' || kind === 'square'
+          ? 'Нажмите на центр фигуры и потяните, чтобы задать размер и поворот'
           : 'Нажмите на вершину и потяните в сторону действия');
       }
     }
@@ -3589,7 +3600,8 @@
         x: start.x,
         y: start.y,
         size: draft.size,
-        rotation: Math.round(rotation)
+        rotation: Math.round(rotation),
+        color: draft.color || ''
       };
     }
 
@@ -3628,12 +3640,25 @@
       const dirX = Math.sin(angle);
       const dirY = -Math.cos(angle);
       const namespace = 'http://www.w3.org/2000/svg';
-      const shape = document.createElementNS(namespace, template.kind === 'sphere' ? 'circle' : template.kind === 'cone' ? 'polygon' : 'line');
+      const tag = template.kind === 'sphere'
+        ? 'circle'
+        : template.kind === 'square'
+          ? 'rect'
+          : template.kind === 'cone'
+            ? 'polygon'
+            : 'line';
+      const shape = document.createElementNS(namespace, tag);
       shape.setAttribute('class', `map-template map-template--${template.kind}`);
       if (template.kind === 'sphere') {
         shape.setAttribute('cx', String(cx));
         shape.setAttribute('cy', String(cy));
         shape.setAttribute('r', String(length));
+      } else if (template.kind === 'square') {
+        shape.setAttribute('x', String(cx - length / 2));
+        shape.setAttribute('y', String(cy - length / 2));
+        shape.setAttribute('width', String(length));
+        shape.setAttribute('height', String(length));
+        shape.setAttribute('transform', `rotate(${template.rotation} ${cx} ${cy})`);
       } else if (template.kind === 'cone') {
         const baseX = cx + dirX * length;
         const baseY = cy + dirY * length;
@@ -3650,6 +3675,13 @@
         shape.setAttribute('y1', String(cy));
         shape.setAttribute('x2', String(cx + dirX * length));
         shape.setAttribute('y2', String(cy + dirY * length));
+      }
+      if (template.color && /^#[0-9a-f]{6}$/i.test(template.color)) {
+        shape.setAttribute('stroke', template.color);
+        if (template.kind !== 'line') {
+          shape.setAttribute('fill', template.color);
+          shape.setAttribute('fill-opacity', '0.16');
+        }
       }
       layer.appendChild(shape);
     }
@@ -4813,6 +4845,34 @@
       this.input = input;
       form.appendChild(input);
 
+      // Хендаут картинкой: мастер показывает письмо, портрет или обрывок
+      // карты. Игроку кнопка не нужна, поэтому её видимость решает коннектор.
+      const attach = el('button', 'btn btn--ghost btn--tiny chat__attach', '📎');
+      attach.type = 'button';
+      attach.title = 'Прикрепить изображение';
+      attach.setAttribute('aria-label', 'Прикрепить изображение');
+      attach.hidden = true;
+      this.attachButton = attach;
+      form.appendChild(attach);
+
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = 'image/png,image/jpeg,image/webp';
+      fileInput.hidden = true;
+      // input.value хранит подпись, и после успешной отправки её нужно очистить.
+      fileInput.addEventListener('change', () => {
+        const file = fileInput.files && fileInput.files[0];
+        const caption = input.value.trim();
+        fileInput.value = '';
+        if (!file || !this.handlers.onImage) return;
+        const sent = this.handlers.onImage(file, caption);
+        Promise.resolve(sent).then((ok) => {
+          if (ok && input.value.trim() === caption) input.value = '';
+        });
+      });
+      attach.addEventListener('click', () => fileInput.click());
+      form.appendChild(fileInput);
+
       // Шёпот мастеру: одноразовый режим, после отправки выключается сам.
       // Скрыт у мастера и в тренировочном столе, где ведущего нет.
       const whisper = el('button', 'btn btn--ghost btn--tiny chat__whisper', 'Шёпот');
@@ -4906,6 +4966,9 @@
         this.whisperButton.hidden = !allowed;
         if (!allowed) this.setWhisper(false);
       }
+      if (this.attachButton) {
+        this.attachButton.hidden = !(this.handlers.canAttach && this.handlers.canAttach());
+      }
       // Собираем ленту в фрагмент и вставляем один раз: appendChild в цикле
       // заставляет браузер пересчитывать раскладку на каждую строку. Заодно
       // не гоняем поиск по всей ленте после каждого сообщения.
@@ -4940,11 +5003,11 @@
       }
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
       if (message.isRoll) row.classList.add('chat__msg--roll');
+      const resolve = this.handlers.resolveUrl || ((url) => url || '');
       const head = el('div', 'chat__head');
       // Портрет только у бросков: он отвечает на «кто именно бросил», а у
       // обычной реплики автор и так виден по имени.
       if (message.isRoll && message.avatar) {
-        const resolve = this.handlers.resolveUrl || ((url) => url || '');
         head.appendChild(avatarNode(resolve(message.avatar), message.from, 'chat__avatar'));
       }
       head.appendChild(el('span', 'chat__author', message.from));
@@ -4953,7 +5016,22 @@
       if (message.whisper) head.appendChild(el('span', 'badge badge--whisper', 'мастеру'));
       head.appendChild(el('span', 'chat__time', formatTime(message.time)));
       row.appendChild(head);
-      row.appendChild(el('div', 'chat__text', message.isRoll ? `🎲 ${message.text}` : message.text));
+      if (message.image) {
+        const src = resolve(message.image);
+        const open = el('button', 'chat__image-button');
+        open.type = 'button';
+        open.title = 'Открыть изображение';
+        const picture = el('img', 'chat__image');
+        picture.src = src;
+        picture.alt = message.text || 'Изображение';
+        picture.loading = 'lazy';
+        open.appendChild(picture);
+        open.addEventListener('click', () => this.openImage(src, message.text || 'Изображение'));
+        row.appendChild(open);
+      }
+      if (message.text) {
+        row.appendChild(el('div', 'chat__text', message.isRoll ? `🎲 ${message.text}` : message.text));
+      }
       parent.appendChild(row);
       if (parent !== this.log) return;
       if (this.log.childElementCount > 300) this.log.removeChild(this.log.firstChild);
@@ -4961,6 +5039,39 @@
       // поиска, и иначе находка молча переставала бы совпадать с лентой.
       if (this.query) this.setQuery(this.query);
       if (scroll) this.scrollToEnd();
+    }
+
+    /** Показывает хендаут целиком, не уводя со стола. */
+    openImage(url, caption) {
+      const overlay = el('div', 'chat-lightbox');
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      const box = el('div', 'chat-lightbox__box');
+      const picture = el('img', 'chat-lightbox__image');
+      picture.src = url;
+      picture.alt = caption || 'Изображение';
+      const close = el('button', 'chat-lightbox__close', '✕');
+      close.type = 'button';
+      close.title = 'Закрыть';
+      close.setAttribute('aria-label', 'Закрыть изображение');
+      const closeLightbox = () => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+      };
+      const onKey = (event) => {
+        if (event.key === 'Escape') closeLightbox();
+      };
+      close.addEventListener('click', closeLightbox);
+      overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closeLightbox();
+      });
+      document.addEventListener('keydown', onKey);
+      box.appendChild(picture);
+      if (caption) box.appendChild(el('div', 'chat-lightbox__caption', caption));
+      box.appendChild(close);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      close.focus();
     }
 
     scrollToEnd() {

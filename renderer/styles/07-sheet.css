@@ -584,7 +584,8 @@
 
 .modal--settings {
   max-width: 760px;
-  max-height: 86vh;
+  /* Высота не зависит от выбранной вкладки, иначе окно прыгает по экрану. */
+  height: min(86vh, 760px);
   overflow: hidden;
 }
 
@@ -635,6 +636,8 @@
 .settings__content {
   min-height: 0;
   overflow-y: auto;
+  /* Место под полосу прокрутки занято всегда, иначе содержимое дёргается. */
+  scrollbar-gutter: stable;
   padding-right: 4px;
 }
 
@@ -671,6 +674,11 @@
   font-family: Consolas, "Courier New", monospace;
   font-size: 11.5px;
   color: var(--text-dim);
+}
+
+.settings__update-status {
+  font-size: 11.5px;
+  color: var(--muted);
 }
 
 /* Список копий с кнопкой возврата: дата слева, действие справа. */

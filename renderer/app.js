@@ -325,6 +325,8 @@ let chosenSheetId = null;
     // Атмосфера звучит только на главном экране. Уходя в стол или лист,
     // гасим её, чтобы звук не спорил с броском кубика и разговором.
     if (window.DnDSound) window.DnDSound.setScene(id === 'screen-home' ? 'home' : '');
+    // На главном экране игра не идёт: Discord не должен показывать старую сессию.
+    if (id === 'screen-home') syncPresence();
   }
 
   function formatDateTime(iso) {
@@ -348,6 +350,50 @@ let chosenSheetId = null;
 
   function storedName() {
     return (localStorage.getItem(PLAYER_NAME_KEY) || '').trim();
+  }
+
+  /** Показывать ли игру в Discord: личная настройка, в кампанию не входит. */
+  const PRESENCE_KEY = 'dnd-table.discordPresence';
+
+  function presenceEnabled() {
+    return localStorage.getItem(PRESENCE_KEY) === '1';
+  }
+
+  /**
+   * Состояние для Discord. Наружу уходят только роль, кампания, имя персонажа
+   * и счётчик игроков: карта, чат, журнал и билет остаются на столе.
+   */
+  function presenceState() {
+    if (!presenceEnabled() || app.training || !app.role) return { enabled: false };
+    if (app.role === 'dm') {
+      const players = (app.room.players || []).filter((player) => player.role !== 'dm').length;
+      return {
+        enabled: true,
+        mode: 'dm',
+        campaignName: app.campaign ? app.campaign.name : '',
+        playerCount: players
+      };
+    }
+    const sheet = app.room.sheets ? app.room.sheets[app.playerId] : null;
+    const me = (app.room.players || []).find((player) => player.playerId === app.playerId);
+    return {
+      enabled: true,
+      mode: 'player',
+      characterName: sheet && sheet.characterName,
+      playerName: me && me.name
+    };
+  }
+
+  /** Обновляет присутствие. Discord может быть не запущен: ошибок не показываем. */
+  function syncPresence() {
+    if (!desktop || typeof desktop.setPresence !== 'function') return;
+    if (desktop.isAndroid) return;
+    try {
+      const result = desktop.setPresence(presenceState());
+      if (result && typeof result.catch === 'function') result.catch(() => {});
+    } catch {
+      /* присутствие не должно ломать стол */
+    }
   }
 
   /**
@@ -854,6 +900,7 @@ let chosenSheetId = null;
       }
       // Заготовку листа, заполненную без стола, можно перенести на стол.
       if (app.role === 'player') offerDraftSheet();
+      syncPresence();
     });
 
     // Сервер сам присылает свежий снимок, когда состояние меняется целиком
@@ -909,6 +956,7 @@ let chosenSheetId = null;
       }
       // У ДМ список игроков в панели листа тоже должен обновляться.
       refreshSheetView();
+      syncPresence();
     });
 
     socket.on('characterSheetData', ({ playerId, sheet }) => {
@@ -916,6 +964,7 @@ let chosenSheetId = null;
       requestedSheets.delete(playerId);
       if (app.role === 'player' && playerId === app.playerId) {
         markSheetSaved();
+        syncPresence();
       }
       refreshSheetView(app.role === 'dm' && app.viewedSheetPlayerId === playerId);
     });
@@ -1136,6 +1185,7 @@ let chosenSheetId = null;
     app.connected = false;
     app.role = null;
     app.playerId = null;
+    syncPresence();
     // Останавливаем P2P при отключении — но только если его не нужно дальше.
     // Иначе connect() первым же disconnect() рвёт туннель, который doJoinP2p
     // или startHost только что подняли: локальный порт закрывается раньше,
@@ -4455,6 +4505,72 @@ let chosenSheetId = null;
       return row;
     };
 
+    // Присутствие в Discord: только настольная версия. Android-мост метод не
+    // объявляет, поэтому одной проверки моста достаточно.
+    if (desktop && typeof desktop.setPresence === 'function') {
+      const discordBox = el('div', 'box');
+      discordBox.appendChild(el('div', 'box__title', 'Discord'));
+      discordBox.appendChild(settingsCheck(
+        'Показывать игру в Discord',
+        presenceEnabled(),
+        'discord-presence',
+        (on) => {
+          localStorage.setItem(PRESENCE_KEY, on ? '1' : '0');
+          syncPresence();
+          toast(on ? 'Discord: игра видна друзьям' : 'Discord: присутствие выключено', 'ok');
+        }
+      ));
+      discordBox.appendChild(el('div', 'box__note',
+        'Друзья и участники общих серверов увидят название кампании и имя персонажа. '
+        + 'Карта, чат и P2P-билет не показываются.'));
+      generalPanel.appendChild(discordBox);
+    }
+
+    // Обновления: только установленная Windows-версия. Портативная и Android
+    // обновляются вручную, поэтому кнопка им не нужна.
+    if (config.canUpdate && desktop && typeof desktop.checkForUpdates === 'function') {
+      const updateBox = el('div', 'box');
+      updateBox.appendChild(el('div', 'box__title', 'Обновления'));
+      const updateRow = el('div', 'settings__row');
+      const updateButton = el('button', 'btn btn--tiny', 'Проверить обновления');
+      updateButton.type = 'button';
+      updateButton.dataset.setting = 'check-updates';
+      const updateStatus = el('span', 'settings__value settings__update-status',
+        `Версия ${config.versionLabel || config.version || '—'}`);
+      updateButton.addEventListener('click', async () => {
+        updateButton.disabled = true;
+        updateStatus.textContent = 'Проверяю…';
+        try {
+          const result = await desktop.checkForUpdates();
+          if (!result || !result.ok) {
+            updateStatus.textContent = (result && result.error)
+              || 'Не удалось проверить обновления.';
+            return;
+          }
+          if (result.state === 'latest') {
+            updateStatus.textContent = `Установлена последняя версия ${result.version}.`;
+          } else if (result.state === 'downloading') {
+            updateStatus.textContent = `Скачивается версия ${result.version}…`;
+          } else if (result.state === 'downloaded') {
+            updateStatus.textContent = `Версия ${result.version} скачана. Перезапустите игру.`;
+          } else {
+            updateStatus.textContent = 'Проверка уже идёт…';
+          }
+        } catch (error) {
+          updateStatus.textContent = 'Не удалось проверить обновления.';
+        } finally {
+          updateButton.disabled = false;
+        }
+      });
+      updateRow.appendChild(updateButton);
+      updateRow.appendChild(updateStatus);
+      updateBox.appendChild(updateRow);
+      updateBox.appendChild(el('div', 'box__note',
+        'Обновления проверяются сами раз в четыре часа. Новая версия скачивается '
+        + 'в фоне, после чего игра предложит перезапуск.'));
+      generalPanel.appendChild(updateBox);
+    }
+
     const themeBox = el('div', 'box');
     // Перерисовываем только этот блок: смена тона меняет и превью, и набор
     // безопасных акцентов, но не должна закрывать всё окно настроек.
@@ -5216,6 +5332,7 @@ const gridRow = el('div', 'settings__row');
     clearTimeout(app.sheetSaveTimer);
     app.sheetSaveTimer = setTimeout(() => {
       emit('saveCharacterSheet', { sheet });
+      syncPresence();
     }, 400);
   }
 

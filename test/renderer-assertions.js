@@ -149,7 +149,7 @@
     check('preload-мост доступен в renderer', () => {
       assert(window.desktop, 'нет window.desktop');
       assert(window.desktop.isElectron === true, 'нет флага isElectron');
-      for (const fn of ['createCampaign', 'loadCampaign', 'saveCampaign', 'listCampaigns', 'startHost', 'stopHost', 'hostStatus']) {
+      for (const fn of ['createCampaign', 'loadCampaign', 'saveCampaign', 'listCampaigns', 'startHost', 'stopHost', 'hostStatus', 'setPresence', 'checkForUpdates']) {
         assert(typeof window.desktop[fn] === 'function', `нет window.desktop.${fn}`);
       }
     });
@@ -5082,6 +5082,59 @@
       autosaveSelect.value = '60';
       autosaveSelect.dispatchEvent(new Event('change'));
     }
+
+    // Discord: настройка выключена по умолчанию и живёт на компьютере.
+    const discordToggle = settingsOverlay().querySelector('[data-setting="discord-presence"]');
+    check('в настройках есть Discord и он выключен по умолчанию', () => {
+      assert(discordToggle, 'нет переключателя Discord');
+      assert.strictEqual(discordToggle.checked, false, 'присутствие включено по умолчанию');
+      const note = discordToggle.closest('.box').textContent;
+      assert(note.includes('Друзья и участники общих серверов'), 'нет предупреждения о видимости');
+      assert(note.includes('P2P-билет'), 'не сказано, что билет не показывается');
+    });
+    if (discordToggle) {
+      discordToggle.click();
+      check('включение Discord запоминается на компьютере', () => {
+        assert.strictEqual(window.localStorage.getItem('dnd-table.discordPresence'), '1');
+      });
+      discordToggle.click();
+      check('выключение Discord снимает присутствие', () => {
+        assert.strictEqual(window.localStorage.getItem('dnd-table.discordPresence'), '0');
+      });
+    }
+    const presenceReply = await window.desktop.setPresence({
+      enabled: true, mode: 'dm', campaignName: 'Смоук', playerCount: 1
+    });
+    check('мост присутствия принимает состояние', () => {
+      assert.strictEqual(presenceReply.ok, true);
+    });
+    await window.desktop.setPresence({ enabled: false });
+
+    // Обновления: кнопка только у установленной версии. Проверки запускают
+    // приложение из папки, поэтому здесь её быть не должно, а запрос обязан
+    // вернуть понятную ошибку, а не упасть.
+    check('без установленной версии кнопки обновлений нет', () => {
+      assert(!settingsOverlay().querySelector('[data-setting="check-updates"]'),
+        'кнопка обновлений показана в неустановленной версии');
+    });
+    const updateReply = await window.desktop.checkForUpdates();
+    check('проверка обновлений без установленной версии отвечает ошибкой', () => {
+      assert.strictEqual(updateReply.ok, false);
+      assert(updateReply.error.includes('установленной'), `ошибка: ${updateReply.error}`);
+    });
+
+    const settingsTabs = [...settingsOverlay().querySelectorAll('.settings__tab')];
+    const settingsModal = settingsOverlay().querySelector('.modal--settings');
+    const settingsHeights = settingsTabs.map((tab) => {
+      tab.click();
+      return Math.round(settingsModal.getBoundingClientRect().height);
+    });
+    settingsTabs[0].click();
+    check('окно настроек не меняет высоту при переключении вкладок', () => {
+      assert(new Set(settingsHeights).size === 1,
+        `высоты вкладок: ${settingsHeights.join(', ')}`);
+    });
+
     check('в настройках есть доступность: масштаб, контраст и палитра', () => {
       const overlay = settingsOverlay();
       assert(overlay.textContent.includes('Доступность'), 'нет раздела доступности');

@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('desktop', {
 
   getConfig: () => ipcRenderer.invoke('app:config'),
   setAutosaveInterval: (seconds) => ipcRenderer.invoke('app:autosaveInterval', seconds),
+  // Присутствие в Discord: renderer присылает только разрешённые поля.
+  setPresence: (state) => ipcRenderer.invoke('presence:update', state),
+  // Кнопка «Проверить обновления» в настройках.
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
 
   // Кампании
   listCampaigns: () => ipcRenderer.invoke('campaign:list'),

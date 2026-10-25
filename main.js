@@ -13,6 +13,7 @@ const importer = require('./server/importer');
 const open5e = require('./server/open5e');
 const { copyVendor } = require('./scripts/copy-vendor');
 const { versionLabel } = require('./scripts/version-label');
+const { createPresence } = require('./discord-presence');
 const packageJson = require('./package.json');
 
 /** Иконка окна: build/icon.png попадает и в asar, и в портативную сборку. */
@@ -109,6 +110,12 @@ const sheetWindows = new Map();
 const journalWindows = new Map();
 /** @type {CampaignStore|null} */
 let store = null;
+/** Присутствие в Discord: создаётся при старте, живёт до выхода. */
+let presence = null;
+/** Обновления: один экземпляр updater и его состояние для окна настроек. */
+let updater = null;
+let updatePhase = 'idle';
+let updateVersion = '';
 /** Текущая кампания (созданная или загруженная, ещё не обязательно запущенная). */
 let currentCampaign = null;
 /** Запущенный стол: { server, room, hostKey, port, localUrl }. */
@@ -154,6 +161,14 @@ function resolveDataDir() {
     }
   }
   return { dir: app.getPath('userData'), portable: false };
+}
+
+/** Автообновление имеет смысл только для установленной Windows-версии. */
+function canAutoUpdate() {
+  return app.isPackaged
+    && process.platform === 'win32'
+    && !resolveDataDir().portable
+    && process.env.DND_DISABLE_UPDATE !== '1';
 }
 
 /* -------------------------------------------------------------------------- *
@@ -570,8 +585,59 @@ function registerIpc() {
     campaignsDir,
     portable,
     platform: process.platform,
+    canUpdate: canAutoUpdate(),
     isElectron: true
   }));
+
+  // Присутствие: renderer присылает роль и имена, main проверяет поля и сам
+  // собирает текст для Discord. Клиент Discord может быть не запущен.
+  presence = createPresence({
+    log: process.env.DND_DEBUG_PRESENCE === '1'
+      ? (message) => console.log(`[presence] ${message}`)
+      : undefined
+  });
+  ipcMain.handle('presence:update', (event, state) => {
+    if (presence) presence.update(state && typeof state === 'object' ? state : {});
+    return { ok: true };
+  });
+
+  // Кнопка в настройках: проверить обновление прямо сейчас. Скачивание и
+  // установка идут тем же путём, что и у фоновой проверки.
+  ipcMain.handle('update:check', async () => {
+    if (!updater) {
+      return { ok: false, error: 'Обновления доступны только в установленной версии для Windows.' };
+    }
+    if (updatePhase === 'downloaded') {
+      return { ok: true, state: 'downloaded', version: updateVersion };
+    }
+    if (updatePhase === 'downloading') {
+      return { ok: true, state: 'downloading', version: updateVersion };
+    }
+    if (updatePhase === 'checking') {
+      return { ok: true, state: 'checking' };
+    }
+    updatePhase = 'checking';
+    try {
+      const result = await updater.checkForUpdates();
+      if (!result || !result.isUpdateAvailable) {
+        updatePhase = 'idle';
+        return { ok: true, state: 'latest', version: app.getVersion() };
+      }
+      updatePhase = 'downloading';
+      updateVersion = result.updateInfo.version;
+      return { ok: true, state: 'downloading', version: updateVersion };
+    } catch (error) {
+      updatePhase = 'idle';
+      // 404 значит, что в последнем релизе ещё нет latest.yml: это не сеть.
+      const missingRelease = /latest\.yml|404/i.test(error.message || '');
+      return {
+        ok: false,
+        error: missingRelease
+          ? 'Обновлений пока нет: следующий релиз ещё не опубликован.'
+          : 'Не удалось проверить обновления. Проверьте подключение к интернету.'
+      };
+    }
+  });
 
   // Время автосохранения выбирается в настройках и живёт в renderer
   // (localStorage): main только принимает секунды на запуске.
@@ -1275,6 +1341,12 @@ function registerIpc() {
 app.on('window-all-closed', () => {
   app.quit();
 });app.on('before-quit', (event) => {
+  // Сокет присутствия закрываем в любом случае: иначе Discord держит старую
+  // активность, пока не заметит обрыв.
+  if (presence) {
+    presence.destroy();
+    presence = null;
+  }
   if (quitting || !host) return;
   // Даём серверу корректно остановиться и сохраняем кампанию.
   event.preventDefault();
@@ -1283,6 +1355,74 @@ app.on('window-all-closed', () => {
     .catch((error) => console.error('Ошибка остановки стола:', error))
     .finally(() => app.quit());
 });
+
+/**
+ * Автообновление ставится только поверх установленной Windows-версии.
+ * Портативную папку не трогаем: установщик заменил бы exe, а данные остались
+ * бы в старой папке, и пользователь решил бы, что кампании пропали.
+ */
+function setupAutoUpdate() {
+  if (!canAutoUpdate()) return;
+
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch (error) {
+    console.warn('[update] electron-updater недоступен:', error.message);
+    return;
+  }
+  updater = autoUpdater;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('error', (error) => {
+    updatePhase = 'idle';
+    console.warn('[update]', error.message);
+  });
+  autoUpdater.on('update-available', (info) => {
+    updatePhase = 'downloading';
+    updateVersion = info.version;
+  });
+  autoUpdater.on('update-not-available', () => {
+    updatePhase = 'idle';
+    updateVersion = '';
+  });
+  autoUpdater.on('update-downloaded', async (info) => {
+    updatePhase = 'downloaded';
+    updateVersion = info.version;
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      buttons: ['Перезапустить', 'Позже'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Обновление D&D Стол',
+      message: `Версия ${info.version} готова к установке`,
+      detail: 'Перезапустить сейчас? «Позже» установит обновление при выходе из игры.'
+    });
+    if (response !== 0) return;
+    try {
+      await stopHost();
+    } catch (error) {
+      // Не перезапускаемся, если кампанию не удалось сохранить.
+      console.warn('[update] не удалось остановить стол:', error.message);
+      return;
+    }
+    autoUpdater.quitAndInstall(true, true);
+  });
+
+  const check = () => {
+    try {
+      autoUpdater
+        .checkForUpdates()
+        .catch((error) => console.warn('[update] проверка:', error.message));
+    } catch (error) {
+      console.warn('[update] проверка:', error.message);
+    }
+  };
+  // Первая проверка не мешает старту, дальше раз в четыре часа.
+  setTimeout(check, 15000).unref();
+  setInterval(check, 4 * 60 * 60 * 1000).unref();
+}
 
 app.whenReady().then(() => {
   // В собранном приложении socket.io-client уже лежит внутри пакета, а писать
@@ -1296,4 +1436,5 @@ app.whenReady().then(() => {
   }
   registerIpc();
   createWindow();
+  setupAutoUpdate();
 });

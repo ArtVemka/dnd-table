@@ -1,6 +1,6 @@
 {
   "name": "dnd-table",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "private": true,
   "description": "Portable desktop application for D&D 5e",
   "author": {
@@ -13,9 +13,11 @@
     "postinstall": "node scripts/copy-vendor.js",
     "dist": "electron-builder --dir",
     "dist:portable": "electron-builder --dir && node scripts/make-portable.js",
-    "test": "node test/styles.js && node test/integration.js && node test/importer.js && node test/sheet.js && node test/iroh-identity.js && node test/android-bridge.js && node test/open5e.js",
+    "dist:setup": "node scripts/build-setup.js",
+    "test": "node test/styles.js && node test/integration.js && node test/importer.js && node test/sheet.js && node test/iroh-identity.js && node test/android-bridge.js && node test/open5e.js && node test/presence.js",
     "test:android-bridge": "node test/android-bridge.js",
     "test:importer": "node test/importer.js",
+    "test:presence": "node test/presence.js",
     "foundry:fetch": "node scripts/fetch-foundry-sample.js",
     "foundry:demo": "node scripts/make-foundry-demo.js",
     "dnd-index": "node scripts/build-dnd-index.js",
@@ -23,6 +25,7 @@
   },
   "dependencies": {
     "@number0/iroh": "^1.1.0",
+    "electron-updater": "^6.8.11",
     "express": "^5.2.1",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.3"
@@ -39,8 +42,14 @@
       "output": "dist-final",
       "buildResources": "build"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "ArtVemka",
+      "repo": "dnd-table"
+    },
     "files": [
       "main.js",
+      "discord-presence.js",
       "preload.js",
       "preload-sheet.js",
       "preload-journal.js",
@@ -61,6 +70,15 @@
           ]
         }
       ]
+    },
+    "nsis": {
+      "artifactName": "DND-Table-Setup-${version}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "D&D Стол"
     },
     "linux": {
       "icon": "build/icon.png",

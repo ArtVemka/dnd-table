@@ -42,6 +42,7 @@ const DIST_UNPACKED = path.join(__dirname, '..', OUTPUT_DIR, 'win-unpacked');
 /** Файлы внутри app.asar должны лежать в пакете. */
 const REQUIRED_FILES = [
   'main.js',
+  'discord-presence.js',
   'preload.js',
   'preload-sheet.js',
   'preload-journal.js',
@@ -360,7 +361,7 @@ async function checkPortableRun(options) {
   const child = spawn(exe, [`--remote-debugging-port=${port}`], {
     stdio: ['ignore', 'pipe', 'pipe'],
     // Проверки не должны мелькать окнами на экране.
-    env: { ...process.env, DND_HIDE_WINDOW: '1' }
+    env: { ...process.env, DND_HIDE_WINDOW: '1', DND_DISABLE_UPDATE: '1' }
   });
   child.stdout.on('data', (chunk) => logs.push(String(chunk)));
   child.stderr.on('data', (chunk) => logs.push(String(chunk)));
@@ -500,7 +501,7 @@ async function main() {
   ], {
     stdio: ['ignore', 'pipe', 'pipe'],
     // Проверки не должны мелькать окнами на экране.
-    env: { ...process.env, DND_HIDE_WINDOW: '1' }
+    env: { ...process.env, DND_HIDE_WINDOW: '1', DND_DISABLE_UPDATE: '1' }
   });
 
   const appLogs = [];

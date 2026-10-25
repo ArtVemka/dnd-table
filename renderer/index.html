@@ -27,7 +27,7 @@
     <link rel="stylesheet" href="styles/09-theme-studio.css" />
   </head>
   <body>
-    <div id="toasts" class="toasts"></div>
+    <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 
     <!-- ================= Экран 1: главный ================= -->
     <section id="screen-home" class="screen screen--centered is-active">
@@ -53,7 +53,7 @@
           <div class="home__group">
             <h2 class="home__group__title">Мастеру</h2>
             <div class="home__cards">
-              <button id="btn-go-create" class="card" type="button">
+              <button id="btn-go-create" class="card card--primary" type="button">
                 <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></span>
                 <span class="card__title">Создать новую кампанию</span>
                 <span class="card__text">Стать ДМ и поднять стол на этом компьютере</span>
@@ -70,7 +70,7 @@
           <div class="home__group">
             <h2 class="home__group__title">Игроку</h2>
             <div class="home__cards">
-              <button id="btn-go-join" class="card" type="button">
+              <button id="btn-go-join" class="card card--primary" type="button">
                 <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2.8 8h9.4"/><path d="m9.2 4.8 3.2 3.2-3.2 3.2"/><path d="M12.8 3v10"/></svg></span>
                 <span class="card__title">Подключиться к столу</span>
                 <span class="card__text">Войти по P2P-билету, который прислал мастер</span>
@@ -86,8 +86,7 @@
         </div>
 
         <div class="home__footer">
-          <span id="home-datadir" class="muted">…</span>
-          <button id="btn-open-datadir" class="btn btn--ghost btn--tiny" type="button">Открыть папку данных</button>
+          <span id="home-datadir" class="home__mode">…</span>
           <button id="btn-settings-home" class="btn btn--ghost btn--tiny" type="button">⚙ Настройки</button>
         </div>
         <p class="muted home__notice">
@@ -213,25 +212,29 @@
         <div class="topbar__right">
           <span id="conn-badge" class="badge badge--muted">—</span>
           <span id="role-badge" class="badge">—</span>
-          <button id="btn-search" class="btn btn--ghost btn--tiny" type="button"
-                  title="Поиск по кампании (Ctrl+K)">Поиск</button>
-          <button id="btn-undo" class="btn btn--ghost btn--tiny" type="button"
-                  title="Отменить последнее действие мастера" hidden>Отменить</button>
-          <button id="btn-panel-right" class="btn btn--ghost btn--tiny" type="button">Панель ▸</button>
-          <button id="btn-settings-table" class="btn btn--ghost btn--tiny" type="button">⚙ Настройки</button>
-          <button id="btn-save-campaign" class="btn btn--accent" type="button">Сохранить кампанию</button>
-          <button id="btn-stop-host" class="btn btn--danger" type="button">Остановить стол</button>
+          <div class="topbar__tools" role="group" aria-label="Инструменты стола">
+            <button id="btn-search" class="btn btn--ghost btn--tiny" type="button"
+                    title="Поиск по кампании (Ctrl+K)">Поиск</button>
+            <button id="btn-undo" class="btn btn--ghost btn--tiny" type="button"
+                    title="Отменить последнее действие мастера" hidden>Отменить</button>
+            <button id="btn-panel-right" class="btn btn--ghost btn--tiny" type="button">Панель ▸</button>
+            <button id="btn-settings-table" class="btn btn--ghost btn--tiny" type="button">⚙ Настройки</button>
+          </div>
+          <div class="topbar__tools topbar__tools--actions" role="group" aria-label="Кампания">
+            <button id="btn-save-campaign" class="btn btn--accent" type="button">Сохранить кампанию</button>
+            <button id="btn-stop-host" class="btn btn--danger btn--ghost" type="button">Остановить стол</button>
+          </div>
         </div>
       </header>
 
       <div class="layout">
         <aside class="col col--left">
-          <div class="panel">
+          <div class="panel" data-panel="participants">
             <div class="panel__title">Участники</div>
             <div id="players-root"></div>
           </div>
 
-          <div class="panel journal-panel" id="journal-panel" hidden>
+          <div class="panel journal-panel" id="journal-panel" data-panel="journal" hidden>
             <div class="panel__title panel__title--row">
               <span>Журнал</span>
               <button id="btn-journal-detach" class="btn btn--ghost btn--tiny" type="button">Открыть окно</button>
@@ -244,7 +247,7 @@
             <div id="journal-list" class="journal-list"></div>
           </div>
 
-          <div class="panel inventory-panel" id="inventory-panel" hidden>
+          <div class="panel inventory-panel" id="inventory-panel" data-panel="inventory" hidden>
             <div class="panel__title panel__title--row">
               <span>Общий склад</span>
               <button id="btn-inventory-add" class="btn btn--ghost btn--tiny" type="button" hidden>Добавить</button>
@@ -252,7 +255,7 @@
             <div id="inventory-list" class="inventory-list"></div>
           </div>
 
-          <div class="panel roll-requests-panel" id="roll-requests-panel" hidden>
+          <div class="panel roll-requests-panel" id="roll-requests-panel" data-panel="checks" hidden>
             <div class="panel__title">Проверки</div>
             <form id="roll-request-form" class="roll-request-form" hidden>
               <input id="roll-request-label" class="input" type="text" maxlength="120"
@@ -296,37 +299,60 @@
              aria-orientation="vertical" aria-label="Ширина правой панели" tabindex="0"></div>
 
         <aside class="col col--right">
-          <div id="roll-request-banner" class="roll-request-banner" hidden></div>
-          <div class="tabs">
-            <button class="tabs__btn is-active" data-tab="chat" type="button">
+          <div id="roll-request-banner" class="roll-request-banner" role="status" aria-live="polite" hidden></div>
+          <div id="reaction-banner" class="reaction-banner" role="status" aria-live="polite" hidden></div>
+          <div class="tabs" role="tablist" aria-label="Вкладки стола">
+            <button class="tabs__btn is-active" data-tab="chat" type="button" role="tab"
+                    id="tabbtn-chat" aria-controls="tab-chat" aria-selected="true" tabindex="0"
+                    aria-label="Чат" title="Чат">
               <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 3.5h10V10H7.5L4.5 13v-3H3z"/></svg></span><span class="tabs__label">Чат</span>
             </button>
-            <button class="tabs__btn" data-tab="dice" type="button">
+            <button class="tabs__btn" data-tab="dice" type="button" role="tab"
+                    id="tabbtn-dice" aria-controls="tab-dice" aria-selected="false" tabindex="-1"
+                    aria-label="Кубики" title="Кубики">
               <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 1.8 13.4 4.9v6.2L8 14.2 2.6 11.1V4.9z"/><path d="M8 4.6 10.7 9H5.3z"/></svg></span><span class="tabs__label">Кубики</span>
             </button>
-            <button class="tabs__btn" data-tab="sheet" type="button">
+            <button class="tabs__btn tabs__btn--gap" data-tab="sheet" type="button" role="tab"
+                    id="tabbtn-sheet" aria-controls="tab-sheet" aria-selected="false" tabindex="-1"
+                    aria-label="Лист" title="Лист">
               <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M4.5 2.5h5.7L12.5 5v8.5h-8z"/><path d="M10 2.8V5h2.2"/><path d="M6.2 7.2h4.6M6.2 9.4h4.6M6.2 11.6h3"/></svg></span><span class="tabs__label">Лист</span>
             </button>
-            <button class="tabs__btn" data-tab="tokens" type="button">
+            <button class="tabs__btn tabs__btn--gap" data-tab="tokens" type="button" role="tab"
+                    id="tabbtn-tokens" aria-controls="tab-tokens" aria-selected="false" tabindex="-1"
+                    aria-label="Фишки" title="Фишки">
               <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="8" cy="5.2" r="2.1"/><path d="M5 13.2c0-2.2 1.3-3.6 3-3.6s3 1.4 3 3.6z"/></svg></span><span class="tabs__label">Фишки</span>
             </button>
-            <button class="tabs__btn" data-tab="initiative" type="button" title="Порядок боя">
+            <button class="tabs__btn" data-tab="initiative" type="button" role="tab"
+                    id="tabbtn-initiative" aria-controls="tab-initiative" aria-selected="false" tabindex="-1"
+                    aria-label="Порядок боя" title="Порядок боя">
               <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 1.5 10 3.5v6.2L8 11.7 6 9.7V3.5z"/><path d="M5 11.7h6"/><path d="M8 11.7v2.8"/></svg></span><span class="tabs__label">Бой</span>
             </button>
-            <button class="tabs__btn tabs__btn--dm" data-tab="surface" type="button" hidden title="Поверхность карты">
+            <button class="tabs__btn tabs__btn--dm" data-tab="surface" type="button" role="tab"
+                    id="tabbtn-surface" aria-controls="tab-surface" aria-selected="false" tabindex="-1"
+                    hidden aria-label="Поверхность карты" title="Поверхность карты">
               <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 1.8c2.2 2.6 3.4 4.2 3.4 6.4a3.4 3.4 0 0 1-6.8 0c0-1.2.5-2.2 1.4-3.3.3 1 .9 1.6 1.7 1.9.1-1.6.1-3 .3-5z"/></svg></span><span class="tabs__label">Поверхность</span>
             </button>
-            <button class="tabs__btn tabs__btn--compact tabs__btn--dm" data-tab="adventure" type="button" hidden title="Приключение">
+            <button class="tabs__btn tabs__btn--compact tabs__btn--dm tabs__btn--gap" data-tab="adventure"
+                    type="button" role="tab" id="tabbtn-adventure" aria-controls="tab-adventure"
+                    aria-selected="false" tabindex="-1" hidden
+                    aria-label="Приключение" title="Приключение">
               <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 3.6C6.7 2.6 5 2.4 3.2 2.6v9.2c1.8-.2 3.5 0 4.8 1 1.3-1 3-1.2 4.8-1V2.6c-1.8-.2-3.5 0-4.8 1z"/><path d="M8 3.6v9.2"/></svg></span><span class="tabs__label">Приключение</span>
             </button>
           </div>
-          <div class="panel panel--tab is-active" id="tab-chat"></div>
-          <div class="panel panel--tab" id="tab-dice"></div>
-          <div class="panel panel--tab" id="tab-sheet"></div>
-          <div class="panel panel--tab" id="tab-tokens"></div>
-            <div class="panel panel--tab" id="tab-initiative"></div>
-          <div class="panel panel--tab" id="tab-surface"></div>
-          <div class="panel panel--tab" id="tab-adventure"></div>
+          <div class="panel panel--tab is-active" id="tab-chat" role="tabpanel"
+               aria-labelledby="tabbtn-chat" tabindex="0"></div>
+          <div class="panel panel--tab" id="tab-dice" role="tabpanel"
+               aria-labelledby="tabbtn-dice" tabindex="0"></div>
+          <div class="panel panel--tab" id="tab-sheet" role="tabpanel"
+               aria-labelledby="tabbtn-sheet" tabindex="0"></div>
+          <div class="panel panel--tab" id="tab-tokens" role="tabpanel"
+               aria-labelledby="tabbtn-tokens" tabindex="0"></div>
+          <div class="panel panel--tab" id="tab-initiative" role="tabpanel"
+               aria-labelledby="tabbtn-initiative" tabindex="0"></div>
+          <div class="panel panel--tab" id="tab-surface" role="tabpanel"
+               aria-labelledby="tabbtn-surface" tabindex="0"></div>
+          <div class="panel panel--tab" id="tab-adventure" role="tabpanel"
+               aria-labelledby="tabbtn-adventure" tabindex="0"></div>
         </aside>
       </div>
     </section>

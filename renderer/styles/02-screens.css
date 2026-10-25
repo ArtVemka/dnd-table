@@ -245,10 +245,12 @@
 
 .home__group__title {
   font-family: var(--font-title);
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  font-size: 15px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--text);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
 }
 
 .home__cards {
@@ -288,6 +290,25 @@
   box-shadow: var(--frame-inner), 0 0 18px var(--glow);
 }
 
+/* Главные действия пары «создать» и «подключиться»: акцентная рамка и
+ * мягкая заливка, чтобы взгляд цеплялся за них раньше остальных карточек. */
+.card--primary {
+  border-color: var(--accent);
+  background: linear-gradient(160deg, var(--accent-soft), var(--surface));
+}
+
+.card--primary .card__title {
+  color: var(--accent-hover);
+}
+
+.card--primary .card__icon {
+  --icon-size: 22px;
+  width: 44px;
+  height: 44px;
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
 .card__icon {
   font-size: 24px;
   color: var(--accent);
@@ -299,21 +320,27 @@
 }
 
 .card__text {
-  font-size: 12.5px;
-  color: var(--muted);
+  font-size: 13px;
+  color: var(--text-dim);
 }
 
 .home__footer {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 12px;
+  font-size: 12.5px;
+  color: var(--text-dim);
   flex-wrap: wrap;
   justify-content: center;
 }
 
+.home__mode {
+  color: var(--text-dim);
+}
+
 .home__notice {
-  font-size: 12px;
+  font-size: 12.5px;
+  color: var(--text-dim);
   text-align: center;
   max-width: 720px;
   margin: 0;

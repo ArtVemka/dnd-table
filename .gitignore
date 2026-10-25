@@ -1,5 +1,6 @@
 node_modules/
 data/
+.opencode/
 *.log
 test-output.txt
 verify.log

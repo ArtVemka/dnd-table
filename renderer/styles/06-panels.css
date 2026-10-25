@@ -107,6 +107,8 @@
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.55);
   background-size: cover;
   background-position: center;
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -114,6 +116,19 @@
   font-size: calc(var(--cell, 46px) * 0.4 * var(--token-size, 1));
   line-height: 1;
   color: #1a1209;}
+
+/* Портрет внутри круга: тот же зум и сдвиг, что в предпросмотре. */
+.token__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+  user-select: none;
+}
 
 /*
  * Карта сбрасывает line-height в ноль (чтобы под картинкой не оставалось
@@ -507,6 +522,10 @@
   position: fixed;
   z-index: 1000;
   min-width: 210px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -561,6 +580,13 @@
   color: var(--muted);
 }
 
+/* Значение из листа вместо поля ввода: у фишки игрока своё число не хранится. */
+.token-menu__note {
+  padding: 5px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
 .token-list,
 .token-list__section {
   display: flex;
@@ -604,6 +630,24 @@
   color: var(--muted);
 }
 
+/* Сторона видна и в строке, а не только по открытой вкладке: при поиске
+   и после смены стороны мастеру нужно понимать, кого он видит. */
+.token-row__side {
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 15px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.token-row__side--enemy {
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
 /* Фишка со скрытым от игроков именем: в списке мастер имя ещё видит, но
    помечено, чтобы не забыть, что подпись под фишкой не показывается. */
 .token-row--nameless .token-row__name {
@@ -629,6 +673,23 @@
   gap: 4px;
 }
 
+/* Две вкладки стороны: список не смешивает союзников и врагов. */
+.token-sides {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.token-sides__btn {
+  flex: 1;
+  justify-content: center;
+}
+
+.token-sides__btn.is-on {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
 .token-filter.is-on {
   border-color: var(--accent);
   color: var(--accent-hover);
@@ -638,20 +699,29 @@
   padding: 2px 2px 6px;
 }
 
+/* Форма создания фишки: имя и прочность важнее размера, поэтому размер
+   получает узкую колонку, а кнопка уходит на отдельную строку. В одну строку
+   в узкой панели имя сжималось до пары букв. */
 .token-form {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 84px 64px;
   gap: 6px;
 }
 
-.token-form .input {
-  flex: 1;
+.token-form > .btn {
+  grid-column: 1 / -1;
 }
 
 .token-form__hp {
-  max-width: 88px;
-  flex: none;
+  width: 100%;
   text-align: center;
   font-family: var(--font-num);
+}
+
+.token-form__size {
+  width: 100%;
+  padding-left: 6px;
+  padding-right: 4px;
 }
 
 /* Прочность фишки: полоса, число и кнопки урона. */
@@ -953,15 +1023,40 @@
 .dice__quick {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
+/* Кости — не ряд одинаковых кнопок калькулятора: у каждой своя грань,
+ * мягкая объёмная заливка и подъём при наведении. */
 .dice__quick-btn {
   font-family: var(--font-title);
-  font-size: 15px;
+  font-size: 16px;
   letter-spacing: 0.02em;
-  padding: 6px 2px;
+  padding: 11px 2px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background:
+    radial-gradient(circle at 50% 30%, var(--surface-3), var(--bg-deep));
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 2px 0 var(--border);
+  transition: transform 0.15s ease, border-color 0.15s ease,
+    color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dice__quick-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 4px 10px var(--glow);
+}
+
+.dice__controls .btn--accent {
+  min-width: 104px;
+  box-shadow: 0 4px 14px var(--glow);
 }
 
 .dice__formula {
@@ -1018,14 +1113,16 @@
 
 .dice__last {
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 7px;
   padding: 10px;
   background: var(--accent-soft);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 14px;
+  text-align: center;
 }
 
 .dice__last-value {
@@ -1532,6 +1629,168 @@ button.inventory-row:hover {
   display: none;
 }
 
+/* Карточки проверок и реакций появляются сверху: движение подсказывает, что
+   это новое и требует ответа. */
+.roll-request-banner:not([hidden]),
+.reaction-banner:not([hidden]) {
+  animation: banner-in 0.18s ease-out;
+}
+
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Карточка реакции мастера: противник может атаковать по возможности.
+   Опасность подсвечена красным, но решение остаётся за мастером. */
+.reaction-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+}
+
+.reaction-banner__title {
+  font-family: var(--font-title);
+  font-size: 14px;
+  color: var(--danger-text);
+}
+
+.reaction-banner__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reaction-banner__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.reaction-banner__note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.layout.is-right-collapsed .reaction-banner {
+  display: none;
+}
+
+/* Свёрнутая панель прячет карточку, поэтому счётчик остаётся на кнопке:
+   иначе реакция ждёт ответа, а игрок об этом не знает. */
+#btn-panel-right.has-reaction::after {
+  content: attr(data-count);
+  margin-left: 5px;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 15px;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--danger);
+  border-radius: 999px;
+}
+
+/* Приватный бросок мастера: крупно и поверх стола, а не строкой в чате. */
+.dm-roll {
+  position: fixed;
+  top: 74px;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  margin: 0 auto;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--gold);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px var(--shadow-press), 0 0 18px var(--accent-soft);
+  animation: banner-in 0.18s ease-out;
+}
+
+.dm-roll[hidden] {
+  display: none;
+}
+
+.dm-roll__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dm-roll__label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.dm-roll__line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dm-roll__result {
+  font-family: var(--font-num);
+  font-size: 28px;
+  line-height: 1;
+  color: var(--gold);
+}
+
+.dm-roll__formula {
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dm-roll__verdict {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.dm-roll.is-hit .dm-roll__verdict {
+  color: var(--ok-text);
+}
+
+.dm-roll.is-miss .dm-roll__verdict {
+  color: var(--danger-text);
+}
+
+.dm-roll__close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dm-roll__close:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* ------------------------------------------------- Поиск по кампании */
 
 .modal--search {
@@ -1584,4 +1843,39 @@ button.inventory-row:hover {
 .search-result__note {
   font-size: 11.5px;
   overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------- Горячие клавиши */
+
+.modal--shortcuts {
+  max-width: 460px;
+}
+
+.shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 16px;
+}
+
+.shortcuts__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.shortcuts__label {
+  font-size: 13px;
+}
+
+.shortcuts__keys {
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font-family: var(--font-num);
+  font-size: 12px;
 }

@@ -1,6 +1,6 @@
 {
   "name": "dnd-table",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "description": "Portable desktop application for D&D 5e",
   "author": {
@@ -13,7 +13,7 @@
     "postinstall": "node scripts/copy-vendor.js",
     "dist": "electron-builder --dir",
     "dist:portable": "electron-builder --dir && node scripts/make-portable.js",
-    "test": "node test/styles.js && node test/integration.js && node test/importer.js && node test/sheet.js && node test/iroh-identity.js && node test/android-bridge.js",
+    "test": "node test/styles.js && node test/integration.js && node test/importer.js && node test/sheet.js && node test/iroh-identity.js && node test/android-bridge.js && node test/open5e.js",
     "test:android-bridge": "node test/android-bridge.js",
     "test:importer": "node test/importer.js",
     "foundry:fetch": "node scripts/fetch-foundry-sample.js",
@@ -45,6 +45,7 @@
       "preload-sheet.js",
       "preload-journal.js",
       "package.json",
+      "build/icon.png",
       "server/**/*",
       "renderer/**/*",
       "scripts/copy-vendor.js",

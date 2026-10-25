@@ -226,7 +226,61 @@ body.is-resizing * {
   font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: var(--gold);
+  color: color-mix(in srgb, var(--gold) 72%, var(--text));
+  transition: color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* Заголовок раздела в левой колонке светлее и отзывается на наведение:
+ * это ещё и кнопка сворачивания, поэтому он должен выглядеть живым. */
+.col--left > .panel > .panel__title:hover {
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Разделы левой колонки сворачиваются: участники, журнал, склад, проверки и
+   приглашение подряд занимают больше экрана, чем карта. */
+.col--left > .panel > .panel__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.col--left > .panel > .panel__title > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.panel__fold {
+  flex: none;
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: transform 0.15s ease, color 0.15s ease, background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.panel__fold:hover {
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: var(--accent);
+}
+
+.panel.is-collapsed > .panel__title .panel__fold {
+  transform: rotate(-90deg);
+}
+
+/* Свёрнутый раздел оставляет заголовок и кнопку, содержимое прячется. */
+.panel.is-collapsed > *:not(.panel__title) {
+  display: none;
 }
 
 .panel__title--sub {
@@ -266,6 +320,16 @@ body.is-resizing * {
      приключения у мастера — самая редкая вкладка, поэтому у неё только
      иконка, а остальные подписи ужимаются шрифтом. */
   container-type: inline-size;
+  /* Крайняя вкладка не должна пропадать за краем: если подписи всё-таки не
+     влезли, ряд листается вбок. Полосу прокрутки прячем, она шире самих
+     вкладок. */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .tabs__label {
@@ -277,8 +341,9 @@ body.is-resizing * {
   display: none;
 }
 
-@container (max-width: 330px) {
-  /* Совсем узкое окно: оставляем только иконки, иначе подписи ломают строку. */
+@container (max-width: 430px) {
+  /* Шесть вкладок с подписями не влезают в узкую колонку. Иконки остаются,
+     а название каждой вкладки доступно подсказкой и диктору. */
   .tabs__label {
     display: none;
   }
@@ -330,6 +395,42 @@ body.is-resizing * {
   background: var(--accent-soft);
   color: var(--accent-hover);
   font-weight: 600;
+}
+
+/* Группы вкладок: чат с кубиками, лист, фишки с боем. Тонкая линия делит
+   ряд на смысловые блоки, не добавляя второй строки и лишних кликов. */
+.tabs__btn--gap {
+  position: relative;
+  margin-left: 7px;
+}
+
+.tabs__btn--gap::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 22%;
+  height: 56%;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+
+/* Появление панели: короткий сдвиг вверх, чтобы переключение было заметно,
+   но не задерживало работу. Движение выключается настройкой «Анимации». */
+.panel--tab.is-active {
+  animation: tab-panel-in 0.14s ease-out;
+}
+
+@keyframes tab-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* --------------------------------------------------- Участники и адреса */
@@ -504,21 +605,6 @@ body.is-resizing * {
   cursor: default;
 }
 
-/* Блок портрета самого мастера в списке игроков. */
-.sheet__self {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 12px;
-  margin-bottom: 10px;
-}
-
-.sheet__self-title {
-  font-size: 12px;
-  color: var(--gold);
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
 /* -------------------------------------------------------- Аватар в чате */
 
 .chat__avatar {
@@ -564,7 +650,7 @@ body.is-resizing * {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13.5px;
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -574,8 +660,8 @@ body.is-resizing * {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
-  color: var(--muted);
+  font-size: 12px;
+  color: var(--text-dim);
   /* Строка статуса не переносится: «в сети · фишка на поле» — одна мысль,
      и разбивать её на три строки незачем. */
   white-space: nowrap;

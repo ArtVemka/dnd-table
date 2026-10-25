@@ -714,34 +714,6 @@
     }
 
     /**
-     * Поле-список. Подкласс оставлен свободным полем: названий подклассов
-     * слишком много, и половина существует только в дополнениях.
-     * @param {string} name
-     * @param {string} label
-     * @param {{label: string, hitDie?: string}[]} items
-     */
-    selectField(name, label, items) {
-      const wrap = el('label', 'field');
-      wrap.appendChild(el('span', 'field__label', label));
-      const select = el('select', 'select');
-      select.dataset.field = name;
-      const empty = el('option', null, 'Не выбран');
-      empty.value = '';
-      select.appendChild(empty);
-      for (const item of items) {
-        const option = el('option', null, item.label);
-        option.value = item.label;
-        select.appendChild(option);
-      }
-      select.value = this.sheet[name] || '';
-      // input, а не change: так список ведёт себя одинаково с остальными
-      // полями листа и таблица тестов может заполнять его как поле.
-      select.addEventListener('input', () => this.onClassChange(select));
-      wrap.appendChild(select);
-      return wrap;
-    }
-
-    /**
      * Смена класса подставляет его кость хитов. Если человек уже правил
      * кость вручную, его число не трогаем: мультикласс и домашние классы
      * важнее автоматики.

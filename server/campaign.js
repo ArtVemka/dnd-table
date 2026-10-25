@@ -233,35 +233,133 @@ class CampaignStore {
     return campaign;
   }
 
+  /** Папка копий кампаний: рядом с папкой кампаний, а не внутри неё. */
+  backupsDir() {
+    return path.join(path.dirname(this.rootDir), 'backups');
+  }
+
+  /**
+   * Имя копии: название кампании без запрещённых в имени папки символов.
+   * @param {string} campaignId
+   * @param {string} [label]
+   * @returns {string}
+   */
+  backupLabel(campaignId, label = '') {
+    return String(label || campaignId)
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .slice(0, 60) || campaignId;
+  }
+
+  /**
+   * Копии этой кампании, свежие первыми.
+   *
+   * Копии наследуют префикс имени кампании, поэтому чужие не попадают в
+   * список: у каждой кампании свои пять копий, а не общие на весь стол.
+   * @param {string} campaignId
+   * @param {string} [label]
+   * @returns {Promise<{name: string, path: string, mtimeMs: number}[]>}
+   */
+  async listBackups(campaignId, label = '') {
+    const root = this.backupsDir();
+    const prefix = `${this.backupLabel(campaignId, label)}-`;
+    try {
+      const entries = await fsp.readdir(root, { withFileTypes: true });
+      const result = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+        const fullPath = path.join(root, entry.name);
+        const stat = await fsp.stat(fullPath);
+        result.push({ name: entry.name, path: fullPath, mtimeMs: stat.mtimeMs });
+      }
+      return result.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    } catch {
+      // Папки копий ещё нет: считаем, что копий не было.
+      return [];
+    }
+  }
+
+  /**
+   * Когда последний раз делали копию этой кампании.
+   *
+   * Нужен автокопии при старте стола: она смотрит, прошли ли сутки.
+   * @param {string} campaignId
+   * @param {string} [label]
+   * @returns {Promise<number|null>} время в миллисекундах
+   */
+  async lastBackupTime(campaignId, label = '') {
+    const list = await this.listBackups(campaignId, label);
+    return list.length ? list[0].mtimeMs : null;
+  }
+
   /**
    * Копия всей папки кампании: JSON и все картинки. Рядом с `campaigns`
    * появляется `backups`, чтобы копия не попала в список кампаний стола.
-   * Держим пять последних копий: иначе папка данных растёт без предела.
+   * Держим пять последних копий каждой кампании: иначе папка данных растёт
+   * без предела, а общий лимит вытеснял бы копии соседних кампаний.
    * @param {string} campaignId
    * @param {string} [label]
    * @returns {Promise<string>} путь к копии
    */
   async backup(campaignId, label = '') {
     const source = this.dirFor(campaignId);
-    const root = path.join(path.dirname(this.rootDir), 'backups');
+    const root = this.backupsDir();
     await fsp.mkdir(root, { recursive: true });
-    const safe = String(label || campaignId)
-      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
-      .trim()
-      .replace(/\s+/g, '-')
-      .slice(0, 60) || campaignId;
+    const safe = this.backupLabel(campaignId, label);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const dest = path.join(root, `${safe}-${stamp}`);
     await fsp.cp(source, dest, { recursive: true });
 
     const entries = (await fsp.readdir(root, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(`${safe}-`))
       .map((entry) => entry.name)
       .sort();
     while (entries.length > 5) {
       await fsp.rm(path.join(root, entries.shift()), { recursive: true, force: true });
     }
     return dest;
+  }
+
+  /**
+   * Восстанавливает кампанию из копии.
+   *
+   * Копия сначала копируется рядом, и только потом подменяет папку кампании:
+   * сбой на полпути не должен оставить стол без данных. Источник при этом
+   * остаётся на месте, поэтому повторная попытка возможна.
+   * @param {string} campaignId
+   * @param {string} backupName имя папки из listBackups
+   * @returns {Promise<string>} путь к восстановленной кампании
+   */
+  async restoreBackup(campaignId, backupName) {
+    const name = String(backupName || '');
+    const root = this.backupsDir();
+    // Имя приходит из интерфейса, поэтому проверяем его как путь: иначе
+    // «../../» вывел бы восстановление за пределы папки копий.
+    if (!name || name !== path.basename(name) || name.includes('..')) {
+      throw new Error('Некорректное имя копии');
+    }
+    const source = path.join(root, name);
+    if (path.dirname(path.resolve(source)) !== path.resolve(root)) {
+      throw new Error('Копия вне папки копий');
+    }
+    const stat = await fsp.stat(source).catch(() => null);
+    if (!stat || !stat.isDirectory()) throw new Error('Копия не найдена');
+
+    const target = this.dirFor(campaignId);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const incoming = `${target}.restore-${stamp}`;
+    await fsp.cp(source, incoming, { recursive: true });
+    await fsp.rm(target, { recursive: true, force: true });
+    try {
+      await fsp.rename(incoming, target);
+    } catch (error) {
+      // Перенос не удался: возвращаем копию на место обычным копированием,
+      // чтобы восстановление не потерялось из-за одного сбоя переименования.
+      await fsp.cp(incoming, target, { recursive: true });
+      await fsp.rm(incoming, { recursive: true, force: true }).catch(() => {});
+    }
+    return target;
   }
 
   /**

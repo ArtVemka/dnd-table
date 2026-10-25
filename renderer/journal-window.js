@@ -258,6 +258,17 @@
       render();
     });
 
+    // Отмена действия мастера приходит полным снимком стола, а не отдельным
+    // событием журнала. Без этого окно после отмены показывало бы старый список.
+    socket.on('stateReload', (state) => {
+      if (!state || !Array.isArray(state.journalEntries)) return;
+      entries = state.journalEntries;
+      if (editingId && editingId !== 'new' && !entries.some((item) => item.id === editingId)) {
+        editingId = null;
+      }
+      render();
+    });
+
     socket.on('errorMessage', ({ message }) => {
       setStatus(message, 'error');
       toast(message, 'error');

@@ -105,25 +105,6 @@ function readEntry(buffer, localOffset, compressedSize, method) {
 }
 
 /**
- * Читает архив и отдаёт содержимое файлов по имени.
- * @param {Buffer} buffer
- * @param {(name: string) => boolean} [filter]
- * @returns {Map<string, Buffer>}
- */
-function readZip(buffer, filter = () => true) {
-  const result = new Map();
-  let total = 0;
-  for (const entry of listEntries(buffer)) {
-    if (!filter(entry.name)) continue;
-    const data = entry.read();
-    total += data.length;
-    if (total > MAX_TOTAL_BYTES) throw new Error('Архив распаковывается в слишком большой объём');
-    result.set(entry.name, data);
-  }
-  return result;
-}
-
-/**
  * Читает из архива json и картинки за один проход.
  *
  * Раньше для этого звали readZip дважды, и центральный каталог разбирался два
@@ -161,20 +142,6 @@ const IMAGE_EXTENSIONS = /\.(png|jpe?g|webp|gif)$/i;
 const JSON_ENTRY = /\.json$/i;
 
 /**
- * Читает из архива картинки и возвращает их по пути внутри архива.
- *
- * Выгрузка приключения из Foundry — это папка: `adventure.json` плюс `assets/`
- * с картами. Картинки лежат рядом с json, а не внутри неё, поэтому одной
- * выгрузкой json импорт не обходится: сцены остаются без фона.
- *
- * @param {Buffer} buffer
- * @returns {Map<string, Buffer>}
- */
-function readZipAssets(buffer) {
-  return readZip(buffer, (name) => IMAGE_EXTENSIONS.test(name));
-}
-
-/**
  * Приводит путь внутри архива к виду, по которому его ищет документ.
  * Foundry пишет `assets/карта.webp`, но встречаются и `./assets/карта.webp`,
  * и обратные слэши из выгрузок с Windows.
@@ -187,7 +154,6 @@ function normalizeAssetPath(path) {
 
 module.exports = {
   listEntries,
-  readZip,
   readZipJsonAndAssets,
   normalizeAssetPath,
   MAX_TOTAL_BYTES

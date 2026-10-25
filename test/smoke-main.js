@@ -276,13 +276,31 @@ async function main() {
     }
   }
 
+  // Автоплей проверяем по настройкам окна: в скрытом smoke-окне Chromium
+  // приостанавливает AudioContext, и проверка «звук уже играет» падала бы
+  // не из-за приложения, а из-за невидимого окна.
+  const launchChecks = [{
+    name: 'атмосфере разрешён автоплей без жеста',
+    ok: app.commandLine.getSwitchValue('autoplay-policy') === 'no-user-gesture-required',
+    error: `autoplay-policy: ${app.commandLine.getSwitchValue('autoplay-policy')}`
+  }];
+  console.log('\nПроверки запуска\n');
+  for (const item of launchChecks) {
+    if (item.ok) {
+      console.log(`  ok   ${item.name}`);
+    } else {
+      failed += 1;
+      console.log(`  FAIL ${item.name}\n        ${item.error}`);
+    }
+  }
+
   const errors = consoleLogs.filter((log) => log.level === 'error' || log.level === '3' || log.level === 'warning');
   if (errors.length) {
     console.log('\nСообщения renderer (error/warning)\n');
     for (const log of errors) console.log(`  [${log.level}] ${log.text}`);
   }
 
-  const total = response.checks.length + diskChecks.length + windowChecks.length;
+  const total = response.checks.length + diskChecks.length + windowChecks.length + launchChecks.length;
   console.log(`\n${'='.repeat(62)}`);
   console.log(`Проверок: ${total}, ошибок: ${failed}`);
   console.log(failed ? 'Есть ошибки.' : 'Все проверки пройдены.');

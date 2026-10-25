@@ -9,11 +9,20 @@ const { CampaignStore } = require('./server/campaign');
 const { createTableServer } = require('./server/socket');
 const { RoomState, LIMITS, normalizeAdventure } = require('./server/state');
 const { decodeImage } = require('./server/image');
-const irohManager = require('./server/iroh-manager');
 const importer = require('./server/importer');
+const open5e = require('./server/open5e');
 const { copyVendor } = require('./scripts/copy-vendor');
 const { versionLabel } = require('./scripts/version-label');
 const packageJson = require('./package.json');
+
+/** Иконка окна: build/icon.png попадает и в asar, и в портативную сборку. */
+const APP_ICON = path.join(__dirname, 'build', 'icon.png');
+
+/* Атмосфера на главном экране должна звучать с момента запуска приложения.
+ * В Chromium аудио до жеста блокируется; в Electron мы сами себе браузер,
+ * и ждать первого клика было незачем: звук раньше появлялся только после
+ * открытия настроек. */
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 /** Ленивая загрузка iroh — загружается только по запросу из IPC handler,
  *  чтобы не ломать require('electron') при старте в Electron < 20. */
@@ -60,7 +69,17 @@ function getIrohManager() {
   return irohMgr;
 }
 
-const AUTOSAVE_INTERVAL_MS = 60 * 1000;
+/** Автосохранение кампании по умолчанию: раз в минуту. */
+const DEFAULT_AUTOSAVE_INTERVAL_MS = 60 * 1000;
+/** Границы выбора из настроек: чаще пяти секунд писать файл незачем. */
+const AUTOSAVE_MIN_MS = 5 * 1000;
+const AUTOSAVE_MAX_MS = 60 * 60 * 1000;
+/**
+ * Автокопия кампании при старте стола: не чаще раза в сутки. Копия всей
+ * папки это страховка от порчи JSON и потерянных картинок, и делать её на
+ * каждый запуск незачем.
+ */
+const BACKUP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /**
  * Версия приложения. Читаем её из своего package.json, а не через
  * app.getVersion(): при запуске вида «electron test/smoke-main.js» Electron
@@ -95,6 +114,8 @@ let currentCampaign = null;
 /** Запущенный стол: { server, room, hostKey, port, localUrl }. */
 let host = null;
 let autosaveTimer = null;
+/** Текущий интервал автосохранения: его выбирают в настройках. */
+let autosaveIntervalMs = DEFAULT_AUTOSAVE_INTERVAL_MS;
 let dirty = false;
 /**
  * Номер изменения состояния. По нему видно, трогали ли стол во время записи:
@@ -152,6 +173,7 @@ function createWindow() {
     minHeight: 700,
     show: !hidden,
     backgroundColor: '#15110d',
+    icon: APP_ICON,
     title: 'D&D Стол',
     autoHideMenuBar: true,
     webPreferences: {
@@ -159,7 +181,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      spellcheck: false
+      spellcheck: false,
+      // Атмосфера должна звучать сразу: не ждём первого клика по настройкам.
+      autoplayPolicy: 'no-user-gesture-required'
     }
   });
 
@@ -230,6 +254,7 @@ function sendToRenderer(channel, payload) {
     minHeight: 420,
     title,
     backgroundColor: '#15110d',
+    icon: APP_ICON,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload-sheet.js'),
@@ -286,6 +311,7 @@ function openJournalWindow(request = {}) {
     minHeight: 360,
     title,
     backgroundColor: '#15110d',
+    icon: APP_ICON,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload-journal.js'),
@@ -374,7 +400,7 @@ function startAutosave() {
   stopAutosave();
   autosaveTimer = setInterval(() => {
     if (dirty && host) persistCampaign({ notify: true });
-  }, AUTOSAVE_INTERVAL_MS);
+  }, autosaveIntervalMs);
 }
 
 function stopAutosave() {
@@ -408,6 +434,32 @@ async function stopHost() {
 }
 
 /**
+ * Автокопия кампании при старте стола.
+ *
+ * Копия всей папки это страховка от испорченного JSON и потерянных картинок.
+ * Раз в сутки достаточно: делать её на каждый запуск значит гонять десятки
+ * мегабайт и вытеснять вчерашнюю копию сегодняшней. Если копия свежая,
+ * ничего не делаем.
+ * @returns {Promise<string|null>} путь к новой копии
+ */
+async function backupIfStale() {
+  if (!currentCampaign) return null;
+  try {
+    const last = await store.lastBackupTime(currentCampaign.id, currentCampaign.name);
+    if (last && Date.now() - last < BACKUP_MAX_AGE_MS) return null;
+    // Сначала дописываем состояние на диск: копировать полупустую папку
+    // кампании, которую ещё ни разу не сохраняли, незачем.
+    const meta = await persistCampaign();
+    if (!meta) return null;
+    return await store.backup(currentCampaign.id, currentCampaign.name);
+  } catch (error) {
+    // Копия не должна мешать открыть стол: игра важнее страховки.
+    console.warn('[backup] автокопия не удалась:', error.message);
+    return null;
+  }
+}
+
+/**
  * @returns {Promise<object>}
  */
 async function startHost() {
@@ -420,6 +472,7 @@ async function startHost() {
   // чтобы человек не правил сразу два разных листа.
   closeSheetWindows();
   closeJournalWindows();
+  const autoBackup = await backupIfStale();
 
   const room = new RoomState(currentCampaign);
   const hostKey = crypto.randomBytes(24).toString('hex');
@@ -451,6 +504,7 @@ async function startHost() {
     port: server.port,
     localUrl: server.localUrl,
     hostKey,
+    autoBackup,
     campaign: campaignMeta(currentCampaign)
   };
 }
@@ -519,6 +573,20 @@ function registerIpc() {
     isElectron: true
   }));
 
+  // Время автосохранения выбирается в настройках и живёт в renderer
+  // (localStorage): main только принимает секунды на запуске.
+  ipcMain.handle('app:autosaveInterval', (event, seconds) => {
+    const ms = Math.round(Number(seconds) * 1000);
+    if (!Number.isFinite(ms) || ms < AUTOSAVE_MIN_MS || ms > AUTOSAVE_MAX_MS) {
+      return { ok: false, error: 'Недопустимый интервал автосохранения' };
+    }
+    autosaveIntervalMs = ms;
+    // Стол уже работает — новые секунды должны действовать сразу, а не со
+    // следующего запуска. Без стола таймера нет, и значение подхватит startHost.
+    if (autosaveTimer) startAutosave();
+    return { ok: true, intervalMs: ms };
+  });
+
   ipcMain.handle('campaign:list', async () => ({ campaigns: await store.list() }));
 
   ipcMain.handle('campaign:create', async (event, name) => {
@@ -559,6 +627,58 @@ function registerIpc() {
       return { ok: true, dir };
     } catch (error) {
       return { ok: false, error: `Не удалось сделать копию: ${error.message}` };
+    }
+  });
+
+  /** Сколько копий уже лежит и когда сделана последняя: строка в настройках. */
+  ipcMain.handle('campaign:backupInfo', async () => {
+    if (!currentCampaign) return { ok: false, error: 'Сначала откройте кампанию' };
+    try {
+      const copies = await store.listBackups(currentCampaign.id, currentCampaign.name);
+      return {
+        ok: true,
+        count: copies.length,
+        lastAt: copies.length ? new Date(copies[0].mtimeMs).toISOString() : null,
+        // Список для восстановления: интерфейсу нужны имена папок и даты.
+        items: copies.map((copy) => ({
+          name: copy.name,
+          at: new Date(copy.mtimeMs).toISOString()
+        }))
+      };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
+  /**
+   * Возврат кампании из копии.
+   *
+   * Стол останавливаем до подмены папки: сервер держит состояние в памяти и
+   * после восстановления писал бы поверх него старые данные. После успеха
+   * окно перезагружается и открывает кампанию заново.
+   */
+  ipcMain.handle('campaign:restoreBackup', async (event, id, backupName) => {
+    try {
+      if (!currentCampaign || currentCampaign.id !== id) {
+        return { ok: false, error: 'Сначала откройте кампанию' };
+      }
+      const wasHosting = Boolean(host);
+      if (wasHosting) await stopHost();
+      await store.restoreBackup(id, backupName);
+      currentCampaign = await store.load(id);
+      return { ok: true, wasHosting };
+    } catch (error) {
+      return { ok: false, error: `Не удалось восстановить копию: ${error.message}` };
+    }
+  });
+
+  ipcMain.handle('shell:openBackups', async () => {    const dir = store.backupsDir();
+    try {
+      await fs.promises.mkdir(dir, { recursive: true });
+      await shell.openPath(dir);
+      return { ok: true, dir };
+    } catch (error) {
+      return { ok: false, error: error.message };
     }
   });
 
@@ -716,6 +836,35 @@ function registerIpc() {
 
   /** Файлы, выбранные пользователем в диалоге. Импорт берёт только их. */
   const adventurePicked = [];
+
+  /**
+   * Готовые карточки Open5e ждут подтверждения. В renderer уходит только
+   * идентификатор черновика: иначе окно могло бы подсунуть в кампанию любую
+   * картинку и статблок в обход проверок.
+   */
+  const bestiaryDrafts = new Map();
+  const BESTIARY_DRAFT_TTL = 10 * 60_000;
+  const BESTIARY_DRAFT_LIMIT = 12;
+
+  function pruneBestiaryDrafts() {
+    const now = Date.now();
+    for (const [id, draft] of bestiaryDrafts) {
+      if (now - draft.at > BESTIARY_DRAFT_TTL) bestiaryDrafts.delete(id);
+    }
+    while (bestiaryDrafts.size >= BESTIARY_DRAFT_LIMIT) {
+      bestiaryDrafts.delete(bestiaryDrafts.keys().next().value);
+    }
+  }
+
+  function bestiaryError(error) {
+    if (error && error.code === 'BAD_KEY') return 'Некорректная карточка монстра';
+    if (error && error.status === 404) return 'В Open5e нет такой карточки';
+    if (error && error.status === 429) return 'Open5e просит подождать: слишком много запросов.';
+    if (error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+      return 'Open5e не ответил вовремя. Попробуйте ещё раз.';
+    }
+    return 'Не удалось связаться с Open5e. Проверьте интернет и повторите.';
+  }
 
   /**
    * Приводит путь к сравнимому виду: и диалог, и renderer должны дать одно и
@@ -906,7 +1055,7 @@ function registerIpc() {
       // должен быть вторым, более слабым путём внутрь приложения.
       host.room.adventure = normalizeAdventure(patch.adventure);
       for (const token of addedTokens) host.room.tokens.push(token);
-      host.room.markDirty();
+      markDirty();
 
       // Рассылаем ровно то же событие, что и сервер при загрузке карты вручную,
       // иначе клиенты продолжат видеть старые вкладки.
@@ -938,6 +1087,177 @@ function registerIpc() {
     return { ok: true };
   });
 
+  /* --------------------------------------------------------------- Open5e */
+
+  ipcMain.handle('bestiary:search', async (event, query) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    const text = String(query || '').trim().slice(0, 120);
+    if (!text) return { ok: false, error: 'Введите название монстра.' };
+    try {
+      const result = await open5e.searchCreatures(text);
+      return { ok: true, ...result };
+    } catch (error) {
+      console.warn('[open5e] поиск:', error.message);
+      return { ok: false, error: bestiaryError(error) };
+    }
+  });
+
+  ipcMain.handle('bestiary:preview', async (event, key) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    try {
+      const result = await open5e.previewCreature(key);
+      pruneBestiaryDrafts();
+      const id = crypto.randomUUID();
+      bestiaryDrafts.set(id, { at: Date.now(), ...result });
+      return { ok: true, id, ...result };
+    } catch (error) {
+      console.warn('[open5e] карточка:', error.message);
+      return { ok: false, error: bestiaryError(error) };
+    }
+  });
+
+  /**
+   * Скачивает картинку в черновик по явной просьбе. Обычный импорт хранит
+   * только URL: диск пользователя не должен заполняться чужими портретами
+   * без его согласия.
+   */
+  ipcMain.handle('bestiary:cacheImage', async (event, draftId) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    pruneBestiaryDrafts();
+    const draft = bestiaryDrafts.get(String(draftId || ''));
+    if (!draft) return { ok: false, error: 'Карточка устарела. Найдите монстра заново.' };
+    if (typeof draft.actor.image !== 'string' || !draft.actor.image) {
+      return { ok: false, error: 'У этой карточки нет картинки.' };
+    }
+    if (draft.actor.image.startsWith('data:image/')) {
+      return { ok: true, image: draft.actor.image };
+    }
+    const image = await open5e.downloadImage(draft.actor.image);
+    if (!image) return { ok: false, error: 'Не удалось скачать картинку: источник не отдал файл.' };
+    draft.actor.image = image;
+    draft.images = [
+      { url: image, thumb: image, source: 'Локальный файл', credit: '' },
+      ...(draft.images || [])
+    ];
+    draft.meta = { ...(draft.meta || {}), hasImage: true, imageSource: 'Локальный файл', imageCredit: '' };
+    return { ok: true, image, images: draft.images };
+  });
+
+  /** Другой поиск картинки для уже открытой карточки. */
+  ipcMain.handle('bestiary:image', async (event, draftId, query) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    pruneBestiaryDrafts();
+    const draft = bestiaryDrafts.get(String(draftId || ''));
+    if (!draft) return { ok: false, error: 'Карточка устарела. Найдите монстра заново.' };
+    const text = String(query || '').trim().slice(0, 120);
+    if (!text) return { ok: false, error: 'Введите запрос для поиска картинки.' };
+    try {
+      const images = await open5e.findArtworkCandidatesByQuery(text);
+      if (!images.length) return { ok: false, error: 'По этому запросу картинка не нашлась.' };
+      const found = images[0];
+      draft.images = images;
+      draft.actor.image = found.url;
+      draft.meta = {
+        ...(draft.meta || {}),
+        hasImage: true,
+        imageSource: found.source,
+        imageCredit: found.credit
+      };
+      return { ok: true, images, image: found.url, source: found.source, credit: found.credit };
+    } catch (error) {
+      console.warn('[open5e] картинка:', error.message);
+      return { ok: false, error: 'Поиск картинки не удался. Проверьте интернет.' };
+    }
+  });
+
+  /** Выбор одного из найденных вариантов: в карточку идёт только он. */
+  ipcMain.handle('bestiary:pickImage', async (event, draftId, url) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    pruneBestiaryDrafts();
+    const draft = bestiaryDrafts.get(String(draftId || ''));
+    if (!draft) return { ok: false, error: 'Карточка устарела. Найдите монстра заново.' };
+    const wanted = String(url || '');
+    const candidate = (draft.images || []).find((item) => item.url === wanted);
+    if (!candidate) return { ok: false, error: 'Этого варианта больше нет.' };
+    draft.actor.image = candidate.url;
+    draft.meta = {
+      ...(draft.meta || {}),
+      hasImage: true,
+      imageSource: candidate.source,
+      imageCredit: candidate.credit
+    };
+    return { ok: true, image: candidate.url, source: candidate.source, credit: candidate.credit };
+  });
+
+  /** Своя картинка из файла: в кампанию попадёт только при сохранении карточки. */
+  ipcMain.handle('bestiary:uploadImage', async (event, draftId, dataUrl) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    pruneBestiaryDrafts();
+    const draft = bestiaryDrafts.get(String(draftId || ''));
+    if (!draft) return { ok: false, error: 'Карточка устарела. Найдите монстра заново.' };
+    const decoded = decodeImage(dataUrl);
+    if (!decoded || decoded.error) return { ok: false, error: decoded ? decoded.error : 'Картинка не прочиталась.' };
+    draft.actor.image = dataUrl;
+    draft.images = [
+      { url: dataUrl, thumb: dataUrl, source: 'Своя картинка', credit: '' },
+      ...(draft.images || [])
+    ];
+    draft.meta = { ...(draft.meta || {}), hasImage: true, imageSource: 'Своя картинка', imageCredit: '' };
+    return { ok: true, image: dataUrl, images: draft.images };
+  });
+
+  ipcMain.handle('bestiary:import', async (event, draftId, crop) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    pruneBestiaryDrafts();
+    const draft = bestiaryDrafts.get(String(draftId || ''));
+    if (!draft) return { ok: false, error: 'Карточка устарела. Найдите монстра заново.' };
+
+    try {
+      const actor = {
+        ...draft.actor,
+        id: `actor-${crypto.randomBytes(4).toString('hex')}`,
+        image: /^https?:\/\//i.test(draft.actor.image || '') ? open5e.normalizeImageUrl(draft.actor.image) : ''
+      };
+      // Кадр из предпросмотра: зум и сдвиг в процентах. Проверяем ещё раз,
+      // потому что renderer присылает обычные числа и мог прислать что угодно.
+      const zoom = Math.min(4, Math.max(1, Number(crop && crop.zoom) || 1));
+      const limit = (zoom - 1) * 50;
+      const shift = (value) => Math.min(limit, Math.max(-limit, Number(value) || 0));
+      actor.imageZoom = zoom;
+      actor.imageX = shift(crop && crop.x);
+      actor.imageY = shift(crop && crop.y);
+      if (typeof draft.actor.image === 'string' && draft.actor.image.startsWith('data:image/')) {
+        const decoded = decodeImage(draft.actor.image);
+        if (decoded && !decoded.error) {
+          const fileName = await store.saveImage(host.room.campaign.id, decoded.buffer, decoded.ext);
+          actor.image = `/files/${fileName}`;
+        }
+      }
+
+      if (!host.room.adventure) {
+        host.room.adventure = normalizeAdventure({ name: 'Бестиарий', source: 'Open5e', actors: [] });
+      }
+      if (host.room.adventure.actors.length >= LIMITS.maxAdventureActors) {
+        return { ok: false, error: 'В справочнике уже слишком много персонажей.' };
+      }
+      const clean = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      if (host.room.adventure.actors.some((entry) => clean(entry.name) === clean(actor.name))) {
+        return { ok: false, error: `«${actor.name}» уже есть в справочнике.` };
+      }
+
+      host.room.adventure.actors.push(actor);
+      host.room.adventure = normalizeAdventure(host.room.adventure);
+      markDirty();
+      host.server.io.to('dm-sockets').emit('adventureUpdated', host.room.adventure);
+      await persistCampaign({ notify: true });
+      bestiaryDrafts.delete(String(draftId));
+      return { ok: true, adventure: host.room.adventure };
+    } catch (error) {
+      console.warn('[open5e] сохранение:', error.message);
+      return { ok: false, error: 'Не удалось сохранить карточку в кампанию.' };
+    }
+  });
+
   // Ссылки открываем только http(s): renderer не должен уметь запускать что угодно.
   ipcMain.handle('shell:openExternal', async (event, url) => {
     if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
@@ -954,9 +1274,7 @@ function registerIpc() {
 
 app.on('window-all-closed', () => {
   app.quit();
-});
-
-app.on('before-quit', (event) => {
+});app.on('before-quit', (event) => {
   if (quitting || !host) return;
   // Даём серверу корректно остановиться и сохраняем кампанию.
   event.preventDefault();

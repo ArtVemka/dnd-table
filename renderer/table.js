@@ -21,6 +21,9 @@
   /** Значение списка выбора, за которым стоит свободная строка имени. */
   const CUSTOM_PICK = 'custom';
 
+  /** Сдвиг мыши, после которого нажатие по карте считается перетаскиванием. */
+  const PAN_CLICK_SLOP = 6;
+
   /**
    * Во сколько раз меньше холста считается свет.
    *
@@ -55,6 +58,40 @@
     if (className) node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
+  }
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  /** Иконка панели карты из тех же штриховых контуров, что и вкладки. */
+  function mapIcon(paths) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    for (const d of paths) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    }
+    return svg;
+  }
+
+  /**
+   * Компактная кнопка панели карты: иконка и подпись, спрятанная от глаз,
+   * но оставленная для экранного диктора и поиска по тексту.
+   */
+  function fillMapTool(node, label, title, paths) {
+    node.title = title;
+    node.setAttribute('aria-label', label);
+    node.appendChild(mapIcon(paths));
+    node.appendChild(el('span', 'map-tool__label', label));
+    return node;
+  }
+
+  function mapTool(label, title, paths) {
+    const button = el('button', 'btn btn--ghost map-tool');
+    button.type = 'button';
+    return fillMapTool(button, label, title, paths);
   }
 
   /**
@@ -269,6 +306,95 @@
     assign.appendChild(select);
     menu.appendChild(assign);
 
+    // Сторона: вкладки в панели фишек и реакции опираются на неё, а не на
+    // «есть ли у фишки игрок». Дружелюбный НПС без игрока — союзник.
+    const sideBox = el('div', 'token-menu__section');
+    sideBox.appendChild(el('div', 'token-menu__title', 'Сторона'));
+    const sideSelect = el('select', 'select');
+    for (const variant of [
+      { id: 'ally', label: 'Союзник' },
+      { id: 'enemy', label: 'Враг' }
+    ]) {
+      const option = el('option', null, variant.label);
+      option.value = variant.id;
+      if ((tokenSide(token) === 'ally' ? 'ally' : 'enemy') === variant.id) option.selected = true;
+      sideSelect.appendChild(option);
+    }
+    sideSelect.addEventListener('change', () => {
+      close();
+      if (handlers.onSetTokenSide) handlers.onSetTokenSide(token.id, sideSelect.value);
+    });
+    sideBox.appendChild(sideSelect);
+    menu.appendChild(sideBox);
+
+    // Бонус атаки: у монстра задаётся здесь, у игрока берётся из листа.
+    // Второй источник для игрока означал бы два разных числа за столом.
+    const playerStats = token.assignedPlayerId && typeof handlers.onSheetStats === 'function'
+      ? handlers.onSheetStats(token.assignedPlayerId)
+      : null;
+    const isPlayerToken = Boolean(token.assignedPlayerId);
+    const bonusBox = el('div', 'token-menu__section');
+    bonusBox.appendChild(el('div', 'token-menu__title', 'Бонус атаки'));
+    if (isPlayerToken) {
+      const value = playerStats && playerStats.attackBonus !== null
+        ? playerStats.attackBonus
+        : null;
+      const note = el('div', 'token-menu__note', value === null
+        ? 'В листе нет атак'
+        : `${value >= 0 ? '+' : ''}${value} · из листа`);
+      note.title = 'Бонус берётся из первой атаки в листе персонажа';
+      bonusBox.appendChild(note);
+    } else {
+      const bonusInput = el('input', 'input');
+      bonusInput.type = 'number';
+      bonusInput.min = '-5';
+      bonusInput.max = '20';
+      bonusInput.step = '1';
+      bonusInput.value = String(Number.isFinite(Number(token.attackBonus)) ? Number(token.attackBonus) : 0);
+      bonusInput.title = 'Прибавляется к d20 при атаке по возможности';
+      bonusInput.addEventListener('change', () => {
+        close();
+        if (handlers.onSetTokenAttackBonus) {
+          handlers.onSetTokenAttackBonus(token.id, Number(bonusInput.value) || 0);
+        }
+      });
+      bonusBox.appendChild(bonusInput);
+    }
+    menu.appendChild(bonusBox);
+
+    // КД: у игрока он из листа, у монстра задаётся здесь. Пустое поле у
+    // монстра означает «неизвестен».
+    const acBox = el('div', 'token-menu__section');
+    acBox.appendChild(el('div', 'token-menu__title', 'Класс брони'));
+    if (isPlayerToken) {
+      const value = playerStats && playerStats.armorClass !== null
+        ? playerStats.armorClass
+        : null;
+      const note = el('div', 'token-menu__note', value === null
+        ? 'В листе нет КД'
+        : `${value} · из листа`);
+      note.title = 'Класс брони берётся из листа персонажа';
+      acBox.appendChild(note);
+    } else {
+      const acInput = el('input', 'input');
+      acInput.type = 'number';
+      acInput.min = '1';
+      acInput.max = '60';
+      acInput.step = '1';
+      acInput.placeholder = 'неизвестен';
+      acInput.value = Number(token.armorClass) > 0 ? String(Math.round(Number(token.armorClass))) : '';
+      acInput.title = 'Против него сервер сравнивает бросок реакции';
+      acInput.addEventListener('change', () => {
+        close();
+        if (handlers.onSetTokenArmorClass) {
+          const value = acInput.value.trim();
+          handlers.onSetTokenArmorClass(token.id, value === '' ? null : Number(value));
+        }
+      });
+      acBox.appendChild(acInput);
+    }
+    menu.appendChild(acBox);
+
     // Перенос на показанную карту: заготовку можно ставить на любую вкладку,
     // а в момент сцены перевести на ту, которую уже видят игроки.
     if (options.canTransfer && options.activeMapId) {
@@ -320,9 +446,17 @@
    */
   function placeTokenMenu(menu, clientX, clientY, owner) {
     owner.closeMenu();
+    // Сначала ставим по курсору, потом прижимаем к экрану: меню выросло и
+    // у нижнего края уезжало за окно, а его нижние поля оставались недоступны.
     menu.style.left = `${clientX}px`;
     menu.style.top = `${clientY}px`;
     document.body.appendChild(menu);
+    const margin = 8;
+    const rect = menu.getBoundingClientRect();
+    const left = Math.max(margin, Math.min(clientX, window.innerWidth - rect.width - margin));
+    const top = Math.max(margin, Math.min(clientY, window.innerHeight - rect.height - margin));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
     owner.openMenu = menu;
     owner.closeMenuHandler = (event) => {
       if (menu.contains(event.target)) return;
@@ -358,6 +492,29 @@
    * ожидание. 80 мгс на клетку даёт примерно двенадцать шагов в секунду.
    */
   const COMBAT_STEP_MS = 80;
+
+  /**
+   * Состояния, из-за которых существо не может совершить реакцию.
+   *
+   * Недееспособность по правилам отнимает реакции целиком, а паралич,
+   * окаменение и оглушение включают её в себя. Испуг, отравление и «сбит с ног»
+   * реакцию не отнимают, поэтому здесь их нет.
+   */
+  const REACTION_BLOCKED = new Set(['incapacitated', 'paralyzed', 'petrified', 'stunned']);
+
+  /**
+   * Сторона фишки: союзник или враг.
+   *
+   * Поле приходит с сервера, но снимки старых кампаний и тренировочные фишки
+   * могут его не знать. Тогда работает прежнее правило: фишка с игроком —
+   * союзник, остальные — враги.
+   * @param {object} token
+   * @returns {'ally'|'enemy'}
+   */
+  function tokenSide(token) {
+    if (token && (token.side === 'ally' || token.side === 'enemy')) return token.side;
+    return token && token.assignedPlayerId ? 'ally' : 'enemy';
+  }
 
   /**
    * Простой редактор карты: два холста друг над другом (фон и штрихи),
@@ -952,6 +1109,8 @@
       this.playerPeek = null;
       this.tokens = [];
       this.players = [];
+      // Листы персонажей: по ним считается остаток скорости при протяжке.
+      this.sheets = {};
       this.grid = { enabled: false, cell: DnD.GRID.defaultCell };
       // Что уже нарисовано в слое фишек: те же объекты и та же подпись
       // означают, что пересобирать DOM не нужно.
@@ -963,6 +1122,13 @@
       this.zoom = 1;
       this.pan = { x: 0, y: 0 };
       this.dragState = null;
+      /**
+       * Идёт протяжка маршрута. Пока она идёт, наведение мышью не должно
+       * перерисовывать путь по кратчайшей линии: иначе подпись и линия
+       * возвращались бы к прямой до клетки под курсором.
+       * @type {boolean}
+       */
+      this.routeDragging = false;
       this.lastEmit = 0;
       /**
        * Режим тумана: мастер рисует открытые участки мышью по карте.
@@ -1009,6 +1175,24 @@
        * @type {{enabled: boolean, tokenId: string|null}}
        */
       this.combat = { enabled: false, tokenId: null };
+      /**
+       * Круг боя и реакции: номер раунда, в котором существо уже потратило
+       * реакцию на атаку по возможности. Реакция возвращается в начале своего
+       * хода, а ход здесь — раунд, поэтому храним именно номер раунда.
+       * @type {Map<string, number>}
+       */
+      this.reactionRounds = new Map();
+      this.round = 1;
+      /**
+       * Сколько футов фишка прошла в текущем ходу: id -> футы.
+       *
+       * Считается на клиенте, который ведёт фишку: сервер движение не
+       * суммирует, а ход у каждого свой. Сбрасывается при смене хода.
+       * @type {Record<string, number>}
+       */
+      this.moveSpent = {};
+      this.moveTurnId = null;
+      this.moveRound = 0;
       /** Маршрут последнего наведения: клетка назначения и расстояние. */
       this.route = null;
       /** Линейка: включена ли и где начало с концом (доли карты). */
@@ -1279,13 +1463,25 @@
       surface.appendChild(this.surfaceCanvas);
       this.surfaceContext = this.surfaceCanvas.getContext('2d');
 
+      // Линия маршрута: от фишки до клетки назначения по клеткам. Лежит под
+      // фишками, чтобы кружки не перекрывались линией. В процентах не рисуем:
+      // толщина штриха тогда зависела бы от пропорций карты, поэтому координаты
+      // пересчитываются в пиксели подложки, как у линейки.
+      this.routeLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      this.routeLayer.setAttribute('class', 'map-route');
+      this.routeLayer.setAttribute('preserveAspectRatio', 'none');
+      this.routeLayer.hidden = true;
+      surface.appendChild(this.routeLayer);
+      this.routeLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      this.routeLine.setAttribute('class', 'map-route__line');
+      this.routeLayer.appendChild(this.routeLine);
+
       const layer = el('div', 'token-layer');
       this.tokenLayer = layer;
       surface.appendChild(layer);
 
-      // Клетка назначения и подпись расстояния лежат поверх фишек. Линию
-      // маршрута убрали: она уезжала от фишки, а клетка и число шагов дают
-      // то же без неё.
+      // Клетка назначения и подпись расстояния лежат поверх фишек: подпись
+      // должна читаться, даже когда цель закрыта соседней фишкой.
       this.cellMark = el('div', 'map-cell');
       surface.appendChild(this.cellMark);
       this.routeLabel = el('div', 'map-route__label');
@@ -1518,6 +1714,28 @@
       stage.appendChild(zoomBar);
 
       stage.addEventListener('pointerdown', (event) => this.startPan(event));
+      // Монстра из справочника можно перетащить прямо на карту. Координаты
+      // считаем по подложке: фишка встанет туда, где отпустили мышь.
+      stage.addEventListener('dragover', (event) => {
+        if (!event.dataTransfer || ![...event.dataTransfer.types].includes('application/x-dnd-actor')) return;
+        if (this.role !== 'dm' || this.surface.hidden) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        stage.classList.add('is-dropping');
+      });
+      stage.addEventListener('dragleave', () => stage.classList.remove('is-dropping'));
+      stage.addEventListener('drop', (event) => {
+        stage.classList.remove('is-dropping');
+        if (this.role !== 'dm' || this.surface.hidden) return;
+        const name = event.dataTransfer && (
+          event.dataTransfer.getData('application/x-dnd-actor')
+          || event.dataTransfer.getData('text/plain')
+        );
+        if (!name) return;
+        event.preventDefault();
+        const point = this.mapPoint(event);
+        if (this.handlers.onDropActor) this.handlers.onDropActor(name, point.x, point.y);
+      });
       stage.addEventListener('wheel', (event) => {
         if (this.editing) return;
         event.preventDefault();
@@ -1712,36 +1930,53 @@
           }
         }
       });
-      // Режим боя: нажатие по клетке отправляет выбранную фишку туда. Слушатель
-      // свой и на всех ролях, потому что ходят и игроки, а мастерские кисти выше
-      // сюда не доходят: туман, стены и свет включаются отдельными режимами.
+      // Режим боя: короткое нажатие по клетке отправляет выбранную фишку туда.
+      // Именно короткое: если мастер тащит карту, pointerdown не должен ни
+      // останавливаться, ни превращаться в ход фишки. Иначе в бою с выбранной
+      // фишкой карту нельзя было сдвинуть: каждое нажатие уводило фишку.
       this.surface.addEventListener('pointerdown', (event) => {
         // Кисти мастера важнее: туман, стены и свет рисуются теми же нажатиями.
         if (!this.combat.enabled || this.editing || event.button !== 0) return;
         if (this.fogMode || this.drawMode) return;
-        const token = this.combatToken();
-        if (!token) {
-          // Молчание здесь читается как «кнопка не работает»: режим включён,
-          // а фишка не едет. Поэтому объясняем, что нужно сделать.
-          if (this.handlers.onNotice) {
-            this.handlers.onNotice('Сначала нажмите на фишку, которая пойдёт, потом на клетку');
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const slop = event.pointerType === 'touch' ? 12 : PAN_CLICK_SLOP;
+        let moved = false;
+        const onMove = (moveEvent) => {
+          const dx = moveEvent.clientX - startX;
+          const dy = moveEvent.clientY - startY;
+          if (Math.hypot(dx, dy) > slop) moved = true;
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove, true);
+          window.removeEventListener('pointerup', onUp, true);
+          window.removeEventListener('pointercancel', onUp, true);
+          if (moved || !this.combat.enabled) return;
+          const token = this.combatToken();
+          if (!token) {
+            // Молчание здесь читается как «кнопка не работает»: режим включён,
+            // а фишка не едет. Поэтому объясняем, что нужно сделать.
+            if (this.handlers.onNotice) {
+              this.handlers.onNotice('Сначала нажмите на фишку, которая пойдёт, потом на клетку');
+            }
+            return;
           }
-          return;
-        }
-        const target = this.cellAtClient(event.clientX, event.clientY);
-        if (!target) {
-          if (!this.cellGeometry() && this.handlers.onNotice) {
-            this.handlers.onNotice('Клеток нет: загрузите карту, сетка считается от её размера');
+          const target = this.cellAtClient(startX, startY);
+          if (!target) {
+            if (!this.cellGeometry() && this.handlers.onNotice) {
+              this.handlers.onNotice('Клеток нет: загрузите карту, сетка считается от её размера');
+            }
+            return;
           }
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        this.walkTokenTo(token, target);
+          this.walkTokenTo(token, target);
+        };
+        window.addEventListener('pointermove', onMove, true);
+        window.addEventListener('pointerup', onUp, true);
+        window.addEventListener('pointercancel', onUp, true);
       });
       // Маршрут рисуется под курсором: видно расстояние до того, как нажато.
       this.surface.addEventListener('pointermove', (event) => {
-        if (!this.combat.enabled || this.editing || !this.combatToken()) return;
+        if (!this.combat.enabled || this.editing || this.routeDragging || !this.combatToken()) return;
         if (this.fogMode || this.drawMode) return;
         this.paintRoute(this.cellAtClient(event.clientX, event.clientY));
       });
@@ -1935,12 +2170,16 @@
      */
     buildFogControls(type, map) {
       const box = el('div', 'fog-bar');
-      const mode = el('button', 'btn btn--tiny', this.fogMode ? 'Туман: рисуем' : 'Туман: выключен');
-      mode.type = 'button';
+      const mode = mapTool(
+        this.fogMode ? 'Туман: рисуем' : 'Туман: выключен',
+        this.fogMode
+          ? 'Рисуем открытые участки. Выключите, чтобы двигать фишки'
+          : 'Включить режим тумана и открывать участки карты',
+        ['M4 11h7a2.5 2.5 0 0 0 .3-5 3.5 3.5 0 0 0-6.7-.7A2.6 2.6 0 0 0 4 11z']
+      );
+      mode.classList.add('btn--tiny');
       mode.classList.toggle('btn--accent', this.fogMode);
-      mode.title = this.fogMode
-        ? 'Рисуем открытые участки. Выключите, чтобы двигать фишки'
-        : 'Включить режим тумана и открывать участки карты';
+      mode.setAttribute('aria-pressed', String(this.fogMode));
       mode.addEventListener('click', (event) => {
         event.stopPropagation();
         this.setFogMode(!this.fogMode);
@@ -1961,18 +2200,23 @@
       size.addEventListener('click', (event) => event.stopPropagation());
       box.appendChild(size);
 
-      const openAll = el('button', 'btn btn--tiny btn--ghost', 'Открыть всё');
-      openAll.type = 'button';
-      openAll.title = 'Убрать туман с карты целиком';
+      const openAll = mapTool('Открыть всё', 'Убрать туман с карты целиком', [
+        'M1.8 8s2.3-3.8 6.2-3.8S14.2 8 14.2 8s-2.3 3.8-6.2 3.8S1.8 8 1.8 8z',
+        'M8 6.4a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z'
+      ]);
+      openAll.classList.add('btn--tiny');
       openAll.addEventListener('click', (event) => {
         event.stopPropagation();
         if (this.handlers.onSetMapFog) this.handlers.onSetMapFog(type, map.id, true);
       });
       box.appendChild(openAll);
 
-      const coverAll = el('button', 'btn btn--tiny btn--ghost', 'Закрыть всё');
-      coverAll.type = 'button';
-      coverAll.title = 'Снова закрыть карту целиком';
+      const coverAll = mapTool('Закрыть всё', 'Снова закрыть карту целиком', [
+        'M2 2l12 12',
+        'M6.2 4.5A7.6 7.6 0 0 1 8 4.2c3.9 0 6.2 3.8 6.2 3.8a9 9 0 0 1-2 2.3',
+        'M4 6.1A9.6 9.6 0 0 0 1.8 8S4.1 11.8 8 11.8c.7 0 1.3-.1 1.9-.3'
+      ]);
+      coverAll.classList.add('btn--tiny');
       coverAll.addEventListener('click', (event) => {
         event.stopPropagation();
         if (this.handlers.onSetMapFog) this.handlers.onSetMapFog(type, map.id, false);
@@ -2955,6 +3199,7 @@
       this.activeMapId = source.activeMapId || null;
       this.tokens = source.tokens || [];
       this.players = source.players || [];
+      this.sheets = source.sheets || {};
       if (source.grid && typeof source.grid === 'object') {
         this.grid = {
           enabled: Boolean(source.grid.enabled),
@@ -2971,6 +3216,22 @@
       // Режим боя приходит со стола: он общий, иначе участники смотрели бы
       // на один и тот же бой по-разному.
       const combatEnabled = Boolean(source.combat && source.combat.enabled);
+      this.round = Math.max(1, Number(source.initiative && source.initiative.round) || 1);
+      // Новый ход начинается с полной скорости: копить пройденные футы между
+      // ходами нельзя, иначе к третьему раунду фишка «не могла» бы идти.
+      const turnId = (source.initiative && source.initiative.turnId) || null;
+      if (turnId !== this.moveTurnId || this.round !== this.moveRound) {
+        // Первый рендер только подхватывает счёт с сервера. На смене хода
+        // счётчик обнуляется и здесь: иначе подпись остатка скорости до
+        // первого движения показывала бы прошлый ход.
+        const firstSeeding = this.moveTurnId === null && this.moveRound === 0;
+        this.moveSpent = {};
+        if (!firstSeeding) {
+          for (const token of this.tokens) token.movedCells = 0;
+        }
+        this.moveTurnId = turnId;
+        this.moveRound = this.round;
+      }
       if (combatEnabled !== this.combat.enabled) {
         this.combat.enabled = combatEnabled;
         if (!combatEnabled) this.combat.tokenId = null;
@@ -3312,48 +3573,70 @@
     }
 
     /**
-     * Путь от фишки до клетки: только по сторонам клеток, с одним поворотом.
+     * Путь от фишки до клетки.
      *
-     * Диагонали нет намеренно: сквозь угол клетки фишка не ходит, поэтому путь
-     * идёт сначала по вертикали до строки цели, потом по горизонтали до её
-     * столбца. Поворот один, и он всегда в строке цели: иначе длина пути была
-     * бы одинаковой, а рисунок скакал бы от клетки к клетке.
+     * Диагональ разрешена: по правилам 5e шаг по диагонали стоит те же 5 футов,
+     * что и по стороне. Путь идёт по кратчайшей лестнице, поэтому расстояние
+     * совпадает с сеточным (максимум из разницы столбцов и строк).
      * @param {{col: number, row: number}} from
      * @param {{col: number, row: number}} to
      * @returns {{col: number, row: number}[]} Точки от старта до цели, без старта.
      */
     combatPath(from, to) {
       const points = [];
-      // Шаг в ноль означает «по этой оси не идём»: без такой проверки цикл от
-      // равных клеток ушёл бы в бесконечность.
-      const rowStep = to.row > from.row ? 1 : (to.row < from.row ? -1 : 0);
-      for (let row = from.row + rowStep; row !== to.row; row += rowStep) {
-        points.push({ col: from.col, row });
+      let col = from.col;
+      let row = from.row;
+      // Шаг в ноль означает «по этой оси не идём»; условие цикла не даёт
+      // зациклиться, когда старт и цель совпадают.
+      while (col !== to.col || row !== to.row) {
+        if (col !== to.col) col += Math.sign(to.col - col);
+        if (row !== to.row) row += Math.sign(to.row - row);
+        points.push({ col, row });
       }
-      // Угол пути: клетка в строке цели и в столбце фишки. Без неё ломаная
-      // перескакивала бы через угол клетки, то есть по диагонали.
-      const colStep = to.col > from.col ? 1 : (to.col < from.col ? -1 : 0);
-      if (rowStep !== 0 && colStep !== 0) points.push({ col: from.col, row: to.row });
-      for (let col = from.col + colStep; col !== to.col; col += colStep) {
-        points.push({ col, row: to.row });
-      }
-      points.push({ col: to.col, row: to.row });
       return points;
+    }
+
+    /**
+     * Продолжает нарисованный путь до клетки под курсором.
+     *
+     * Курсор задаёт направление; если указатель перескочил сразу на несколько
+     * клеток, нехватка достраивается шагами, в том числе по диагонали. Возврат
+     * на пройденную клетку укорачивает путь до неё, как ластик: случайный крюк
+     * можно стереть, не отпуская кнопку.
+     * @param {{col: number, row: number}[]} cells уже нарисованный путь
+     * @param {{col: number, row: number}} target клетка под курсором
+     * @returns {{col: number, row: number}[]} Тот же массив, если путь не
+     *   изменился, иначе новый.
+     */
+    extendRoute(cells, target) {
+      const index = cells.findIndex((cell) => cell.col === target.col && cell.row === target.row);
+      if (index >= 0) {
+        return index === cells.length - 1 ? cells : cells.slice(0, index + 1);
+      }
+      const path = cells.slice();
+      // Потолок от зависшего указателя: двести клеток — это уже не ход.
+      while (path.length < 200) {
+        const last = path[path.length - 1];
+        const dc = target.col - last.col;
+        const dr = target.row - last.row;
+        if (dc === 0 && dr === 0) break;
+        path.push({ col: last.col + Math.sign(dc), row: last.row + Math.sign(dr) });
+      }
+      return path;
     }
 
     /**
      * Расстояние между клетками.
      *
-     * Раз путь идёт только по сторонам клеток, диагонали в нём нет, а значит
-     * шаг равен клетке, и расстояние считается как в сетке: разница по столбцам
-     * плюс разница по строкам. Футы берутся из настройки стола, поэтому у карты
-     * со своей мерой счёт остаётся верным.
+     * Диагональный шаг стоит столько же, сколько прямой, поэтому расстояние —
+     * максимум из разницы столбцов и строк, а не их сумма. Футы берутся из
+     * настройки стола, поэтому у карты со своей мерой счёт остаётся верным.
      * @param {{col: number, row: number}} from
      * @param {{col: number, row: number}} to
      * @returns {{steps: number, cells: number, feet: number}}
      */
     combatMeasure(from, to) {
-      const steps = Math.abs(to.col - from.col) + Math.abs(to.row - from.row);
+      const steps = Math.max(Math.abs(to.col - from.col), Math.abs(to.row - from.row));
       const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
       return { steps, cells: steps, feet: steps * feetPerCell };
     }
@@ -3715,44 +3998,106 @@
 
     /**
      * Показывает клетку назначения и расстояние до неё.
+     *
+     * Линии здесь нет: путь рисует сам игрок протяжкой. Наведение только
+     * подсказывает, сколько шагов до клетки под курсором.
      * @param {{col: number, row: number}} [target]
      */
-    paintRoute(target) {      const geometry = this.cellGeometry();
-      const cellMark = this.cellMark;
-      const label = this.routeLabel;
-      if (!geometry) {
-        this.route = null;
-        cellMark.hidden = true;
-        label.hidden = true;
-        return;
-      }
+    paintRoute(target) {
+      // Пока игрок ведёт маршрут, наведение не перебивает нарисованный путь.
+      if (this.routeDragging) return;
       if (target) this.route = target;
-      const route = this.route;
       const token = this.combatToken();
-      if (!route || !token) {
-        cellMark.hidden = true;
-        label.hidden = true;
+      const route = this.route;
+      if (!token || !route) {
+        this.hideRoutePaint();
         return;
       }
       const from = this.tokenCell(token);
-      const measure = this.combatMeasure(from, route);
-      const toCenter = this.cellCenterInMap(route.col, route.row);
+      if (!from) {
+        this.hideRoutePaint();
+        return;
+      }
+      this.paintRouteDraw([from, ...this.combatPath(from, route)], { showLine: false });
+    }
 
-      // Клетка назначения рисуется в процентах от картинки, иначе её размер
-      // уезжал бы от клетки при приближении.
-      cellMark.hidden = false;
-      cellMark.style.width = `${(geometry.cell / this.image.naturalWidth) * 100}%`;
-      cellMark.style.height = `${(geometry.cell / this.image.naturalHeight) * 100}%`;
-      cellMark.style.left = `${toCenter.x * 100}%`;
-      cellMark.style.top = `${toCenter.y * 100}%`;
+    /**
+     * Рисует путь, который игрок провёл мышью: клетка за клеткой, со всеми
+     * поворотами. Расстояние считается по этому пути, а не по прямой до цели.
+     * @param {{col: number, row: number}[]} cells
+     * @param {{showCell?: boolean, showLine?: boolean}} [options]
+     */
+    paintRoutePath(cells, options = {}) {
+      if (!Array.isArray(cells) || cells.length < 2) {
+        this.hideRoutePaint();
+        return;
+      }
+      this.paintRouteDraw(cells, options);
+    }
 
-      // Подпись ставим между фишкой и клеткой назначения: линии больше нет,
-      // и без подписи у клетки было бы не понять, сколько это шагов.
-      const here = this.tokenMapPoint(token);
-      label.hidden = false;
-      label.textContent = this.combatDistanceText(measure);
-      label.style.left = `${((here.x + toCenter.x) / 2) * 100}%`;
-      label.style.top = `${((here.y + toCenter.y) / 2) * 100}%`;
+    /**
+     * Общая отрисовка: клетка назначения, подпись расстояния и линия пути.
+     * @param {{col: number, row: number}[]} cells клетки от старта до цели
+     * @param {{showCell?: boolean, showLine?: boolean}} [options]
+     */
+    paintRouteDraw(cells, options = {}) {
+      const geometry = this.cellGeometry();
+      if (!geometry || !Array.isArray(cells) || !cells.length) {
+        this.hideRoutePaint();
+        return;
+      }
+      const end = cells[cells.length - 1];
+      const steps = cells.length - 1;
+      const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+      const measure = { steps, cells: steps, feet: steps * feetPerCell };
+      const toCenter = this.cellCenterInMap(end.col, end.row);
+
+      if (options.showCell === false) {
+        this.cellMark.hidden = true;
+      } else {
+        // Клетка назначения рисуется в процентах от картинки, иначе её размер
+        // уезжал бы от клетки при приближении.
+        this.cellMark.hidden = false;
+        this.cellMark.style.width = `${(geometry.cell / this.image.naturalWidth) * 100}%`;
+        this.cellMark.style.height = `${(geometry.cell / this.image.naturalHeight) * 100}%`;
+        this.cellMark.style.left = `${toCenter.x * 100}%`;
+        this.cellMark.style.top = `${toCenter.y * 100}%`;
+      }
+
+      // Подпись ставим на середину пути, а не между концами: у зигзага она
+      // иначе висела бы в стороне от линии.
+      const middle = this.cellCenterInMap(
+        cells[Math.floor(cells.length / 2)].col,
+        cells[Math.floor(cells.length / 2)].row
+      );
+      this.routeLabel.hidden = false;
+      this.routeLabel.textContent = this.combatDistanceText(measure)
+        + this.routeSpeedSuffix(this.combatToken(), measure);
+      this.routeLabel.style.left = `${middle.x * 100}%`;
+      this.routeLabel.style.top = `${middle.y * 100}%`;
+
+      if (options.showLine === false) {
+        this.routeLayer.hidden = true;
+        return;
+      }
+      const width = Math.max(1, this.surface.clientWidth);
+      const height = Math.max(1, this.surface.clientHeight);
+      const points = cells.map((cell) => this.cellCenterInMap(cell.col, cell.row));
+      this.routeLayer.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      this.routeLine.setAttribute('d', points
+        .map((point, index) => `${index ? 'L' : 'M'}${(point.x * width).toFixed(1)} ${(point.y * height).toFixed(1)}`)
+        .join(' '));
+      this.routeLayer.hidden = steps === 0;
+    }
+
+    /** Прячет маршрут: клетку, подпись и линию. */
+    hideRoutePaint() {
+      this.cellMark.hidden = true;
+      this.routeLabel.hidden = true;
+      if (this.routeLayer) this.routeLayer.hidden = true;
+      // Путь стираем, иначе следующая проверка или наведение могли бы увидеть
+      // старую линию в скрытом слое.
+      if (this.routeLine) this.routeLine.removeAttribute('d');
     }
 
     /** Фишка, выбранная для хода, если её всё ещё можно двигать. */
@@ -3764,6 +4109,63 @@
     }
 
     /**
+     * Остаток скорости персонажа для нарисованного пути.
+     *
+     * Скорость берём из листа игрока. Копим пройденное в текущем ходу только
+     * на этом клиенте: сервер движение не суммирует, а ход у каждого свой.
+     * @param {object|null} token
+     * @param {{feet: number}} measure
+     * @returns {string}
+     */
+    routeSpeedSuffix(token, measure) {
+      this.routeLabel.classList.remove('is-over');
+      if (!token || !token.assignedPlayerId) return '';
+      const sheet = this.sheets && this.sheets[token.assignedPlayerId];
+      const speed = Number(sheet && sheet.speed);
+      if (!Number.isFinite(speed) || speed <= 0) return '';
+      const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+      // Своё значение точнее: серверное приходит с задержкой. Если его ещё
+      // нет (перезагрузка посреди хода), берём счёт с сервера.
+      const spent = Number.isFinite(Number(this.moveSpent[token.id]))
+        ? Number(this.moveSpent[token.id])
+        : (Number(token.movedCells) || 0) * feetPerCell;
+      const left = Math.round(speed - spent - measure.feet);
+      if (left < 0) {
+        this.routeLabel.classList.add('is-over');
+        return ` · перебор ${-left} фт`;
+      }
+      return ` · осталось ${left} из ${Math.round(speed)} фт`;
+    }
+
+    /**
+     * Двигает выбранную в бою фишку на клетку стрелкой.
+     *
+     * Мышь дрожит, а по клеткам иногда нужно встать точно. Стрелки работают
+     * только когда фишка уже выбрана и карта в фокусе, чтобы не отбирать их у
+     * прокрутки и полей ввода.
+     * @param {string} key
+     * @returns {boolean} был ли шаг
+     */
+    moveSelectedByKey(key) {
+      const token = this.combatToken();
+      if (!token) return false;
+      const from = this.tokenCell(token);
+      if (!from) return false;
+      const delta = {
+        ArrowUp: { col: 0, row: -1 },
+        ArrowDown: { col: 0, row: 1 },
+        ArrowLeft: { col: -1, row: 0 },
+        ArrowRight: { col: 1, row: 0 }
+      }[key];
+      if (!delta) return false;
+      const target = { col: from.col + delta.col, row: from.row + delta.row };
+      const point = this.cellCenterInMap(target.col, target.row);
+      if (point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) return false;
+      this.walkTokenTo(token, target, [from, target]);
+      return true;
+    }
+
+    /**
      * Ведёт фишку по клеткам до цели.
      *
      * Фишка не телепортируется: она проходит клетку за клеткой, и только
@@ -3771,25 +4173,29 @@
      * получает сорок сообщений о движении за один ход.
      * @param {object} token
      * @param {{col: number, row: number}} target
+     * @param {{col: number, row: number}[]} [pathCells] путь, который провёл
+     *   игрок. Если не задан, строится кратчайший: так работает клик по клетке.
      */
-    walkTokenTo(token, target) {
+    walkTokenTo(token, target, pathCells) {
       if (this.walkTimer) return;
       const from = this.tokenCell(token);
       if (!from) return;
-      const measure = this.combatMeasure(from, target);
-      if (!measure.steps) {
+      // Нарисованный путь важнее кратчайшего: игрок мог обойти стену или лужу,
+      // и шаги считаются по нему.
+      const path = Array.isArray(pathCells) && pathCells.length > 1
+        ? pathCells
+        : [from, ...this.combatPath(from, target)];
+      if (path.length < 2) {
         this.route = null;
         this.paintRoute();
         return;
       }
       const node = this.tokenLayer.querySelector(`[data-token-id="${token.id}"]`);
       // Фишка идёт по тому же пути, что нарисован: сперва в центр своей клетки,
-      // потом клетка за клеткой и с тем же поворотом. Прямая через угол клетки
-      // выглядела бы быстрее, но вела бы мимо клеток.
+      // потом клетка за клеткой с теми же поворотами.
       const route = [
         this.tokenMapPoint(token),
-        this.cellCenterInMap(from.col, from.row),
-        ...this.combatPath(from, target).map((cell) => this.cellCenterInMap(cell.col, cell.row))
+        ...path.map((cell) => this.cellCenterInMap(cell.col, cell.row))
       ];
       const steps = route.length - 1;
       const finish = route[route.length - 1];
@@ -3817,8 +4223,20 @@
         // маршрут до прихода снимка начинался бы не от неё.
         token.x = finish.x;
         token.y = finish.y;
+        // Пройденное копим для остатка скорости в этом ходу. Ответ сервера
+        // потом заменит это число своим, но до него подпись уже верна.
+        const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+        this.moveSpent[token.id] = (Number(this.moveSpent[token.id]) || 0)
+          + (path.length - 1) * feetPerCell;
         if (this.handlers.onMoveToken) {
-          this.handlers.onMoveToken(token.id, Number(finish.x.toFixed(4)), Number(finish.y.toFixed(4)));
+          this.handlers.onMoveToken(
+            token.id,
+            Number(finish.x.toFixed(4)),
+            Number(finish.y.toFixed(4)),
+            // Путь уходит на стол вместе с концом хода: по нему окно мастера
+            // считает реакцию, и обход по дуге не должен теряться.
+            { final: true, from, path }
+          );
         }
         this.renderTokens();
         this.paintLight(this.mapOf(this.viewedMap));
@@ -3831,7 +4249,13 @@
         clearInterval(this.walkTimer);
         this.walkTimer = null;
       }
+      // Фишка, застывшая посреди хода, иначе осталась бы с классом «идёт»:
+      // он держит z-index и переход, а хода уже нет.
+      if (this.dragState && this.dragState.walk && this.dragState.node) {
+        this.dragState.node.classList.remove('token--walking');
+      }
       this.dragState = null;
+      this.routeDragging = false;
       this.surfaceStroke = [];
     }
 
@@ -3997,8 +4421,12 @@
         this.toolbar.appendChild(next);
       }
 
-      const uploadLabel = el('label', 'btn btn--ghost');
-      uploadLabel.appendChild(el('span', null, count ? 'Загрузить ещё карту' : 'Загрузить карту'));
+      const uploadLabel = fillMapTool(
+        el('label', 'btn btn--ghost map-tool'),
+        count ? 'Загрузить ещё карту' : 'Загрузить карту',
+        'Добавить карту в эту вкладку',
+        ['M8 11V3', 'M5 6l3-3 3 3', 'M3 12v1.5h10V12']
+      );
       const file = el('input');
       file.type = 'file';
       file.accept = 'image/png,image/jpeg,image/webp';
@@ -4014,16 +4442,23 @@
       // Рисование карты и показ её игрокам остаются делом ДМ: в тренировочном
       // столе для них нет ни инструментов, ни зрителей.
       if (this.role === 'dm') {
-        const draw = el('button', 'btn btn--ghost', map ? 'Рисовать поверх карты' : 'Нарисовать карту');
-        draw.type = 'button';
+        const draw = mapTool(
+          map ? 'Рисовать поверх карты' : 'Нарисовать карту',
+          map ? 'Открыть холст поверх этой карты' : 'Создать карту на холсте',
+          ['M3 13l1-3 7-7 2 2-7 7z', 'M9 4l2 2']
+        );
         draw.addEventListener('click', () => this.openEditor());
         this.toolbar.appendChild(draw);
       }
 
-      const gridButton = el('button', `btn btn--ghost toggle${this.grid.enabled ? ' is-on' : ''}`,
-        this.grid.enabled ? 'Сетка: вкл' : 'Сетка: выкл');
-      gridButton.type = 'button';
-      gridButton.title = `Клетка ${this.grid.cell}×${this.grid.cell} px — ровно по размеру фишки`;
+      const gridButton = mapTool(
+        this.grid.enabled ? 'Сетка: вкл' : 'Сетка: выкл',
+        `Клетка ${this.grid.cell}×${this.grid.cell} px — ровно по размеру фишки`,
+        ['M2 6h12M2 10h12M6 2v12M10 2v12']
+      );
+      gridButton.classList.add('toggle');
+      gridButton.classList.toggle('is-on', this.grid.enabled);
+      gridButton.setAttribute('aria-pressed', String(this.grid.enabled));
       gridButton.addEventListener('click', () => {
         if (this.handlers.onToggleGrid) this.handlers.onToggleGrid(!this.grid.enabled);
       });
@@ -4049,12 +4484,16 @@
       // Режим боя: фишки ходят по клеткам, а по клетке сразу видно, сколько
       // это шагов и футов. Включает мастер, а включается он сам при броске
       // порядка боя.
-      const combatButton = el('button', `btn btn--ghost toggle${this.combat.enabled ? ' is-on' : ''}`,
-        this.combat.enabled ? 'Бой: вкл' : 'Бой: выкл');
-      combatButton.type = 'button';
-      combatButton.title = this.combat.enabled
-        ? 'Бой идёт: фишка идёт по клеткам. Нажмите на клетку, чтобы отправить её туда'
-        : 'Включить режим боя: ход по клеткам с подсчётом расстояния';
+      const combatButton = mapTool(
+        this.combat.enabled ? 'Бой: вкл' : 'Бой: выкл',
+        this.combat.enabled
+          ? 'Бой идёт: фишка идёт по клеткам. Нажмите на клетку, чтобы отправить её туда'
+          : 'Включить режим боя: ход по клеткам с подсчётом расстояния',
+        ['M3 3l10 10M13 3L3 13', 'M3 3h2M11 3h2']
+      );
+      combatButton.classList.add('toggle');
+      combatButton.classList.toggle('is-on', this.combat.enabled);
+      combatButton.setAttribute('aria-pressed', String(this.combat.enabled));
       if (this.role !== 'dm') combatButton.disabled = true;
       combatButton.addEventListener('click', () => {
         const next = !this.combat.enabled;
@@ -4071,9 +4510,12 @@
       // Шаблоны заклинаний: мастер ставит, видят все. Кнопка рядом с боем,
       // потому что пользуются ими в бою.
       if (this.role === 'dm') {
-        const templateButton = el('button', 'btn btn--ghost map-template__toggle', 'Шаблон');
-        templateButton.type = 'button';
-        templateButton.title = 'Поставить шаблон заклинания: сфера, конус или линия';
+        const templateButton = mapTool(
+          'Шаблон',
+          'Поставить шаблон заклинания: сфера, конус или линия',
+          ['M8 2v2M8 12v2M2 8h2M12 8h2', 'M8 5.4a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2z']
+        );
+        templateButton.classList.add('map-template__toggle');
         templateButton.classList.toggle('is-on', Boolean(this.templateMenu && !this.templateMenu.hidden));
         templateButton.addEventListener('click', (event) => {
           event.stopPropagation();
@@ -4087,21 +4529,23 @@
 
       if (map && this.role === 'dm') {
         const shown = this.activeMap === this.viewedMap && this.activeMapId === map.id;
-        const activate = el('button', 'btn btn--ghost',
-          shown ? '● Показана игрокам' : 'Показать игрокам');
-        activate.type = 'button';
+        const activate = mapTool(
+          shown ? '● Показана игрокам' : 'Показать игрокам',
+          shown ? 'Эту карту сейчас видят игроки' : 'Показать эту карту всем игрокам',
+          ['M2.5 3h11v8h-11z', 'M6 13h4', 'M6.8 6.2l3 1.8-3 1.8z']
+        );
         activate.disabled = shown;
-        activate.title = shown
-          ? 'Эту карту сейчас видят игроки'
-          : 'Показать эту карту всем игрокам';
         activate.addEventListener('click', () => {
           if (this.handlers.onSetActive) this.handlers.onSetActive(this.viewedMap, map.id);
         });
         this.toolbar.appendChild(activate);
 
-        const remove = el('button', 'btn btn--danger btn--ghost', 'Удалить карту');
-        remove.type = 'button';
-        remove.title = count > 1 ? `Останется карт во вкладке: ${count - 1}` : 'Вкладка станет пустой';
+        const remove = mapTool(
+          'Удалить карту',
+          count > 1 ? `Останется карт во вкладке: ${count - 1}` : 'Вкладка станет пустой',
+          ['M4 5h8M6.5 5V3h3v2M5.5 5l.7 8h3.6l.7-8']
+        );
+        remove.classList.add('btn--danger');
         remove.addEventListener('click', () => {
           if (this.handlers.onDelete) this.handlers.onDelete(this.viewedMap, map.id);
         });
@@ -4293,8 +4737,10 @@
       node.style.setProperty('--token-size', String(DnD.clampNumber(token.size, 1, 4, 1)));
 
       // Прочность видна прямо на поле, а не только в списке фишек: за боком
-      // мастер смотрит на карту, а не в правую колонку.
-      if (token.maxHp) {
+      // мастер смотрит на карту, а не в правую колонку. Игрокам полоску врага
+      // не рисуем даже из старого снимка: прочность врагов знает только ДМ.
+      const hpVisible = this.role === 'dm' || tokenSide(token) !== 'enemy';
+      if (token.maxHp && hpVisible) {
         const hp = Math.max(0, Math.min(Number(token.maxHp), Number(token.hp)));
         const hpNode = el('div', 'token__hp');
         const track = el('div', 'token__hp-track');
@@ -4314,7 +4760,23 @@
       const body = el('div', 'token__body');
       const circle = el('div', 'token__circle');
       if (token.imageUrl) {
-        circle.style.backgroundImage = `url("${this.resolveUrl(token.imageUrl)}")`;
+        // Картинка живёт отдельным элементом, а не фоном: так её можно
+        // масштабировать и сдвигать внутри круга теми же числами, что и в
+        // предпросмотре бестиария. Круг просто обрезает лишнее.
+        const image = document.createElement('img');
+        image.className = 'token__image';
+        image.src = this.resolveUrl(token.imageUrl);
+        image.alt = '';
+        image.draggable = false;
+        image.referrerPolicy = 'no-referrer';
+        const zoom = Math.min(4, Math.max(1, Number(token.imageZoom) || 1));
+        const limit = (zoom - 1) * 50;
+        const cropX = Math.min(limit, Math.max(-limit, Number(token.imageX) || 0));
+        const cropY = Math.min(limit, Math.max(-limit, Number(token.imageY) || 0));
+        image.style.transform = zoom !== 1 || cropX !== 0 || cropY !== 0
+          ? `translate(${cropX}%, ${cropY}%) scale(${zoom})`
+          : '';
+        circle.appendChild(image);
         circle.classList.add('token__circle--image');
       } else {
         circle.style.setProperty('--token-color', token.color || '#c96f4a');
@@ -4415,8 +4877,9 @@
           node.addEventListener('pointerdown', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const next = this.combat.tokenId === token.id ? null : token.id;
-            this.selectCombatToken(next);
+            const wasSelected = this.combat.tokenId === token.id;
+            if (!wasSelected) this.selectCombatToken(token.id);
+            this.startRouteDrag(token, wasSelected);
           });
         } else {
           node.addEventListener('pointerdown', (event) => {
@@ -4509,6 +4972,54 @@
       }
     }
 
+    /**
+     * Маршрут протяжкой: зажали фишку и ведёте её по клеткам.
+     *
+     * Путь прокладывает игрок: он собирается из клеток, через которые прошёл
+     * курсор, со всеми поворотами. Пока кнопка зажата, фишка стоит на месте,
+     * линия и число шагов показывают ход. На отпускании она проходит этот путь.
+     * Нажатие без протяжки остаётся выбором: повторный клик снимает выбор.
+     * @param {object} token
+     * @param {boolean} wasSelected была ли фишка выбрана до нажатия
+     */
+    startRouteDrag(token, wasSelected) {
+      if (!this.combat.enabled || this.measureMode) return;
+      const from = this.tokenCell(token);
+      if (!from) {
+        if (wasSelected) this.selectCombatToken(null);
+        return;
+      }
+      this.routeDragging = true;
+      let cells = [from];
+      const onMove = (moveEvent) => {
+        const cell = this.cellAtClient(moveEvent.clientX, moveEvent.clientY);
+        if (!cell) {
+          this.hideRoutePaint();
+          return;
+        }
+        const next = this.extendRoute(cells, cell);
+        if (next === cells) return;
+        cells = next;
+        if (cells.length < 2) this.hideRoutePaint();
+        else this.paintRoutePath(cells);
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        this.routeDragging = false;
+        this.hideRoutePaint();
+        if (cells.length > 1) {
+          this.walkTokenTo(token, cells[cells.length - 1], cells);
+          return;
+        }
+        if (wasSelected) this.selectCombatToken(null);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    }
+
     onDragMove(event) {
       if (!this.dragState) return;
       const rect = this.surface.getBoundingClientRect();
@@ -4539,6 +5050,7 @@
       const { tokenId, x, y, node } = this.dragState;
       node.classList.remove('token--dragging');
       this.dragState = null;
+      this.hideRoutePaint();
       // Свет едет вместе с фишкой: пятно от факела должно подъехать к новому
       // месту, а не остаться там, откуда фишку увели.
       const token = this.tokens.find((item) => item.id === tokenId);
@@ -4548,18 +5060,32 @@
         this.paintLight(this.mapOf(this.viewedMap));
       }
       if (typeof x === 'number' && typeof y === 'number' && this.handlers.onMoveToken) {
-        this.handlers.onMoveToken(tokenId, Number(x.toFixed(4)), Number(y.toFixed(4)));
+        // final: свободное перетаскивание заканчивается так же, как ход по
+        // клеткам, но пути у него нет: фишку ставят руками.
+        this.handlers.onMoveToken(
+          tokenId,
+          Number(x.toFixed(4)),
+          Number(y.toFixed(4)),
+          { final: true }
+        );
       }
       this.renderTokens();
     }
 
     /** Точечное обновление позиции фишки без полной перерисовки. */
-    applyTokenMove(tokenId, x, y) {
+    applyTokenMove(tokenId, x, y, meta = {}) {
       const token = this.tokens.find((item) => item.id === tokenId);
       if (token) {
         token.x = x;
         token.y = y;
-        // Пока фишку тянут, пятно света обязано ехать вместе с ней: иначе
+        // Счётчик движения приходит от сервера: он переживает перезагрузку
+        // и одинаков у всех, кто смотрит на эту фишку.
+        if (Number.isFinite(Number(meta.movedCells))) {
+          token.movedCells = Number(meta.movedCells);
+          const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+          this.moveSpent[tokenId] = token.movedCells * feetPerCell;
+        }
+        // Пока фишку тянут, пятно от факела обязано ехать вместе с ней: иначе
         // мастер водит факел в темноте и ничего не видит.
         if (token.light && token.light.radius > 0) {
           this.paintLight(this.mapOf(this.viewedMap));
@@ -4570,6 +5096,85 @@
         node.style.left = `${x * 100}%`;
         node.style.top = `${y * 100}%`;
       }
+      // Реакции считаем только по законченному ходу: промежуточные сообщения
+      // перетаскивания прошли бы через чужие клетки и выдали лишние поводы.
+      // И только на открытой карте: у фишки с другой вкладки клетка здесь
+      // посчиталась бы по чужой геометрии.
+      const currentMapId = this.currentMapId;
+      const onViewedMap = token && token.mapType === this.viewedMap
+        && (!token.mapId || !currentMapId || token.mapId === currentMapId);
+      if (onViewedMap && meta && meta.final && meta.from) {
+        this.checkOpportunityAttacks(token, meta.from, meta.path);
+      }
+    }
+
+    /**
+     * Атака по возможности по правилам 5e.
+     *
+     * Реакцию получает существо, из досягаемости которого вышла фишка
+     * противника: «когда существо, которое вы видите, покидает вашу
+     * досягаемость, вы можете реакцией совершить одну рукопашную атаку».
+     * Работает в обе стороны: игрок уходит от монстра и монстр уходит от
+     * игрока. Условия: идёт бой, движется фишка одной стороны, атакующий
+     * другой стороны жив, не недееспособен и ещё не тратил реакцию в раунде.
+     * @param {object} token ушедшая фишка
+     * @param {{col: number, row: number}} from клетка, с которой начался ход
+     * @param {{col: number, row: number}[]} [pathCells] нарисованный путь:
+     *   обход не должен теряться при проверке досягаемости
+     */
+    checkOpportunityAttacks(token, from, pathCells) {
+      if (this.role !== 'dm' || !this.combat.enabled) return;
+      if (!token || token.hidden) return;
+      if (token.maxHp && Number(token.hp) <= 0) return;
+      const to = this.tokenCell(token);
+      if (!to || !from) return;
+      const moverSide = tokenSide(token);
+      const path = Array.isArray(pathCells) && pathCells.length > 1
+        ? pathCells
+        : [from, ...this.combatPath(from, to)];
+      const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+      for (const monster of this.tokens) {
+        if (!monster || monster.id === token.id) continue;
+        if (tokenSide(monster) === moverSide) continue;
+        if (monster.hidden) continue;
+        if (!monster.maxHp || Number(monster.hp) <= 0) continue;
+        if (this.reactionRounds.get(monster.id) === this.round) continue;
+        if (this.isIncapacitated(monster)) continue;
+        if (monster.mapType !== token.mapType) continue;
+        if (monster.mapId && token.mapId && monster.mapId !== token.mapId) continue;
+        const origin = this.tokenCell(monster);
+        if (!origin) continue;
+        // Обычная досягаемость — 5 футов, у большой фишки (2+ клетки) — 10.
+        // Диагональ считается так же, как сторона: в 5e это те же 5 футов.
+        const reach = Math.max(1, Math.round((Number(monster.size) >= 2 ? 10 : 5) / feetPerCell));
+        const inside = (cell) => Math.max(
+          Math.abs(cell.col - origin.col),
+          Math.abs(cell.row - origin.row)
+        ) <= reach;
+        if (!inside(from)) continue;
+        if (!path.some((cell) => !inside(cell))) continue;
+        // Реакция тратится, как только повод наступил: упустить его и потом
+        // «догнать» нельзя, поэтому повторно за раунд не спрашиваем.
+        this.reactionRounds.set(monster.id, this.round);
+        if (this.handlers.onOpportunityAttack) {
+          this.handlers.onOpportunityAttack({
+            attacker: monster,
+            target: token,
+            // У союзной фишки есть хозяин: карточку получает он, а не мастер.
+            playerId: monster.assignedPlayerId || null
+          });
+        }
+      }
+    }
+
+    /**
+     * Может ли существо совершить реакцию.
+     * @param {object} token
+     * @returns {boolean}
+     */
+    isIncapacitated(token) {
+      return (Array.isArray(token.conditions) ? token.conditions : [])
+        .some((id) => REACTION_BLOCKED.has(String(id)));
     }
   }
 
@@ -5097,7 +5702,7 @@
       this.rollStartedAt = 0;
       // Минимум, на который плашка задерживает результат: иначе ответ сервера
       // приходит раньше, чем глаз успевает заметить бросок.
-      this.minRollMs = 560;
+      this.minRollMs = 680;
       this.build();
     }
 
@@ -5311,12 +5916,28 @@
       clearTimeout(this.rollTimer);
       clearTimeout(this.rollWatchdog);
       this.last.hidden = false;
-      this.last.classList.remove('is-rolling');
+      this.last.classList.remove('is-rolling', 'is-crit', 'is-fumble');
       this.last.classList.add('is-tumbling');
       this.last.innerHTML = '';
       this.last.appendChild(el('span', 'dice__last-text', `Бросаем ${formula}…`));
+
+      // Формула знает, сколько костей и с какими гранями: «4d6» показывает
+      // четыре кубика, а не одну абстрактную кость. Больше шести не рисуем,
+      // иначе плашка превращается в кашу, а остальные уходят в «+N».
+      const parsed = DnDDice.parseFormula(formula);
+      const sides = parsed.ok ? parsed.sides : 20;
+      const count = parsed.ok ? Math.min(parsed.count, 6) : 1;
       const tumbler = el('span', 'dice__tumbler');
-      tumbler.appendChild(el('span', 'dice__tumbler-die', 'd20'));
+      tumbler.dataset.count = String(count);
+      for (let index = 0; index < count; index += 1) {
+        const die = el('span', `dice__tumbler-die dice__tumbler-die--d${sides}`, `d${sides}`);
+        // Разный ритм у каждой кости: синхронные кубики выглядят как гифка.
+        die.style.setProperty('--tumble-i', String(index));
+        tumbler.appendChild(die);
+      }
+      if (parsed.ok && parsed.count > count) {
+        tumbler.appendChild(el('span', 'dice__tumbler-more', `+${parsed.count - count}`));
+      }
       this.last.appendChild(tumbler);
       // Перезапуск анимации: без перечитывания класса она не начнётся снова.
       void this.last.offsetWidth;
@@ -5351,18 +5972,76 @@
      */
     showLast(roll) {
       this.last.hidden = false;
-      this.last.classList.remove('is-tumbling');
+      this.last.classList.remove('is-tumbling', 'is-rolling', 'is-crit', 'is-fumble');
       this.last.innerHTML = '';
       this.last.appendChild(el('span', 'dice__last-text', `${roll.playerName} бросил ${this.rollLabel(roll)}:`));
       const known = this.showsResult(roll);
-      const value = el('span', 'dice__last-value', known ? String(roll.result) : '?');
+      const values = Array.isArray(roll.values) ? roll.values : [];
+      const sides = Number(roll.sides) || null;
+      const single = known && values.length === 1 && sides;
+      const value = el('span',
+        `dice__last-value${single ? ` is-die dice__last-value--d${sides}` : ''}`,
+        known ? String(roll.result) : '?');
       if (!known) value.classList.add('is-secret');
       value.classList.add('is-pop');
       this.last.appendChild(value);
-      setTimeout(() => value.classList.remove('is-pop'), 600);
+
+      // Отдельные грани: видно, что выпало на каждой кости, а не только сумму.
+      // Отброшенные (dl/kh) гаснут, оставленные идут в итог.
+      if (known && values.length > 1) {
+        const kept = Array.isArray(roll.keptValues) ? roll.keptValues.slice() : values.slice();
+        const faces = el('span', 'dice__faces');
+        values.slice(0, 8).forEach((faceValue, index) => {
+          const keptIndex = kept.indexOf(faceValue);
+          const isKept = keptIndex >= 0;
+          if (isKept) kept.splice(keptIndex, 1);
+          const face = el('span',
+            `dice-face dice-face--d${sides || 6}${isKept ? ' is-kept' : ' is-dropped'}`,
+            String(faceValue));
+          face.style.setProperty('--face-i', String(index));
+          face.title = isKept ? 'Идёт в итог' : 'Отброшена';
+          faces.appendChild(face);
+        });
+        if (values.length > 8) {
+          faces.appendChild(el('span', 'dice-face dice-face--more', `+${values.length - 8}`));
+        }
+        this.last.appendChild(faces);
+      }
+
+      // Натуральная 20 и 1 на d20 — не просто число, а событие за столом.
+      // Преимущество и помеха тоже считаются: смотрим на оставленную кость.
+      const parsed = DnDDice.parseFormula(this.rollLabel(roll));
+      const keptOne = parsed.ok && parsed.keep && parsed.keep.value === 1;
+      const natural = sides === 20
+        ? (values.length === 1
+          ? values[0]
+          : (keptOne && Array.isArray(roll.keptValues) && roll.keptValues.length === 1
+            ? roll.keptValues[0]
+            : null))
+        : null;
+      const crit = natural === 20;
+      const fumble = natural === 1;
+      if (crit || fumble) {
+        this.last.classList.add(crit ? 'is-crit' : 'is-fumble');
+        value.classList.add(crit ? 'is-crit' : 'is-fumble');
+        this.last.appendChild(el('span', `dice__verdict ${crit ? 'is-crit' : 'is-fumble'}`,
+          crit ? 'критический успех' : 'критический провал'));
+        const sparks = el('span', 'dice__sparks');
+        for (let index = 0; index < 10; index += 1) {
+          const spark = el('i');
+          spark.style.setProperty('--angle', `${index * 36}deg`);
+          sparks.appendChild(spark);
+        }
+        this.last.appendChild(sparks);
+        setTimeout(() => {
+          this.last.classList.remove('is-crit', 'is-fumble');
+          const old = this.last.querySelector('.dice__sparks');
+          if (old) old.remove();
+        }, 1500);
+      }
+
+      setTimeout(() => value.classList.remove('is-pop'), 650);
       // Кольцо, расходящееся от места броска: короткое, чтобы не мельтешить.
-      this.last.classList.remove('is-rolling');
-      // Перезапуск анимации: без перечитывания класса она не начнётся снова.
       void this.last.offsetWidth;
       this.last.classList.add('is-rolling');
       setTimeout(() => this.last.classList.remove('is-rolling'), 700);
@@ -5786,6 +6465,9 @@
        *  найденного. Здесь же хранится <выбранная>. */
       this.query = '';
       this.filter = 'all';
+      // Активная вкладка стороны. По умолчанию «Враги»: новую фишку в форме
+      // чаще заводят ради монстра, а союзники приходят из листов.
+      this.side = 'enemy';
       this.tokens = [];
       this.players = [];
       this.build();
@@ -5825,6 +6507,7 @@
 
       const create = el('button', 'btn btn--accent', 'Создать фишку');
       create.type = 'submit';
+      this.createButton = create;
       form.appendChild(create);
       form.addEventListener('submit', (event) => {
         event.preventDefault();
@@ -5834,18 +6517,21 @@
           this.handlers.onCreate(
             name,
             Number.isFinite(maxHp) && maxHp > 0 ? maxHp : null,
-            Number(sizeInput.value) || 1
+            Number(sizeInput.value) || 1,
+            this.side
           );
         }
         input.value = '';
         hpInput.value = '';
         sizeInput.value = '1';
       });
-      form.appendChild(create);
       this.root.appendChild(form);
       // Фишки создаёт ДМ; игроку эта форма не нужна — кроме тренировочного
       // стола, где просить фишку не у кого.
       this.form = form;
+      // Надпись повторяет открытую вкладку: иначе мастер на «Врагах»
+      // создаёт союзника и замечает это только по готовой фишке.
+      this.updateCreateLabel();
 
       this.note = el('div', 'muted', 'Правый клик по фишке на карте или по строке ниже — переименовать, назначить игроку, задать изображение или удалить.');
       this.root.appendChild(this.note);
@@ -5885,9 +6571,16 @@
       const none = shown.size === 0;
       this.emptyHint.hidden = !none;
       if (none) {
-        this.emptyHint.textContent = this.tokens.length
-          ? `Ничего не найдено: показано 0 из ${this.tokens.length}`
-          : 'Фишек пока нет';
+        // «Показано 0 из N» считает фишки активной вкладки, иначе мастер на
+        // вкладке «Союзники» видел бы в знаменателе всех монстров.
+        const rows = this.isDm && this.allBody
+          ? this.allBody.querySelectorAll('.token-row[data-token-id]').length
+          : this.tokens.length;
+        this.emptyHint.textContent = rows
+          ? `Ничего не найдено: показано 0 из ${rows}`
+          : this.isDm
+            ? (this.side === 'ally' ? 'Союзников пока нет' : 'Врагов пока нет')
+            : 'Фишек пока нет';
       }
     }
 
@@ -5976,7 +6669,7 @@
       this.form.hidden = !isDm && !training;
       this.note.hidden = !isDm && !training;
       this.note.textContent = isDm
-        ? 'Новая фишка появляется скрытой от игроков: расставьте её и нажмите «Видна». Правый клик по фишке — переименовать, назначить, изображение, скрыть или удалить.'
+        ? 'Вкладки «Союзники» и «Враги» делят стол: сторона задаёт, кто по кому бьёт реакцией. Новая фишка появляется скрытой: расставьте её и нажмите «Видна». Правый клик по фишке — переименовать, назначить, сменить сторону, изображение, скрыть или удалить.'
         : 'Проверка без сети: созданная фишка сразу ваша — её можно двигать по карте и задать картинку.';
 
       this.list.innerHTML = '';
@@ -5997,41 +6690,112 @@
       if (mine) this.list.appendChild(mine);
 
       if (isDm) {
-        const all = section('Все фишки', 'dnd-table.panel.tokensAll');
-
-        // Массовые переключатели: подготовка кончилась — открыть всё разом,
-        // откатился — спрятать всё разом. Без них пришлось бы кликать по
-        // каждой фишке, а их под полсотни может быть.
-        const hiddenCount = tokens.filter((token) => token.hidden).length;
-        if (tokens.length) {
-          const bulk = el('div', 'token-bulk');
-          const showAll = el('button', 'btn btn--ghost btn--tiny',
-            hiddenCount === tokens.length ? 'Показать все' : `Показать все (${tokens.length - hiddenCount} скрыто)`);
-          showAll.type = 'button';
-          showAll.disabled = hiddenCount === 0;
-          showAll.addEventListener('click', () => {
-            if (this.handlers.onSetAllTokensHidden) this.handlers.onSetAllTokensHidden(false);
-          });
-          const hideAll = el('button', 'btn btn--ghost btn--tiny', 'Скрыть все');
-          hideAll.type = 'button';
-          hideAll.disabled = hiddenCount === tokens.length;
-          hideAll.addEventListener('click', () => {
-            if (this.handlers.onSetAllTokensHidden) this.handlers.onSetAllTokensHidden(true);
-          });
-          bulk.appendChild(showAll);
-          bulk.appendChild(hideAll);
-          all.body.appendChild(bulk);
-        }
-
-        // Про «фишек пока нет» отдельно не пишем: applyFilters() и так говорит
-        // это под списком, и два одинаковых предложения подряд выглядят как
-        // сбой отрисовки.
-        for (const token of tokens) {
-          all.body.appendChild(this.buildTokenRow(token, players));
-        }
+        const all = section('Фишки на столе', 'dnd-table.panel.tokensAll');
+        // Тело секции перестраивается при переключении стороны: строки другой
+        // стороны в DOM не нужны, а счётчики на вкладках должны совпадать.
+        this.allBody = all.body;
         this.list.appendChild(all.wrap);
+        this.renderAllSection(tokens, players);
       }
       this.applyFilters();
+    }
+
+    /**
+     * Переключает вкладку стороны и сразу перерисовывает список.
+     *
+     * Нужен снаружи: вывод фишки из листа идёт и из панели участников, а она
+     * не знает, какая вкладка открыта в панели фишек. Иначе новая фишка
+     * появляется на невидимой вкладке, и мастер ищет её по всему столу.
+     * @param {'ally'|'enemy'} side
+     */
+    setSide(side) {
+      const next = side === 'ally' ? 'ally' : 'enemy';
+      if (this.side === next) return;
+      this.side = next;
+      this.updateCreateLabel();
+      this.renderAllSection(this.tokens, this.players);
+    }
+
+    /** Кнопка создания называет сторону, которая сейчас открыта. */
+    updateCreateLabel() {
+      if (!this.createButton) return;
+      this.createButton.textContent = this.side === 'ally' ? 'Создать союзника' : 'Создать врага';
+      this.createButton.title = this.side === 'ally'
+        ? 'Новая фишка попадёт на вкладку «Союзники»'
+        : 'Новая фишка попадёт на вкладку «Враги»';
+    }
+
+    /**
+     * Вкладки стороны и строки активной стороны.
+     *
+     * Мастеру нужны обе стороны разом только на карте; в списке они мешают
+     * друг другу, особенно когда монстров десяток, а союзников четыре.
+     * @param {object[]} tokens
+     * @param {object[]} players
+     */
+    renderAllSection(tokens, players) {
+      if (!this.allBody) return;
+      this.allBody.innerHTML = '';
+      this.allBody.appendChild(this.buildSideTabs(tokens));
+      const sideTokens = tokens.filter((token) => tokenSide(token) === this.side);
+      const hiddenCount = sideTokens.filter((token) => token.hidden).length;
+      if (sideTokens.length) {
+        const bulk = el('div', 'token-bulk');
+        const showAll = el('button', 'btn btn--ghost btn--tiny',
+          hiddenCount === sideTokens.length ? 'Показать все' : `Показать все (${sideTokens.length - hiddenCount} скрыто)`);
+        showAll.type = 'button';
+        showAll.disabled = hiddenCount === 0;
+        showAll.addEventListener('click', () => {
+          if (this.handlers.onSetAllTokensHidden) this.handlers.onSetAllTokensHidden(false, this.side);
+        });
+        const hideAll = el('button', 'btn btn--ghost btn--tiny', 'Скрыть все');
+        hideAll.type = 'button';
+        hideAll.disabled = hiddenCount === sideTokens.length;
+        hideAll.addEventListener('click', () => {
+          if (this.handlers.onSetAllTokensHidden) this.handlers.onSetAllTokensHidden(true, this.side);
+        });
+        bulk.appendChild(showAll);
+        bulk.appendChild(hideAll);
+        this.allBody.appendChild(bulk);
+      }
+      for (const token of sideTokens) {
+        this.allBody.appendChild(this.buildTokenRow(token, players));
+      }
+      this.applyFilters();
+      // Вкладку могли переключить снаружи (например, после вывода фишки из
+      // листа), поэтому подпись кнопки сверяется здесь, а не только в setSide.
+      this.updateCreateLabel();
+    }
+
+    /**
+     * Две вкладки: союзники и враги, со счётчиками.
+     * @param {object[]} tokens
+     * @returns {HTMLElement}
+     */
+    buildSideTabs(tokens) {
+      const tabs = el('div', 'token-sides');
+      tabs.setAttribute('role', 'tablist');
+      tabs.setAttribute('aria-label', 'Сторона фишек');
+      for (const variant of [
+        { id: 'ally', label: 'Союзники' },
+        { id: 'enemy', label: 'Враги' }
+      ]) {
+        const count = tokens.filter((token) => tokenSide(token) === variant.id).length;
+        const on = this.side === variant.id;
+        const button = el('button',
+          `btn btn--tiny token-sides__btn ${on ? '' : 'btn--ghost'}`, `${variant.label} (${count})`);
+        button.type = 'button';
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', on ? 'true' : 'false');
+        button.tabIndex = on ? 0 : -1;
+        button.classList.toggle('is-on', on);
+        button.addEventListener('click', () => {
+          if (this.side === variant.id) return;
+          this.setSide(variant.id);
+        });
+        tabs.appendChild(button);
+      }
+      return tabs;
     }
 
     /**
@@ -6063,10 +6827,15 @@
       row.lastChild.style.background = token.color;
       const name = el('span', 'token-row__name', token.hideName ? 'Имя скрыто' : token.name);
       row.appendChild(name);
+      const side = tokenSide(token);
+      row.appendChild(el('span', `token-row__side token-row__side--${side}`,
+        side === 'ally' ? 'союзник' : 'враг'));
       row.appendChild(el('span', 'token-row__meta', DnD.MAP_LABELS[token.mapType]));
       const owner = players.find((player) => player.playerId === token.assignedPlayerId);
       row.appendChild(el('span', 'token-row__meta', owner ? `→ ${owner.name}` : 'не назначена'));
-      if (token.maxHp) row.appendChild(this.buildHpControl(token));
+      if (token.maxHp && (this.isDm || tokenSide(token) !== 'enemy')) {
+        row.appendChild(this.buildHpControl(token));
+      }
 
       const sizeSelect = el('select', 'select select--tiny token-row__size');
       sizeSelect.title = 'Размер фишки в клетках';
@@ -6412,6 +7181,9 @@
         spawn.type = 'button';
         spawn.title = 'Создать фишку игрока из его листа, с аватаром';
         spawn.addEventListener('click', () => {
+          // Выведенная фишка — союзник. Переключаемся на его вкладку сразу,
+          // иначе новый персонаж появляется в списке, который сейчас не виден.
+          this.setSide('ally');
           if (this.handlers.onSpawnFromSheet) this.handlers.onSpawnFromSheet(player.playerId);
         });
         row.appendChild(spawn);

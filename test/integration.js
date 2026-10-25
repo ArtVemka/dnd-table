@@ -65,7 +65,7 @@ async function waitFor(fn, label, timeout = 4000) {
 const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
-  'tokensUpdated', 'mapPing',
+  'tokensUpdated', 'mapPing', 'reactionPrompt',
   'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
   'journalUpdated', 'inventoryUpdated', 'rollRequestUpdated', 'stateReload'
 ];
@@ -881,6 +881,7 @@ async function main() {
     assert.strictEqual(token.x, 0.5);
     assert.strictEqual(token.y, 0.5);
     assert.strictEqual(token.assignedPlayerId, null);
+    assert.strictEqual(token.side, 'enemy', 'фишка из формы по умолчанию должна быть врагом');
     assert.strictEqual(token.size, 2);
     assert.ok(token.color);
   });
@@ -933,6 +934,8 @@ async function main() {
   const assigned = await waitFor(() => dm.log.tokenUpdated.find((item) => item.assignedPlayerId), 'назначение фишки');
   check('ДМ назначает фишку игроку', () => {
     assert.strictEqual(assigned.assignedPlayerId, 'p-test-0001');
+    // Назначение делает фишку союзником: за ней стоит персонаж игрока.
+    assert.strictEqual(assigned.side, 'ally', `сторона после назначения: ${assigned.side}`);
   });
 
   dm.log.tokenUpdated.length = 0;
@@ -954,6 +957,144 @@ async function main() {
   check('игрок не меняет размер фишки', () => {
     assert.strictEqual(room.tokens[0].size, 4);
   });
+
+  /* ------------------------------------------------- сторона фишки */
+
+  console.log('\nСторона фишки');
+  check('старая кампания делит фишки по игроку', () => {
+    const withPlayer = room.normalizeToken({ id: 'old-1', name: 'Старый', assignedPlayerId: 'p-test-0001' });
+    const withoutPlayer = room.normalizeToken({ id: 'old-2', name: 'Старый монстр' });
+    assert.strictEqual(withPlayer.side, 'ally', 'фишка с игроком должна стать союзником');
+    assert.strictEqual(withoutPlayer.side, 'enemy', 'фишка без игрока должна стать врагом');
+  });
+
+  dm.log.tokenCreated.length = 0;
+  emit(dm, 'createToken', { name: 'Дружелюбный НПС', mapType: 'world', side: 'ally', attackBonus: 3 });
+  const allyToken = await waitFor(
+    () => dm.log.tokenCreated.find((item) => item.name === 'Дружелюбный НПС'),
+    'фишка-союзник'
+  );
+  check('фишку можно создать сразу союзником', () => {
+    assert.strictEqual(allyToken.side, 'ally');
+    assert.strictEqual(allyToken.attackBonus, 3);
+  });
+
+  dm.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenAttackBonus', { tokenId: allyToken.id, attackBonus: 99 });
+  const bonusClamped = await waitFor(
+    () => dm.log.tokenUpdated.find((item) => item.id === allyToken.id && item.attackBonus === 20),
+    'бонус атаки'
+  );
+  check('бонус атаки сохраняется и обрезается до двадцати', () => {
+    assert.strictEqual(bonusClamped.attackBonus, 20);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenAttackBonus', { tokenId: allyToken.id, attackBonus: 5 });
+  await waitFor(
+    () => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')),
+    'отказ игроку в бонусе атаки'
+  );
+  check('игрок не меняет бонус атаки', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === allyToken.id).attackBonus, 20);
+  });
+
+  dm.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenArmorClass', { tokenId: allyToken.id, armorClass: 14 });
+  const acSet = await waitFor(
+    () => dm.log.tokenUpdated.find((item) => item.id === allyToken.id && item.armorClass === 14),
+    'класс брони'
+  );
+  check('класс брони фишки сохраняется', () => {
+    assert.strictEqual(acSet.armorClass, 14);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenArmorClass', { tokenId: allyToken.id, armorClass: 9 });
+  await waitFor(
+    () => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')),
+    'отказ игроку в классе брони'
+  );
+  check('игрок не меняет класс брони', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === allyToken.id).armorClass, 14);
+  });
+
+  dm.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenArmorClass', { tokenId: allyToken.id, armorClass: null });
+  await waitFor(
+    () => dm.log.tokenUpdated.find((item) => item.id === allyToken.id && item.armorClass === null),
+    'снятие класса брони'
+  );
+  check('класс брони можно снять', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === allyToken.id).armorClass, null);
+  });
+
+  // У фишки игрока боевые числа живут в листе, и токен их не перебивает.
+  const assignedToken = room.tokens.find((token) => token.assignedPlayerId);
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'setTokenAttackBonus', { tokenId: assignedToken.id, attackBonus: 7 });
+  await waitFor(
+    () => dm.log.errorMessage.find((item) => item.message.includes('берётся из его листа')),
+    'отказ бонусу атаки игрока'
+  );
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'setTokenArmorClass', { tokenId: assignedToken.id, armorClass: 20 });
+  await waitFor(
+    () => dm.log.errorMessage.find((item) => item.message.includes('берётся из его листа')),
+    'отказ классу брони игрока'
+  );
+  check('боевые числа фишки игрока берутся из листа, а не из токена', () => {
+    assert.strictEqual(dm.log.errorMessage.length, 1, 'второй отказ не пришёл');
+  });
+
+  dm.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenSide', { tokenId: allyToken.id, side: 'enemy' });
+  const flipped = await waitFor(
+    () => dm.log.tokenUpdated.find((item) => item.id === allyToken.id && item.side === 'enemy'),
+    'смена стороны'
+  );
+  check('мастер переключает сторону фишки', () => {
+    assert.strictEqual(flipped.side, 'enemy');
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'setTokenSide', { tokenId: allyToken.id, side: 'neutral' });
+  await waitFor(
+    () => dm.log.errorMessage.find((item) => item.message.includes('Неизвестная сторона')),
+    'отказ неизвестной стороне'
+  );
+  check('неизвестная сторона отклоняется', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === allyToken.id).side, 'enemy');
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenSide', { tokenId: allyToken.id, side: 'ally' });
+  await waitFor(
+    () => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')),
+    'отказ игроку в смене стороны'
+  );
+  check('игрок не меняет сторону фишки', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === allyToken.id).side, 'enemy');
+  });
+
+  // Массовое скрытие на вкладке не должно задевать другую сторону.
+  emit(dm, 'setAllTokensHidden', { hidden: false });
+  await waitFor(() => room.tokens.every((item) => item.hidden === false), 'показ всех фишек');
+  emit(dm, 'setAllTokensHidden', { hidden: true, side: 'ally' });
+  await waitFor(
+    () => room.tokens.filter((item) => item.side === 'ally').every((item) => item.hidden),
+    'скрытие союзников'
+  );
+  check('массовое скрытие на вкладке не трогает другую сторону', () => {
+    assert.strictEqual(room.tokens.find((item) => item.id === allyToken.id).hidden, false,
+      'враг скрылся вместе с союзниками');
+  });
+  // Возвращаем стол в видимое состояние: следующие проверки двигают фишку
+  // игрока, а скрытую фишку игрок не видит и двигать не может.
+  emit(dm, 'setAllTokensHidden', { hidden: false });
+  await waitFor(() => room.tokens.every((item) => item.hidden === false), 'возврат видимости фишек');
+  emit(dm, 'deleteToken', { tokenId: allyToken.id });
+  await waitFor(() => !room.tokens.some((item) => item.id === allyToken.id), 'уборка фишки-союзника');
 
   dm.log.errorMessage.length = 0;
   emit(dm, 'assignTokenToPlayer', { tokenId: token.id, playerId: 'p-unknown' });
@@ -1064,12 +1205,73 @@ async function main() {
   });
   emit(dm, 'deleteToken', { tokenId: actorToken.id });
   await waitFor(() => !room.tokens.some((item) => item.id === actorToken.id), 'удаление фишки из статблока');
+  dm.log.tokenCreated.length = 0;
+  emit(dm, 'createTokenFromAdventureActor', {
+    name: 'Гоблин-вожак', mapType: 'world', x: 0.3, y: 0.4, count: 3
+  });
+  await waitFor(
+    () => dm.log.tokenCreated.filter((item) => item.name === 'Гоблин-вожак').length >= 3,
+    'три фишки из статблока'
+  );
+  check('из статблока можно поставить несколько фишек сразу', () => {
+    const copies = room.tokens.filter((item) => item.name === 'Гоблин-вожак');
+    assert.strictEqual(copies.length, 3, `создано фишек: ${copies.length}`);
+    assert.strictEqual(new Set(copies.map((item) => item.id)).size, 3, 'id повторились');
+    assert(new Set(copies.map((item) => `${item.x}:${item.y}`)).size > 1,
+      'все копии легли в одну точку');
+    assert(copies.every((item) => item.maxHp === 22 && item.hp === 22 && item.side === 'enemy'),
+      'у копий не тот статблок');
+  });
+  dm.log.adventureUpdated.length = 0;
+  emit(dm, 'setAdventureActorFavorite', { name: 'Гоблин-вожак', favorite: true });
+  await waitFor(
+    () => dm.log.adventureUpdated.find((adventure) => adventure.actors
+      && adventure.actors.some((actor) => actor.name === 'Гоблин-вожак' && actor.favorite)),
+    'избранное в справочнике'
+  );
+  check('избранное сохраняется у всех записей группы', () => {
+    assert.ok(room.adventure.actors
+      .filter((actor) => actor.name === 'Гоблин-вожак')
+      .every((actor) => actor.favorite), 'избранное не разошлось по группе');
+  });
+
+  // Копии убираем до проверки сохранённой кампании: иначе в метаданных
+  // окажется четыре фишки вместо одной и следующий раздел упадёт.
+  for (const copy of room.tokens.filter((item) => item.name === 'Гоблин-вожак')) {
+    emit(dm, 'deleteToken', { tokenId: copy.id });
+  }
+  await waitFor(
+    () => !room.tokens.some((item) => item.name === 'Гоблин-вожак'),
+    'удаление копий из статблока'
+  );
+
+  emit(p1, 'deleteAdventureActor', { name: 'Гоблин-вожак' });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  check('игрок не может удалить персонажа из справочника', () => {
+    assert.ok(room.adventure.actors.some((entry) => entry.name === 'Гоблин-вожак'),
+      'игрок удалил запись мастера');
+  });
+
+  dm.log.adventureUpdated.length = 0;
+  emit(dm, 'deleteAdventureActor', { name: 'Гоблин-вожак' });
+  await waitFor(
+    () => !room.adventure.actors.some((entry) => entry.name === 'Гоблин-вожак'),
+    'удаление персонажа из справочника'
+  );
+  check('мастер удаляет персонажа из справочника', () => {
+    assert.ok(dm.log.adventureUpdated.some((adventure) => adventure.actors
+      && !adventure.actors.some((entry) => entry.name === 'Гоблин-вожак')),
+    'мастеру не пришёл обновлённый справочник');
+  });
 
   /* --- скрытие фишек --- */
 
   console.log('\nСкрытие фишек');
   p1.log.tokenUpdated.length = 0;
   p1.log.tokenMoved.length = 0;
+  // В журнале могли остаться события массового скрытия с проверок стороны:
+  // без очистки waitFor ниже находит старое событие и обгоняет сервер.
+  p1.log.tokenHidden.length = 0;
   emit(dm, 'setTokenHidden', { tokenId: token.id, hidden: true });
   await waitFor(() => p1.log.tokenHidden.find((item) => item.tokenId === token.id && item.hidden), 'скрытие фишки');
   check('скрытие рассылается игрокам, чтобы убрать фишку с карты', () => {
@@ -1579,6 +1781,49 @@ async function main() {
     monster.maxHp = null;
     monster.hp = null;
   });
+  check('враг с назначенным игроком тоже не отдаёт прочность игроку', () => {
+    const token = {
+      ...room.tokens.find((entry) => entry.id === nameless.id),
+      side: 'enemy',
+      assignedPlayerId: P2,
+      maxHp: 30,
+      hp: 12
+    };
+    const forPlayer = room.tokenForViewer(token, false);
+    assert.strictEqual(forPlayer.maxHp, null, 'игрок увидел прочность врага');
+    assert.strictEqual(forPlayer.hp, null, 'игрок увидел текущие хиты врага');
+    const ally = room.tokenForViewer({ ...token, side: 'ally' }, false);
+    assert.strictEqual(ally.maxHp, 30, 'у союзника прочность пропала');
+    assert.strictEqual(ally.hp, 12, 'у союзника пропали текущие хиты');
+  });
+  check('кадр портрета сохраняется в фишке и не выходит за пределы зума', () => {
+    const cropped = room.normalizeToken({
+      id: 'crop-1',
+      name: 'Гоблин',
+      x: 0.5,
+      y: 0.5,
+      imageUrl: '/files/goblin.png',
+      imageZoom: 2,
+      imageX: 25,
+      imageY: -10
+    });
+    assert.strictEqual(cropped.imageZoom, 2);
+    assert.strictEqual(cropped.imageX, 25);
+    assert.strictEqual(cropped.imageY, -10);
+    const extreme = room.normalizeToken({
+      id: 'crop-2',
+      name: 'Гоблин',
+      x: 0.5,
+      y: 0.5,
+      imageUrl: '/files/goblin.png',
+      imageZoom: 10,
+      imageX: 999,
+      imageY: -999
+    });
+    assert.strictEqual(extreme.imageZoom, 4, 'зум не обрезан');
+    assert.strictEqual(extreme.imageX, 150, 'сдвиг вправо не обрезан');
+    assert.strictEqual(extreme.imageY, -150, 'сдвиг влево не обрезан');
+  });
   emit(dm, 'deleteToken', { tokenId: nameless.id });
   await waitFor(() => !room.tokens.some((token) => token.id === nameless.id), 'уборка фишки со скрытым именем');
 
@@ -1687,6 +1932,86 @@ async function main() {
     assert.ok(p2.log.diceRollResult.some((roll) => roll.playerName === 'Мастер'));
   });
 
+  // Подпись броска нужна реакции: в ленте видно, что это d20 по конкретной
+  // фишке, а не случайный бросок мастера.
+  dm.log.chatMessage.length = 0;
+  emit(dm, 'rollDice', { formula: 'd20', label: 'Атака по возможности: Волк → Артём' });
+  const labeledRoll = await waitFor(
+    () => dm.log.chatMessage.find((message) => message.isRoll && message.text.includes('Атака по возможности')),
+    'подпись броска в чате'
+  );
+  check('подпись броска попадает в чат', () => {
+    assert.match(labeledRoll.text, /^Атака по возможности: Волк → Артём — /);
+    assert.match(labeledRoll.text, /d20/);
+  });
+
+  dm.log.chatMessage.length = 0;
+  emit(dm, 'rollDice', { formula: 'd20', label: 'Атака по возможности: Волк → Артём', targetAc: 1 });
+  const hitRoll = await waitFor(
+    () => dm.log.chatMessage.find((message) => message.isRoll && message.text.includes('попадание по КД 1')),
+    'попадание по КД'
+  );
+  emit(dm, 'rollDice', { formula: 'd20', label: 'Атака по возможности: Волк → Артём', targetAc: 60 });
+  const missRoll = await waitFor(
+    () => dm.log.chatMessage.find((message) => message.isRoll && message.text.includes('промах по КД 60')),
+    'промах по КД'
+  );
+  check('сервер сравнивает бросок с КД и пишет исход', () => {
+    assert.match(hitRoll.text, /попадание по КД 1$/);
+    assert.match(missRoll.text, /промах по КД 60$/);
+  });
+
+  // Реакцию союзной фишки бросает её игрок, а не мастер: сервер передаёт
+  // карточку адресату и не рассылает её всему столу.
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'reactionPrompt', { playerId: 'p-test-0002' });
+  await waitFor(
+    () => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')),
+    'отказ игроку в карточке реакции'
+  );
+  p1.log.reactionPrompt.length = 0;
+  p2.log.reactionPrompt.length = 0;
+  emit(dm, 'reactionPrompt', {
+    playerId: 'p-test-0001', attackerName: 'Волк', targetName: 'Артём', bonus: 3, targetAc: 15
+  });
+  const relayed = await waitFor(() => p1.log.reactionPrompt[0], 'карточка реакции игроку');
+  check('игрок получает карточку реакции с бонусом и КД', () => {
+    assert.strictEqual(relayed.playerId, 'p-test-0001');
+    assert.strictEqual(relayed.attackerName, 'Волк');
+    assert.strictEqual(relayed.targetName, 'Артём');
+    assert.strictEqual(relayed.bonus, 3);
+    assert.strictEqual(relayed.targetAc, 15);
+    assert.strictEqual(p2.log.reactionPrompt.length, 0, 'карточка ушла чужому игроку');
+  });
+
+  // Карточка живёт в состоянии, а не только в событии: после переподключения
+  // игрок получает её снимком.
+  const playerSnap = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+  const otherSnap = room.snapshotFor({ playerId: 'p-test-0002', role: 'player' });
+  check('неподтверждённая реакция переживает переподключение', () => {
+    assert.strictEqual(playerSnap.reactions.length, 1, 'в снимке игрока нет реакции');
+    assert.strictEqual(playerSnap.reactions[0].id, relayed.id);
+    assert.strictEqual(otherSnap.reactions.length, 0, 'чужая реакция утекла в снимок');
+  });
+
+  emit(p1, 'reactionResolved', { id: relayed.id });
+  await waitFor(() => room.pendingReactions.length === 0, 'снятие реакции после броска');
+  check('после ответа реакция снимается с сервера', () => {
+    assert.strictEqual(room.pendingReactions.length, 0);
+  });
+
+  // Новый раунд закрывает прошлые поводы: отвечать на них уже поздно.
+  const savedInitiative = room.initiative;
+  room.initiative = { entries: [{ id: 'round-a' }, { id: 'round-b' }], turnId: 'round-a', round: 1 };
+  room.addReaction({ playerId: 'p-test-0001', attackerName: 'Волк', targetName: 'Артём' });
+  room.stepInitiativeTurn(1);
+  room.stepInitiativeTurn(1);
+  check('реакция прошлого раунда не переживает новый', () => {
+    assert.strictEqual(room.initiative.round, 2);
+    assert.strictEqual(room.pendingReactions.length, 0, 'карточка осталась на новый раунд');
+  });
+  room.initiative = savedInitiative;
+
   /* ------------------------------------------------- тайный бросок мастера */
   console.log('\nТайный бросок');
   const dmRolls = [];
@@ -1718,6 +2043,37 @@ async function main() {
     assert.ok(stored && stored.result >= 1, 'число потерялось у мастера');
   });
   dm.off('diceRollResult', dmCollect);
+
+  // Приватный бросок из статблока: мастеру крупная карточка, игрокам ничего.
+  results.length = 0;
+  const chatMark = p1.log.chatMessage.length;
+  const privateRolls = [];
+  const privateCollect = (roll) => privateRolls.push(roll);
+  dm.on('dmRollResult', privateCollect);
+  emit(dm, 'rollDice', {
+    formula: '1d20+4',
+    label: 'Гоблин: Кулак: атака',
+    dmOnly: true
+  });
+  await waitFor(() => privateRolls.length === 1, 'приватный бросок мастера');
+  await wait(200);
+  check('приватный бросок из статблока видит только мастер', () => {
+    const roll = privateRolls[0];
+    assert.strictEqual(roll.hidden, true);
+    assert.strictEqual(roll.formula, '1d20+4');
+    assert.strictEqual(roll.label, 'Гоблин: Кулак: атака');
+    assert.ok(roll.result >= 5 && roll.result <= 24, `результат: ${roll.result}`);
+    assert.strictEqual(results.length, 0, 'игрок получил приватный бросок');
+    assert.ok(!p1.log.chatMessage.slice(chatMark).some((message) => message.isRoll),
+      'приватный бросок попал в чат игрока');
+  });
+  check('приватный бросок не оседает в истории кампании', () => {
+    assert.ok(!room.diceHistory.some((roll) => roll.label === 'Гоблин: Кулак: атака'),
+      'формула приватного броска осталась в истории');
+    assert.ok(!room.chatHistory.some((message) => String(message.text || '').includes('1d20+4')),
+      'формула приватного броска осталась в чате');
+  });
+  dm.off('dmRollResult', privateCollect);
 
   results.length = 0;
   emit(p1, 'rollDice', { formula: 'd20', hidden: true });
@@ -2881,6 +3237,20 @@ async function main() {
     assert.strictEqual(room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).journal, '');
   });
 
+  // Перезапись свободного журнала: отмена должна вернуть прежний текст.
+  const dirtyBeforeJournalText = dirtyCount;
+  emit(dm, 'saveJournal', { text: 'Черновик перед отменой' });
+  await waitFor(() => room.journal === 'Черновик перед отменой', 'перезапись журнала');
+  check('перезапись журнала помечает кампанию грязной', () => {
+    assert.ok(dirtyCount > dirtyBeforeJournalText, `dirtyCount=${dirtyCount}`);
+  });
+  await new Promise((resolve) => dm.emit('undoDmAction', {}, resolve));
+  await waitFor(() => room.journal === journalText, 'отмена перезаписи журнала');
+  check('перезапись журнала отменяется', () => {
+    assert.strictEqual(room.journal, journalText);
+  });
+
+  const dirtyBeforeJournalEntry = dirtyCount;
   const journalEntry = await new Promise((resolve) => {
     dm.emit('saveJournalEntry', {
       kind: 'location',
@@ -2896,6 +3266,9 @@ async function main() {
     assert.strictEqual(journalEntry.entry.title, 'Старый мост');
     assert.deepStrictEqual(journalEntry.entry.tags, ['мост', 'тайник']);
     assert.ok(journalEntry.entry.id.startsWith('j-'));
+  });
+  check('запись журнала помечает кампанию грязной для автосохранения', () => {
+    assert.ok(dirtyCount > dirtyBeforeJournalEntry, `dirtyCount=${dirtyCount}`);
   });
 
   p1.log.errorMessage.length = 0;
@@ -2940,6 +3313,19 @@ async function main() {
     assert.strictEqual(room.journalEntries.length, 0);
   });
 
+  // Удаление записи — самое дорогое действие в журнале, и отмена должна
+  // возвращать её целиком, а не только сдвинутые фишки.
+  dm.log.stateReload.length = 0;
+  await new Promise((resolve) => dm.emit('undoDmAction', {}, resolve));
+  await waitFor(() => room.journalEntries.length === 1, 'возврат записи журнала отменой');
+  check('удаление записи журнала отменяется', () => {
+    assert.strictEqual(room.journalEntries[0].title, 'Старый мост');
+    assert.strictEqual(
+      room.snapshotFor({ playerId: 'dm', role: ROLE_DM }).journalEntries.length, 1,
+      'мастер не получил запись обратно');
+    assert.ok(dm.log.stateReload.length > 0, 'после отмены не пришёл снимок состояния');
+  });
+
   /* ------------------------------------------ склад, проверки и отмена */
 
   console.log('\nОбщий склад, просьбы о бросках и отмена');
@@ -2955,6 +3341,7 @@ async function main() {
   });
 
   p2.log.inventoryUpdated.length = 0;
+  const dirtyBeforeItem = dirtyCount;
   const itemAck = await new Promise((resolve) => {
     dm.emit('saveInventoryItem', {
       name: 'Верёвка',
@@ -2978,6 +3365,9 @@ async function main() {
     assert.strictEqual(itemBroadcast[0].name, 'Верёвка');
     assert.strictEqual(
       room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).inventory.length, 1);
+  });
+  check('склад помечает кампанию грязной для автосохранения', () => {
+    assert.ok(dirtyCount > dirtyBeforeItem, `dirtyCount=${dirtyCount}`);
   });
 
   const itemUpdateAck = await new Promise((resolve) => {
@@ -3007,6 +3397,17 @@ async function main() {
     assert.strictEqual(room.inventory.length, 1);
   });
 
+  // Удаление предмета тоже отменяется: название, количество и владелец
+  // возвращаются снимком, а не остаются в чате объявлением.
+  await new Promise((resolve) => dm.emit('deleteInventoryItem', { id: itemAck.item.id }, resolve));
+  await waitFor(() => room.inventory.length === 0, 'удаление предмета для отмены');
+  await new Promise((resolve) => dm.emit('undoDmAction', {}, resolve));
+  await waitFor(() => room.inventory.length === 1, 'возврат предмета отменой');
+  check('удаление предмета склада отменяется', () => {
+    assert.strictEqual(room.inventory[0].name, 'Верёвка');
+    assert.strictEqual(room.inventory[0].qty, 1);
+  });
+
   p1.log.errorMessage.length = 0;
   const deniedRequest = await new Promise((resolve) => {
     p1.emit('rollRequest', { label: 'Игроку нельзя' }, resolve);
@@ -3018,6 +3419,7 @@ async function main() {
   });
 
   p2.log.rollRequestUpdated.length = 0;
+  const dirtyBeforeRequest = dirtyCount;
   const requestAck = await new Promise((resolve) => {
     dm.emit('rollRequest', { label: 'Скрытность', dc: 15, formula: '1d20+3' }, resolve);
   });
@@ -3031,6 +3433,9 @@ async function main() {
     assert.strictEqual(requestAck.request.dc, 15);
     assert.strictEqual(requestAck.request.formula, '1d20+3');
     assert.strictEqual(requestBroadcast[0].label, 'Скрытность');
+  });
+  check('просьба о броске помечает кампанию грязной', () => {
+    assert.ok(dirtyCount > dirtyBeforeRequest, `dirtyCount=${dirtyCount}`);
   });
 
   const clearAck = await new Promise((resolve) => {
@@ -3056,6 +3461,7 @@ async function main() {
     'фишка сдвинута'
   );
   dm.log.stateReload.length = 0;
+  const dirtyBeforeUndo = dirtyCount;
   const undoAck = await new Promise((resolve) => {
     dm.emit('undoDmAction', {}, resolve);
   });
@@ -3067,6 +3473,7 @@ async function main() {
     assert.strictEqual(restored.y, startY);
     assert.strictEqual(dm.log.stateReload[dm.log.stateReload.length - 1].tokens
       .find((token) => token.id === undoToken.id).x, startX, 'игроки не получили снимок');
+    assert.ok(dirtyCount > dirtyBeforeUndo, 'отмена не попала в автосохранение');
   });
 
   p1.log.errorMessage.length = 0;
@@ -3077,6 +3484,38 @@ async function main() {
   );
   check('отменять действия мастера может только мастер', () => {
     assert.match(deniedUndo.message, /только ДМ/);
+  });
+
+  // Конец хода помечается отдельно: по этому признаку окно мастера считает
+  // реакцию, а промежуточные сообщения перетаскивания её не вызывают.
+  dm.log.tokenMoved.length = 0;
+  const movedBefore = Number(room.tokens.find((token) => token.id === undoToken.id).movedCells) || 0;
+  emit(dm, 'moveToken', {
+    tokenId: undoToken.id,
+    x: 0.44,
+    y: 0.55,
+    final: true,
+    from: { col: 2, row: 3 },
+    path: [{ col: 2, row: 3 }, { col: 2, row: 4 }, { col: 3, row: 4 }]
+  });
+  const finalMove = await waitFor(
+    () => dm.log.tokenMoved.find((move) => move.final),
+    'конец хода с признаком'
+  );
+  check('конец хода приходит с признаком и нарисованным путём', () => {
+    assert.strictEqual(finalMove.final, true);
+    assert.deepStrictEqual(finalMove.from, { col: 2, row: 3 });
+    assert.deepStrictEqual(finalMove.path, [
+      { col: 2, row: 3 }, { col: 2, row: 4 }, { col: 3, row: 4 }
+    ], `путь потерялся: ${JSON.stringify(finalMove.path)}`);
+    assert.strictEqual(finalMove.spent, 2, 'пройденные клетки не посчитаны');
+    assert.strictEqual(finalMove.movedCells, movedBefore + 2, 'счётчик движения не вырос');
+  });
+
+  room.tokens[0].movedCells = 7;
+  room.resetMovement();
+  check('счётчик движения сбрасывается на новом ходу', () => {
+    assert.strictEqual(room.tokens[0].movedCells, 0);
   });
 
   emit(dm, 'deleteToken', { tokenId: undoToken.id });
@@ -3119,6 +3558,26 @@ async function main() {
   check('копия кампании переносит JSON и папку с картинками', () => {
     assert.ok(fs.existsSync(path.join(backupDir, 'campaign.json')), 'в копии нет campaign.json');
     assert.ok(fs.existsSync(path.join(backupDir, 'files')), 'в копии нет папки files');
+  });
+
+  const namedBackup = await store.backup(campaign.id, campaign.name);
+  const namedCopies = await store.listBackups(campaign.id, campaign.name);
+  const namedLast = await store.lastBackupTime(campaign.id, campaign.name);
+  check('копии кампании считаются по её имени и знают время последней', () => {
+    assert.strictEqual(namedCopies.length, 1, `копий: ${namedCopies.length}`);
+    assert.strictEqual(namedCopies[0].path, namedBackup);
+    assert.ok(namedLast > 0, `время последней копии: ${namedLast}`);
+  });
+
+  // Ротация считается по кампании: шесть копий подряд оставляют пять, а
+  // копия с другим именем не вытесняется.
+  for (let index = 0; index < 6; index += 1) {
+    await store.backup(campaign.id, campaign.name);
+  }
+  const rotated = await store.listBackups(campaign.id, campaign.name);
+  check('у кампании остаются пять последних копий, чужие не трогаются', () => {
+    assert.strictEqual(rotated.length, 5, `копий после ротации: ${rotated.length}`);
+    assert.ok(fs.existsSync(backupDir), 'копия с другим именем исчезла при ротации');
   });
 
   const list = await store.list();
@@ -3237,6 +3696,34 @@ async function main() {
     for (const field of ['players', 'sheets', 'maps', 'activeMap', 'activeMapId', 'tokens']) {
       assert.ok(raw.state[field] !== undefined, `нет state.${field}`);
     }
+  });
+
+  /* ------------------------------------------- восстановление из копии */
+
+  console.log('\nВосстановление из копии');
+  const restoreMarker = path.join(root, 'campaigns', campaign.id, 'restore-marker.txt');
+  fs.writeFileSync(restoreMarker, 'это состояние должно исчезнуть');
+  const restoreSource = rotated[0];
+  await store.restoreBackup(campaign.id, restoreSource.name);
+  check('копия возвращается на место кампании', () => {
+    assert.ok(!fs.existsSync(restoreMarker), 'старое состояние осталось после восстановления');
+    assert.ok(fs.existsSync(path.join(root, 'campaigns', campaign.id, 'campaign.json')),
+      'в восстановленной кампании нет campaign.json');
+  });
+  const afterRestore = await store.load(campaign.id);
+  check('восстановленная кампания читается', () => {
+    assert.strictEqual(afterRestore.id, campaign.id);
+    assert.ok(afterRestore.state && afterRestore.state.tokens, 'в копии нет состояния');
+  });
+
+  let restoreTraversal = null;
+  try {
+    await store.restoreBackup(campaign.id, '../campaigns/evil');
+  } catch (error) {
+    restoreTraversal = error;
+  }
+  check('восстановление не выходит за папку копий', () => {
+    assert.ok(restoreTraversal && /Некорректное имя/.test(restoreTraversal.message), 'путь с .. не отклонён');
   });
 
   /* ------------------------------- переподключение и остановка сервера */

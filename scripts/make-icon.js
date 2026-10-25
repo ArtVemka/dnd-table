@@ -15,18 +15,17 @@ const path = require('path');
 
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
 const SUPERSAMPLE = 4;
-const STROKE = 0.028;
 
 const COLORS = {
-  discTop: [59, 43, 29],
-  discBottom: [25, 19, 16],
-  ring: [200, 117, 80],
-  stroke: [217, 164, 65],
-  centerFill: [217, 164, 65, 0.24],
-  sideFill: [217, 164, 65, 0.09]
+  bgCenter: [46, 32, 20],
+  bgEdge: [11, 8, 6],
+  rim: [188, 106, 72],
+  rimLight: [234, 153, 110],
+  rimDark: [88, 48, 32],
+  gold: [217, 164, 65],
+  goldLight: [247, 208, 128],
+  goldDark: [124, 86, 28]
 };
-
-const TAU = Math.PI * 2;
 
 function deg(angle) {
   return (angle * Math.PI) / 180;
@@ -76,28 +75,64 @@ function mix(base, over, alpha) {
  * @returns {[number, number, number, number]} RGBA 0..255
  */
 function sample(x, y) {
-  const distance = Math.hypot(x - 0.5, y - 0.5);
+  const dx = x - 0.5;
+  const dy = y - 0.5;
+  const distance = Math.hypot(dx, dy);
   if (distance > 0.5) return [0, 0, 0, 0];
 
-  // Диск с вертикальным градиентом и ободком.
-  let rgb = mix(COLORS.discTop, COLORS.discBottom, y);
-  if (distance > 0.452) rgb = COLORS.ring;
+  // Диск: тёплый свет сверху и почти чёрный край. Свет собирается за костью,
+  // поэтому центр не выглядит плоской заливкой.
+  let rgb = mix(COLORS.bgCenter, COLORS.bgEdge, Math.pow(distance / 0.5, 1.35));
+  const glow = Math.max(0, 1 - Math.hypot(dx + 0.05, dy + 0.07) / 0.46);
+  rgb = mix(rgb, COLORS.gold, 0.16 * glow * glow);
 
-  const hex = hexagon(0.3);
+  // Обод: тёмная фаска, медное кольцо с бликом слева-сверху, снова фаска.
+  if (distance > 0.491) {
+    rgb = COLORS.rimDark;
+  } else if (distance > 0.458) {
+    const light = 0.5 + 0.5 * Math.cos(Math.atan2(dy, dx) + Math.PI * 0.75);
+    rgb = mix(COLORS.rim, COLORS.rimLight, Math.pow(light, 1.6) * 0.9);
+  } else if (distance > 0.448) {
+    rgb = COLORS.rimDark;
+  }
+
+  // Тонкое золотое кольцо отделяет кость от обода.
+  if (Math.abs(distance - 0.415) < 0.0035) {
+    rgb = mix(rgb, COLORS.gold, 0.38);
+  }
+
+  const hex = hexagon(0.305);
   const centerTriangle = [hex[0], hex[2], hex[4]];
   const sideTriangles = [
     [hex[0], hex[1], hex[2]],
     [hex[2], hex[3], hex[4]],
     [hex[4], hex[5], hex[0]]
   ];
+  const insideDie = pointInPolygon(x, y, hex);
 
-  if (pointInPolygon(x, y, centerTriangle)) {
-    rgb = mix(rgb, COLORS.stroke, COLORS.centerFill[3]);
-  } else if (sideTriangles.some((triangle) => pointInPolygon(x, y, triangle))) {
-    rgb = mix(rgb, COLORS.stroke, COLORS.sideFill[3]);
+  // Тень под костью: смещённый контур, который не попадает внутрь самой кости.
+  if (!insideDie && pointInPolygon(x - 0.012, y - 0.022, hex)) {
+    rgb = mix(rgb, [0, 0, 0], 0.42);
   }
 
-  // Рёбра: контур шестиугольника и центральная грань.
+  const faces = [
+    { polygon: centerTriangle, light: 0.46 },
+    { polygon: sideTriangles[0], light: 0.12 },
+    { polygon: sideTriangles[1], light: 0.045 },
+    { polygon: sideTriangles[2], light: 0.2 }
+  ];
+
+  for (const face of faces) {
+    if (!pointInPolygon(x, y, face.polygon)) continue;
+    const amount = face.light + 0.1 * (0.55 - y);
+    rgb = mix(rgb, COLORS.gold, Math.max(0.03, amount));
+    // Верхняя кромка каждой грани ловит свет сильнее нижней.
+    if (y < 0.46) rgb = mix(rgb, COLORS.goldLight, 0.06 * (0.46 - y) * 4);
+    break;
+  }
+
+  // Рёбра: светлая золотая линия в тёмной фаске. Так кость читается и на
+  // 16 px, где тонкая обводка исчезает.
   const edges = [];
   for (let index = 0; index < 6; index += 1) {
     edges.push([hex[index], hex[(index + 1) % 6]]);
@@ -106,11 +141,14 @@ function sample(x, y) {
   edges.push([centerTriangle[1], centerTriangle[2]]);
   edges.push([centerTriangle[2], centerTriangle[0]]);
 
+  let edgeDistance = Infinity;
   for (const [a, b] of edges) {
-    if (distanceToSegment(x, y, a[0], a[1], b[0], b[1]) <= STROKE / 2) {
-      rgb = COLORS.stroke;
-      break;
-    }
+    edgeDistance = Math.min(edgeDistance, distanceToSegment(x, y, a[0], a[1], b[0], b[1]));
+  }
+  if (edgeDistance <= 0.0075) {
+    rgb = COLORS.goldLight;
+  } else if (edgeDistance <= 0.014) {
+    rgb = mix(rgb, COLORS.goldDark, 0.85);
   }
 
   return [rgb[0], rgb[1], rgb[2], 255];

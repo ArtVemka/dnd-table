@@ -94,6 +94,12 @@
         const Ctor = global.AudioContext || global.webkitAudioContext;
         if (!Ctor) return null;
         context = new Ctor();
+        // Если браузер всё-таки запретил автоплей (старая сборка, веб-клиент),
+        // контекст оживёт на первом жесте — и только тогда начнётся атмосфера.
+        context.onstatechange = () => {
+          if (context.state !== 'running' || previewTimer) return;
+          if (ambientScene === 'home' && ambientEnabled() && !ambient) startAmbient();
+        };
       }
       if (context.state === 'suspended') context.resume().catch(() => {});
       return context;
@@ -491,12 +497,17 @@
 
   /** @param {boolean} [force] играть даже вне главного экрана: так работает проба */
   function startAmbient(force = false) {
-    if (!force && (!ambientEnabled() || ambientScene !== 'home' || !ambientUnlocked)) return;
+    if (!force && (!ambientEnabled() || ambientScene !== 'home')) return;
     if (ambientVolume() <= 0) return;
     const theme = currentTheme();
     if (!force && ambient && ambient.theme === theme) return;
     const ctx = ensure();
-    if (!ctx) return;
+    if (!ctx || ctx.state !== 'running') {
+      // Контекст замолчал (браузер ждёт жеста или окно скрыто): не строим
+      // сцену в тишине. Оживёт на первом жесте — и обработчик состояния
+      // начнёт атмосферу заново.
+      return;
+    }
     stopAmbient();
     try {
       const master = ctx.createGain();
@@ -675,8 +686,9 @@
     write(SKIN_KEY, KNOWN.includes(id) ? id : 'standart');
   }
 
-  // Атмосфера не должна включаться сама до жеста: браузер всё равно
-  // заблокирует AudioContext. Первый клик или клавиша снимает запрет.
+  // Атмосфера могла не подняться, пока звук был запрещён до жеста. Первый
+  // клик или клавиша оживляют контекст, и старт повторяется. Дублирующий
+  // вызов безопасен: сцена уже играет — она не пересоздаётся.
   const unlock = () => {
     if (ambientUnlocked) return;
     ambientUnlocked = true;

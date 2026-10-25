@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('desktop', {
   isElectron: true,
 
   getConfig: () => ipcRenderer.invoke('app:config'),
+  setAutosaveInterval: (seconds) => ipcRenderer.invoke('app:autosaveInterval', seconds),
 
   // Кампании
   listCampaigns: () => ipcRenderer.invoke('campaign:list'),
@@ -27,6 +28,8 @@ contextBridge.exposeInMainWorld('desktop', {
   currentCampaign: () => ipcRenderer.invoke('campaign:current'),
   saveCampaign: () => ipcRenderer.invoke('campaign:save'),
   backupCampaign: () => ipcRenderer.invoke('campaign:backup'),
+  backupInfo: () => ipcRenderer.invoke('campaign:backupInfo'),
+  restoreBackup: (id, name) => ipcRenderer.invoke('campaign:restoreBackup', id, name),
   deleteCampaign: (id) => ipcRenderer.invoke('campaign:delete', id),
 
   // Стол (сервер в main-процессе)
@@ -54,6 +57,15 @@ contextBridge.exposeInMainWorld('desktop', {
   inspectAdventure: (filePath) => ipcRenderer.invoke('adventure:inspect', filePath),
   importAdventure: (filePath, include) => ipcRenderer.invoke('adventure:import', filePath, include),
 
+  // Бестиарий Open5e
+  searchOpen5e: (query) => ipcRenderer.invoke('bestiary:search', query),
+  previewOpen5e: (key) => ipcRenderer.invoke('bestiary:preview', key),
+  cacheOpen5eImage: (draftId) => ipcRenderer.invoke('bestiary:cacheImage', draftId),
+  searchOpen5eImage: (draftId, query) => ipcRenderer.invoke('bestiary:image', draftId, query),
+  pickOpen5eImage: (draftId, url) => ipcRenderer.invoke('bestiary:pickImage', draftId, url),
+  uploadOpen5eImage: (draftId, dataUrl) => ipcRenderer.invoke('bestiary:uploadImage', draftId, dataUrl),
+  importOpen5e: (draftId, crop) => ipcRenderer.invoke('bestiary:import', draftId, crop),
+
   // Лист персонажа в отдельном окне
   openSheetWindow: (request) => ipcRenderer.invoke('sheet:openWindow', request),
 
@@ -62,6 +74,7 @@ contextBridge.exposeInMainWorld('desktop', {
 
   // Файлы
   openDataDir: () => ipcRenderer.invoke('shell:openDataDir'),
+  openBackups: () => ipcRenderer.invoke('shell:openBackups'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
   // Подписки

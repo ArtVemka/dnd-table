@@ -25,6 +25,14 @@
   const RIGHT_COLLAPSED_KEY = 'dnd-table.rightPanelCollapsed';
   /** Какая вкладка правой колонки была открыта в прошлый раз. */
   const ACTIVE_TAB_KEY = 'dnd-table.activeTab';
+  /** Свёрнутые разделы левой колонки: массив ключей в localStorage. */
+  const COLLAPSED_PANELS_KEY = 'dnd-table.collapsedPanels';
+  /** Интервал автосохранения кампании в секундах: выбор мастера. */
+  const AUTOSAVE_KEY = 'dnd-table.autosaveSeconds';
+  const AUTOSAVE_DEFAULT_SECONDS = 60;
+  const AUTOSAVE_CHOICES = [15, 30, 60, 300];
+  /** Раздел настроек, открытый в прошлый раз. */
+  const SETTINGS_SECTION_KEY = 'dnd-table.settingsSection';
   /** Ширина правой колонки в пикселях: её тянут мышью, а результат переживает
    *  перезапуск, иначе пришлось бы подстраивать её заново каждую партию. */
   const RIGHT_WIDTH_KEY = 'dnd-table.rightWidth';
@@ -112,6 +120,12 @@ let journalQuery = '';
 /** Какой предмет склада открыт на правку: null, 'new' или id предмета. */
 let inventoryEditingId = null;
 /**
+ * Поводы для реакций: противник может атаковать по возможности. Карточки живут
+ * только у мастера и только в этом окне: это подсказка, а не состояние стола.
+ */
+let reactionPrompts = [];
+let reactionPromptSeq = 0;
+/**
  * Редактор листа на экране подготовки. Лист сохраняется в библиотеку сам, при
  * правке поля, поэтому сохранять его нужно помнить только между открытиями.
  */
@@ -137,12 +151,98 @@ let chosenSheetId = null;
   function toast(message, kind = 'info', timeout = 4200) {
     const root = $('#toasts');
     if (!root) return;
+    // Больше четырёх плашек одновременно закрывали бы стол; старые уходят
+    // раньше своего срока, но остаются в истории чата, если это важно.
+    while (root.children.length >= 4) root.firstElementChild.remove();
     const node = el('div', `toast toast--${kind}`, message);
     root.appendChild(node);
     setTimeout(() => {
       node.classList.add('is-out');
       setTimeout(() => node.remove(), 300);
     }, timeout);
+  }
+
+  /**
+   * Крупный результат приватного броска мастера.
+   *
+   * Бросок из статблока не должен светиться в чате: игроки не видят ни
+   * формулу, ни число. Мастеру же нужно увидеть итог сразу, поэтому он
+   * приходит отдельной карточкой поверх стола и гаснет сам.
+   * @param {object} roll
+   */
+  function showDmRoll(roll) {
+    let box = document.getElementById('dm-roll');
+    if (!box) {
+      box = el('div', 'dm-roll');
+      box.id = 'dm-roll';
+      box.setAttribute('role', 'status');
+      box.setAttribute('aria-live', 'polite');
+      box.hidden = true;
+      const body = el('div', 'dm-roll__body');
+      body.appendChild(el('div', 'dm-roll__label'));
+      const line = el('div', 'dm-roll__line');
+      line.appendChild(el('strong', 'dm-roll__result'));
+      line.appendChild(el('span', 'dm-roll__formula'));
+      body.appendChild(line);
+      body.appendChild(el('div', 'dm-roll__verdict'));
+      const close = el('button', 'dm-roll__close', '×');
+      close.type = 'button';
+      close.title = 'Скрыть';
+      close.setAttribute('aria-label', 'Скрыть результат броска');
+      close.addEventListener('click', () => { box.hidden = true; });
+      box.appendChild(body);
+      box.appendChild(close);
+      document.body.appendChild(box);
+    }
+    const label = box.querySelector('.dm-roll__label');
+    const result = box.querySelector('.dm-roll__result');
+    const formula = box.querySelector('.dm-roll__formula');
+    const verdict = box.querySelector('.dm-roll__verdict');
+    label.textContent = roll.label || 'Бросок мастера';
+    result.textContent = String(roll.result ?? '');
+    formula.textContent = roll.formula || '';
+    verdict.hidden = roll.hit !== true && roll.hit !== false;
+    verdict.textContent = roll.hit === true
+      ? `попадание по КД ${roll.targetAc}`
+      : roll.hit === false ? `промах по КД ${roll.targetAc}` : '';
+    box.classList.toggle('is-hit', roll.hit === true);
+    box.classList.toggle('is-miss', roll.hit === false);
+    box.hidden = false;
+    clearTimeout(showDmRoll.timer);
+    showDmRoll.timer = setTimeout(() => { box.hidden = true; }, 9000);
+  }
+
+  /**
+   * Запирает Tab внутри окна и возвращает фокус на прежнее место.
+   * Без этого Tab уходил бы в панель под модалкой, а после закрытия фокус
+   * терялся бы в начале страницы.
+   * @param {HTMLElement} box
+   * @returns {() => void} отпустить: снять слушатель и вернуть фокус
+   */
+  function trapFocus(box) {
+    const previous = document.activeElement;
+    const focusables = () => [...box.querySelectorAll(
+      'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
+    )].filter((node) => !node.disabled && node.getClientRects().length > 0);
+    const onKey = (event) => {
+      if (event.key !== 'Tab') return;
+      const list = focusables();
+      if (!list.length) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      if (previous && typeof previous.focus === 'function') previous.focus();
+    };
   }
 
   /**
@@ -154,8 +254,15 @@ let chosenSheetId = null;
     return new Promise((resolve) => {
       const overlay = el('div', 'modal-overlay');
       const box = el('div', 'modal');
-      box.appendChild(el('div', 'modal__title', options.title || 'Подтвердите действие'));
+      const titleId = `modal-title-${Date.now()}`;
+      const title = el('div', 'modal__title', options.title || 'Подтвердите действие');
+      title.id = titleId;
+      box.setAttribute('role', 'dialog');
+      box.setAttribute('aria-modal', 'true');
+      box.setAttribute('aria-labelledby', titleId);
+      box.appendChild(title);
       if (options.message) box.appendChild(el('div', 'modal__text', options.message));
+      const release = trapFocus(box);
 
       let field = null;
       if (options.input) {
@@ -175,6 +282,7 @@ let chosenSheetId = null;
 
       const close = (value) => {
         document.removeEventListener('keydown', onKey);
+        release();
         overlay.remove();
         resolve(value);
       };
@@ -199,6 +307,7 @@ let chosenSheetId = null;
       overlay.appendChild(box);
       document.body.appendChild(overlay);
       if (field) field.focus();
+      else confirm.focus();
     });
   }
 
@@ -353,6 +462,29 @@ let chosenSheetId = null;
     });
   }
 
+  /**
+   * Боевые числа из листа игрока: КД и бонус первой атаки.
+   *
+   * У фишки игрока нет своих КД и бонуса: лист — единственный источник, иначе
+   * за столом появляются два разных числа и мастер правит не то.
+   * @param {string} playerId
+   * @returns {{armorClass: number|null, attackBonus: number|null}}
+   */
+  function sheetCombatStats(playerId) {
+    const sheet = playerId && app.room && app.room.sheets
+      ? app.room.sheets[playerId]
+      : null;
+    if (!sheet) return { armorClass: null, attackBonus: null };
+    const ac = Number(sheet.armorClass);
+    const attack = Array.isArray(sheet.attackList) && sheet.attackList[0]
+      ? Number(sheet.attackList[0].bonus)
+      : NaN;
+    return {
+      armorClass: Number.isFinite(ac) && ac > 0 ? Math.round(ac) : null,
+      attackBonus: Number.isFinite(attack) ? Math.round(attack) : null
+    };
+  }
+
   function emit(event, payload) {
     if (!app.socket || !app.connected) {
       toast('Нет соединения со столом', 'error');
@@ -409,7 +541,10 @@ let chosenSheetId = null;
       journal: state.journal || '',
       journalEntries: state.journalEntries || [],
       inventory: state.inventory || [],
-      rollRequests: state.rollRequests || []
+      rollRequests: state.rollRequests || [],
+      // Поводы для реакций приходят снимком: после переподключения карточка
+      // должна быть на месте, а не жить только в памяти старого окна.
+      reactions: state.reactions || []
     };
   }
 
@@ -431,8 +566,17 @@ let chosenSheetId = null;
 
   async function initHome() {
     app.config = await desktop.getConfig();
+    // Интервал автосохранения хранится в localStorage, а таймер живёт в main:
+    // передаём выбор при каждом запуске, иначе он вернулся бы к минуте.
+    if (typeof desktop.setAutosaveInterval === 'function') {
+      desktop.setAutosaveInterval(autosaveSeconds());
+    }
     const dirNode = $('#home-datadir');
-    dirNode.textContent = `Данные: ${app.config.dataDir}${app.config.portable ? ' (портативный режим)' : ''}`;
+    // Путь к папке — техническая деталь и живёт в настройках. На главном
+    // экране достаточно сказать, где лежат данные.
+    dirNode.textContent = app.config.portable
+      ? 'Данные: портативный режим, рядом с игрой'
+      : 'Данные: профиль Windows';
     dirNode.title = app.config.campaignsDir;
 
     const status = await desktop.hostStatus();
@@ -691,6 +835,7 @@ let chosenSheetId = null;
       setStatus('#join-status', '');
       showScreen('screen-table');
       prepareTableUi();
+      syncReactionPrompts(state.reactions);
       renderAll();
       updateConnBadge(true);
       toast(app.training
@@ -717,6 +862,7 @@ let chosenSheetId = null;
     socket.on('stateReload', (state) => {
       app.room = roomFromState(state);
       app.adventure = state.adventure || null;
+      syncReactionPrompts(state.reactions);
       renderAll();
       updateConnBadge(true);
     });
@@ -846,8 +992,29 @@ let chosenSheetId = null;
       renderAdventurePanel();
     });
 
-    socket.on('tokenMoved', ({ tokenId, x, y }) => {
-      mapView.applyTokenMove(tokenId, x, y);
+    socket.on('tokenMoved', ({ tokenId, x, y, final, from }) => {
+      mapView.applyTokenMove(tokenId, x, y, { final, from });
+    });
+
+    // Мастер передал игроку повод для реакции: его фишка покинула досягаемость
+    // врага, и теперь бросает сам игрок, а не мастер за него.
+    socket.on('reactionPrompt', (prompt = {}) => {
+      addReactionPrompt(
+        { name: prompt.attackerName },
+        { name: prompt.targetName },
+        {
+          id: prompt.id,
+          playerId: prompt.playerId,
+          bonus: prompt.bonus,
+          targetAc: prompt.targetAc
+        }
+      );
+    });
+
+    // Карточка снята у всех, кто её видел: игрок бросил, отказался или раунд
+    // закончился. Без этого она висела бы до перезагрузки.
+    socket.on('reactionResolved', ({ id } = {}) => {
+      removeReactionPrompt(id);
     });
 
     // Пинг живёт пару секунд и никуда не сохраняется: это жест, а не объект.
@@ -860,6 +1027,9 @@ let chosenSheetId = null;
       mapView.refreshTokens(app.room, viewer());
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
       renderInitiativePanel();
+      // В справочнике есть раздел «Фишки»: без перерисовки удалённая фишка
+      // оставалась бы в нём до переключения вкладки.
+      if (app.role === 'dm') renderAdventurePanel();
     });
 
     /**
@@ -889,7 +1059,13 @@ let chosenSheetId = null;
     // Порядок боя приходит и снимком, и отдельным событием: мастер меняет его
     // кнопками, игроки получают рассылку. Рисуем одним и тем же.
     socket.on('initiativeUpdated', (initiative) => {
+      const previousRound = app.room.initiative && app.room.initiative.round;
       app.room.initiative = initiative || { entries: [], turnId: null, round: 1 };
+      // Новый раунд: поводы прошлого больше не действуют. Сервер их уже
+      // вычистил, окно делает то же самое без отдельного события.
+      if (previousRound && app.room.initiative.round !== previousRound) {
+        syncReactionPrompts([]);
+      }
       renderInitiativePanel();
     });
 
@@ -922,6 +1098,8 @@ let chosenSheetId = null;
       // поэтому у всех клиентов история чата совпадает.
     });
 
+    socket.on('dmRollResult', (roll) => showDmRoll(roll));
+
     socket.on('chatMessage', (message) => {
       app.room.chatHistory.push(message);
       if (app.room.chatHistory.length > HISTORY_LIMITS.chat) {
@@ -951,6 +1129,9 @@ let chosenSheetId = null;
     // Ход по клеткам и перетаскивание живут вне сокета: их таймеры иначе
     // продолжали бы дёргать emit уже без стола.
     if (mapView) mapView.cancelPending();
+    // Поводы для реакций относятся к прошлому столу: в новом они только путали бы.
+    reactionPrompts = [];
+    renderReactionPrompts();
     app.socket = null;
     app.connected = false;
     app.role = null;
@@ -1031,6 +1212,10 @@ let chosenSheetId = null;
     }
     const isRunning = app.p2p.running;
     const isConnected = app.p2p.peerConnected;
+    // Успешный P2P ничего не добавляет к «на связи»: две зелёные плашки
+    // подряд только шумят. Показываем P2P, лишь когда он ещё поднимается
+    // или не смог подключиться.
+    badge.hidden = !isRunning || isConnected;
     if (!isRunning) {
       badge.className = 'badge badge--muted';
       badge.textContent = 'P2P';
@@ -1097,12 +1282,45 @@ let chosenSheetId = null;
           emit('uploadMap', { type, image: result.dataUrl, name: result.name });
         },
         onSelectMap: (type, mapId) => emit('selectMap', { type, mapId }),
-        onMoveToken: (tokenId, x, y) => emit('moveToken', { tokenId, x, y }),
+        onMoveToken: (tokenId, x, y, meta) => emit('moveToken', { tokenId, x, y, ...(meta || {}) }),
+        // Атака по возможности: карту ведёт мастер, поэтому и реакцию считает
+        // его окно — только оно видит все фишки и размер клетки. Реакцию
+        // союзной фишки отправляем её игроку, чтобы он бросил сам.
+        onOpportunityAttack: ({ attacker, target, playerId }) => {
+          if (!attacker || !target) return;
+          const targetSheet = target.assignedPlayerId
+            ? sheetCombatStats(target.assignedPlayerId)
+            : null;
+          const attackerSheet = attacker.assignedPlayerId
+            ? sheetCombatStats(attacker.assignedPlayerId)
+            : null;
+          // У фишки игрока КД всегда из листа; у монстра — из самого токена.
+          const tokenAc = Number(target.armorClass) > 0
+            ? Math.round(Number(target.armorClass))
+            : null;
+          const targetAc = (targetSheet && targetSheet.armorClass) || tokenAc;
+          // Бонус игрока — из первой атаки листа, у монстра — из фишки.
+          const bonus = attackerSheet && attackerSheet.attackBonus !== null
+            ? attackerSheet.attackBonus
+            : (Number(attacker.attackBonus) || 0);
+          if (playerId) {
+            emit('reactionPrompt', {
+              playerId,
+              attackerName: attacker.name,
+              targetName: target.name,
+              bonus,
+              targetAc
+            });
+            return;
+          }
+          addReactionPrompt(attacker, target, { bonus, targetAc });
+        },
         // Пинг: короткий жест «смотрите сюда». Сервер не хранит его в кампании.
         onPing: (mapType, mapId, x, y) => emit('mapPing', { mapType, mapId, x, y }),
         // Перенос фишки на карту, которую уже видят игроки: мастер готовит
         // следующую сцену и в нужный момент переводит на неё участников.
         onMoveTokenToActive: (tokenId) => emit('moveTokenToActiveMap', { tokenId }),
+        onDropActor: (name, x, y) => dropAdventureActor(name, x, y),
         onNotice: (message) => toast(message),
         onToggleGrid: (enabled) => emit('setGrid', {
           enabled,
@@ -1118,6 +1336,11 @@ let chosenSheetId = null;
         onSetCombatMode: (enabled) => emit('setCombatMode', { enabled }),
         onRenameToken: renameToken,
         onAssignToken: (tokenId, playerId) => emit('assignTokenToPlayer', { tokenId, playerId }),
+        onSetTokenSide: (tokenId, side) => emit('setTokenSide', { tokenId, side }),
+        onSetTokenAttackBonus: (tokenId, attackBonus) => emit('setTokenAttackBonus', { tokenId, attackBonus }),
+        onSetTokenArmorClass: (tokenId, armorClass) => emit('setTokenArmorClass', { tokenId, armorClass }),
+        // Меню фишки показывает боевые числа игрока из его листа, а не из токена.
+        onSheetStats: sheetCombatStats,
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
         // Туман войны: карта уезжает на сервер целиком, маской на месте.
         onOpenMapFog: (type, mapId, x, y, radius) => emit('openMapFog', { type, mapId, x, y, radius }),
@@ -1164,7 +1387,7 @@ let chosenSheetId = null;
         onToggleTokenHidden: (tokenId, hidden) => emit('setTokenHidden', { tokenId, hidden }),
         onToggleTokenNameHidden: (tokenId, hidden) => emit('setTokenNameHidden', { tokenId, hidden }),
         onToggleTokenLabelsHidden: (tokenId, hidden) => emit('setTokenLabelsHidden', { tokenId, hidden }),
-        onSetAllTokensHidden: (hidden) => emit('setAllTokensHidden', { hidden }),
+        onSetAllTokensHidden: (hidden, side) => emit('setAllTokensHidden', { hidden, side }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
           if (result.canceled) return;
@@ -1221,12 +1444,13 @@ let chosenSheetId = null;
     if (!tokenPanel) {
       tokenPanel = new TokenPanel($('#tab-tokens'), {
         // Прочность необязательна: пустое поле — фишка-метка без здоровья.
-        onCreate: (name, maxHp, size) => {
+        onCreate: (name, maxHp, size, side) => {
           // Фишка создаётся на той карте, которую мастер сейчас открыл, а не
           // на показанной: иначе заготовку нельзя было бы обставить заранее.
           const mapType = (mapView && mapView.viewedMap) || app.room.activeMap || 'battle';
           const mapId = (mapView && mapView.currentMapId) || activeMapId();
-          emit('createToken', { name, maxHp, size, mapType, mapId });
+          // Вкладка «Союзники» создаёт союзника, «Враги» — врага.
+          emit('createToken', { name, maxHp, size, side, mapType, mapId });
         },
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
         // Свет фишки: факел в руке. Дальность в футах, как в правилах.
@@ -1242,6 +1466,11 @@ let chosenSheetId = null;
         // правки одного числа за столом разошлись бы.
         onSetTokenHp: (tokenId, hp) => emit('setTokenHp', { tokenId, hp }),
         onSetTokenSize: (tokenId, size) => emit('setTokenSize', { tokenId, size }),
+        onSetTokenSide: (tokenId, side) => emit('setTokenSide', { tokenId, side }),
+        onSetTokenAttackBonus: (tokenId, attackBonus) => emit('setTokenAttackBonus', { tokenId, attackBonus }),
+        onSetTokenArmorClass: (tokenId, armorClass) => emit('setTokenArmorClass', { tokenId, armorClass }),
+        // Меню фишки показывает боевые числа игрока из его листа, а не из токена.
+        onSheetStats: sheetCombatStats,
         // Состояния ведёт мастер, но видны они всем.
         onSetTokenConditions: (tokenId, conditions, conditionDurations) => emit('setTokenConditions', {
           tokenId,
@@ -1254,8 +1483,7 @@ let chosenSheetId = null;
         onToggleTokenHidden: (tokenId, hidden) => emit('setTokenHidden', { tokenId, hidden }),
         onToggleTokenNameHidden: (tokenId, hidden) => emit('setTokenNameHidden', { tokenId, hidden }),
         onToggleTokenLabelsHidden: (tokenId, hidden) => emit('setTokenLabelsHidden', { tokenId, hidden }),
-        onSetTokenLight: (tokenId, radius, color) => emit('setTokenLight', { tokenId, radius, color }),
-        onSetAllTokensHidden: (hidden) => emit('setAllTokensHidden', { hidden }),
+        onSetAllTokensHidden: (hidden, side) => emit('setAllTokensHidden', { hidden, side }),
         // Перенос из списка фишек делает то же, что правый клик по фишке на
         // карте: освобождает заготовку от привязки к старой локации.
         onMoveTokenToActive: (tokenId) => emit('moveTokenToActiveMap', { tokenId }),
@@ -1426,6 +1654,9 @@ let chosenSheetId = null;
    * @param {string} playerId
    */
   function spawnTokenFromSheet(playerId) {
+    // Фишка из листа — союзник, и панель фишек должна показать её сразу:
+    // кнопка есть и в панели участников, где вкладка стороны не видна.
+    if (tokenPanel) tokenPanel.setSide('ally');
     emit('createTokenFromSheet', {
       playerId,
       mapType: app.room.activeMap || 'battle',
@@ -1597,6 +1828,8 @@ let chosenSheetId = null;
       empty.appendChild(el('p', 'muted',
         'Справочник пуст. Импортируйте приключение из Foundry или создайте NPC вручную.'));
       empty.appendChild(makeAddActorButton());
+      const bestiary = makeBestiaryButton();
+      if (bestiary) empty.appendChild(bestiary);
       panel.appendChild(empty);
       adventurePanelStale = false;
       return;
@@ -1642,6 +1875,8 @@ let chosenSheetId = null;
 
     const actions = el('div', 'adv-actions');
     actions.appendChild(makeAddActorButton());
+    const bestiary = makeBestiaryButton();
+    if (bestiary) actions.appendChild(bestiary);
     panel.appendChild(actions);
 
     fillAdventureSections(panel, adventure, '');
@@ -1663,6 +1898,664 @@ let chosenSheetId = null;
       emit('setAdventureGroupStatblock', { name, create: true, statblock: {} });
     });
     return add;
+  }
+
+  /**
+   * Кнопка импорта из Open5e. На Android моста нет, поэтому там она просто
+   * не появляется: молчаливая кнопка, которая ничего не делает, хуже.
+   */
+  function makeBestiaryButton() {
+    if (typeof desktop === 'undefined' || typeof desktop.searchOpen5e !== 'function') return null;
+    const add = el('button', 'btn btn--tiny', 'Импорт из Open5e');
+    add.type = 'button';
+    add.title = 'Найти монстра в Open5e и перевести карточку на русский';
+    add.addEventListener('click', () => openBestiaryImport());
+    return add;
+  }
+
+  /**
+   * Поиск по Open5e с предпросмотром переведённой карточки.
+   *
+   * Сеть живёт в main-процессе: окно не должно ходить на произвольные адреса.
+   * Здесь только шаги, список находок и карточка, которую можно сохранить.
+   */
+  function openBestiaryImport() {
+    if (typeof desktop === 'undefined' || typeof desktop.previewOpen5e !== 'function') return;
+
+    const overlay = el('div', 'modal-overlay');
+    const box = el('div', 'modal modal--bestiary');
+    const titleId = `bestiary-title-${Date.now()}`;
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', titleId);
+    box.tabIndex = -1;
+    const title = el('div', 'modal__title', 'Импорт из Open5e');
+    title.id = titleId;
+    box.appendChild(title);
+    box.appendChild(el('p', 'modal__text bestiary-hint',
+      'Поиск идёт по англоязычной базе. Русское название переводится автоматически, карточка тоже.'));
+    const release = trapFocus(box);
+
+    const form = el('form', 'bestiary-search');
+    const input = el('input', 'input bestiary-search__input');
+    input.type = 'search';
+    input.placeholder = 'Введите название (на русском или английском)';
+    input.maxLength = 120;
+    input.setAttribute('aria-label', 'Название монстра');
+    const find = el('button', 'btn btn--accent bestiary-search__go', 'Найти');
+    find.type = 'submit';
+    form.appendChild(input);
+    form.appendChild(find);
+    box.appendChild(form);
+
+    const stepLabels = ['Перевод запроса', 'Поиск в базе', 'Перевод карточки', 'Загрузка портрета'];
+    const steps = el('div', 'bestiary-steps');
+    const stepNodes = stepLabels.map((label) => {
+      const node = el('span', 'bestiary-step', label);
+      steps.appendChild(node);
+      return node;
+    });
+    box.appendChild(steps);
+
+    const status = el('div', 'status bestiary-status');
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    box.appendChild(status);
+
+    const filters = el('div', 'bestiary-filters');
+    filters.hidden = true;
+    box.appendChild(filters);
+    const results = el('div', 'bestiary-results');
+    box.appendChild(results);
+    const preview = el('div', 'bestiary-preview');
+    preview.hidden = true;
+    box.appendChild(preview);
+
+    const actions = el('div', 'modal__actions');
+    const close = el('button', 'btn btn--ghost', 'Закрыть');
+    close.type = 'button';
+    actions.appendChild(close);
+    box.appendChild(actions);
+
+    const setStep = (index) => {
+      stepNodes.forEach((node, position) => {
+        node.classList.toggle('is-active', position === index);
+        node.classList.toggle('is-done', position < index);
+      });
+    };
+    const markSteps = (doneCount) => {
+      stepNodes.forEach((node, position) => {
+        node.classList.remove('is-active');
+        node.classList.toggle('is-done', position < doneCount);
+      });
+    };
+    const showStatus = (message, kind) => {
+      status.textContent = message || '';
+      status.className = `status bestiary-status${kind ? ` status--${kind}` : ''}`;
+    };
+
+    const keyHandler = (event) => {
+      if (event.key === 'Escape') closeModal();
+    };
+    const closeModal = () => {
+      document.removeEventListener('keydown', keyHandler);
+      release();
+      overlay.remove();
+    };
+    close.addEventListener('click', closeModal);
+    overlay.addEventListener('pointerdown', (event) => {
+      if (event.target === overlay) closeModal();
+    });
+    document.addEventListener('keydown', keyHandler);
+
+    setStep(0);
+
+    const filterState = { cr: '', type: '', size: '' };
+    const filterSelects = {};
+    const crRank = (value) => {
+      const text = String(value || '');
+      if (text.includes('/')) {
+        const [top, bottom] = text.split('/').map(Number);
+        return bottom ? top / bottom : 0;
+      }
+      return Number(text) || 0;
+    };
+    const addFilter = (key, label) => {
+      const wrap = el('label', 'bestiary-filter');
+      wrap.appendChild(el('span', 'bestiary-filter__label', label));
+      const select = el('select', 'select bestiary-filter__select');
+      select.addEventListener('change', () => {
+        filterState[key] = select.value;
+        drawResults();
+      });
+      filterSelects[key] = select;
+      wrap.appendChild(select);
+      filters.appendChild(wrap);
+    };
+    addFilter('cr', 'CR');
+    addFilter('type', 'Тип');
+    addFilter('size', 'Размер');
+
+    const fillFilter = (key, values) => {
+      const select = filterSelects[key];
+      select.innerHTML = '';
+      const all = el('option', null, 'Все');
+      all.value = '';
+      select.appendChild(all);
+      const list = [...new Set(values.filter(Boolean))].sort((left, right) => (
+        key === 'cr' ? crRank(left) - crRank(right) : left.localeCompare(right)
+      ));
+      for (const value of list) {
+        const option = el('option', null, key === 'cr' ? `CR ${value}` : value);
+        option.value = value;
+        select.appendChild(option);
+      }
+      const keep = filterState[key];
+      select.value = list.includes(keep) ? keep : '';
+      filterState[key] = select.value;
+    };
+
+    let currentPayload = null;
+    const drawResults = () => {
+      if (!currentPayload) return;
+      results.innerHTML = '';
+      const header = el('div', 'bestiary-results__head');
+      if (currentPayload.via === 'api' && currentPayload.english) {
+        header.appendChild(el('p', 'muted bestiary-note', `Запрос переведён: «${currentPayload.english}».`));
+      }
+      if (currentPayload.via === 'failed') {
+        header.appendChild(el('p', 'muted bestiary-note',
+          'Переводчик недоступен. Попробуйте английское название.'));
+      }
+      results.appendChild(header);
+      const list = currentPayload.results.filter((item) => (
+        (!filterState.cr || String(item.cr || '') === filterState.cr)
+        && (!filterState.type || String(item.type || '') === filterState.type)
+        && (!filterState.size || String(item.size || '') === filterState.size)
+      ));
+      if (!list.length) {
+        results.appendChild(el('p', 'muted bestiary-note',
+          currentPayload.results.length
+            ? 'Под выбранные фильтры ничего не подходит.'
+            : 'Ничего не найдено. Проверьте название или введите его по-английски.'));
+        return;
+      }
+      for (const item of list) {
+        const row = el('button', 'bestiary-result');
+        row.type = 'button';
+        row.appendChild(el('span', 'bestiary-result__name', item.name));
+        const meta = [item.type, item.size, item.cr ? `CR ${item.cr}` : '', item.source]
+          .filter(Boolean).join(' · ');
+        row.appendChild(el('span', 'bestiary-result__meta', meta));
+        if (item.system) row.title = `${item.source} · ${item.system}`;
+        row.addEventListener('click', () => showPreview(item));
+        results.appendChild(row);
+      }
+    };
+
+    const renderResults = (payload) => {
+      currentPayload = payload;
+      results.hidden = false;
+      preview.hidden = true;
+      fillFilter('cr', payload.results.map((item) => item.cr));
+      fillFilter('type', payload.results.map((item) => item.type));
+      fillFilter('size', payload.results.map((item) => item.size));
+      filters.hidden = payload.results.length < 2;
+      drawResults();
+    };
+
+    const renderPreview = (payload) => {
+      preview.innerHTML = '';
+      preview.hidden = false;
+      results.hidden = true;
+      const actor = payload.actor;
+      const meta = payload.meta || {};
+      const block = actor.statblock || {};
+
+      const head = el('div', 'bestiary-card__head');
+      head.appendChild(el('div', 'bestiary-card__name', actor.name));
+      head.appendChild(el('div', 'bestiary-card__meta',
+        [meta.type, meta.size, block.cr ? `CR ${block.cr}` : '', meta.source]
+          .filter(Boolean).join(' · ')));
+      if (meta.system) head.appendChild(el('div', 'muted bestiary-card__system', meta.system));
+      preview.appendChild(head);
+
+      const figure = el('div', 'bestiary-figure');
+      const viewport = el('div', 'bestiary-viewport');
+      const media = el('div', 'bestiary-media');
+      let portrait = null;
+      // Кадр: зум и сдвиг в процентах от стороны квадрата. Эти же числа
+      // уходят в карточку и на фишку, поэтому предпросмотр не врёт.
+      const crop = {
+        zoom: Math.min(4, Math.max(1, Number(actor.imageZoom) || 1)),
+        x: Number(actor.imageX) || 0,
+        y: Number(actor.imageY) || 0
+      };
+      const clampCrop = () => {
+        const limit = (crop.zoom - 1) * 50;
+        crop.x = Math.min(limit, Math.max(-limit, crop.x));
+        crop.y = Math.min(limit, Math.max(-limit, crop.y));
+      };
+      if (actor.image) {
+        portrait = el('img', 'bestiary-portrait');
+        portrait.src = actor.image;
+        portrait.alt = actor.name;
+        portrait.referrerPolicy = 'no-referrer';
+        portrait.addEventListener('error', () => {
+          portrait.classList.add('is-broken');
+          const guide = media.querySelector('.bestiary-circle-guide');
+          if (guide) guide.remove();
+          if (!media.querySelector('.bestiary-portrait--empty')) {
+            media.appendChild(el('div', 'bestiary-portrait bestiary-portrait--empty',
+              'Портрет не загрузился. Смените картинку или загрузите свою.'));
+          }
+        });
+        media.appendChild(portrait);
+        media.appendChild(el('span', 'bestiary-circle-guide', ''));
+      } else {
+        media.appendChild(el('div', 'bestiary-portrait bestiary-portrait--empty',
+          'Портрет не найден. Его можно найти или загрузить свою.'));
+      }
+      viewport.appendChild(media);
+      figure.appendChild(viewport);
+
+      const creditText = [meta.imageSource, meta.imageCredit].filter(Boolean).join(' · ');
+      const credit = el('div', 'bestiary-credit', creditText ? `Источник: ${creditText}` : '');
+      if (!creditText) credit.hidden = true;
+      figure.appendChild(credit);
+      if (portrait) {
+        figure.appendChild(el('div', 'bestiary-credit',
+          'Квадрат 1:1, круг показывает область, которая попадёт на фишку.'));
+      }
+      if (/^https?:\/\//i.test(actor.image || '')) {
+        figure.appendChild(el('div', 'bestiary-credit',
+          'Картинка хранится ссылкой и требует интернет. Для офлайна скачайте её локально.'));
+      }
+
+      if (portrait) {
+        const zoomBar = el('div', 'bestiary-zoom');
+        const value = el('span', 'bestiary-zoom__value', '100%');
+        const applyCrop = () => {
+          clampCrop();
+          // Сдвиг стоит до scale: проценты считаются от несжатого квадрата,
+          // поэтому 20% на предпросмотре и 20% на фишке дают один и тот же
+          // кусок картинки независимо от размера.
+          const moved = crop.zoom !== 1 || crop.x !== 0 || crop.y !== 0;
+          portrait.style.transform = moved
+            ? `translate(${crop.x}%, ${crop.y}%) scale(${crop.zoom})`
+            : '';
+          media.classList.toggle('is-zoomed', crop.zoom > 1);
+          media.title = crop.zoom > 1
+            ? 'Перетащите картинку, чтобы выбрать область для фишки'
+            : '';
+          value.textContent = `${Math.round(crop.zoom * 100)}%`;
+        };
+        const applyZoom = (next) => {
+          crop.zoom = Math.min(4, Math.max(1, next));
+          applyCrop();
+        };
+
+        let pan = null;
+        const endPan = (event) => {
+          if (!pan || event.pointerId !== pan.id) return;
+          pan = null;
+          media.classList.remove('is-panning');
+        };
+        media.addEventListener('pointerdown', (event) => {
+          if (crop.zoom <= 1 || event.button !== 0) return;
+          event.preventDefault();
+          const rect = media.getBoundingClientRect();
+          pan = {
+            id: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+            ox: crop.x,
+            oy: crop.y,
+            size: rect.width
+          };
+          try { media.setPointerCapture(event.pointerId); } catch { /* не критично */ }
+          media.classList.add('is-panning');
+        });
+        media.addEventListener('pointermove', (event) => {
+          if (!pan || event.pointerId !== pan.id || !pan.size) return;
+          crop.x = pan.ox + ((event.clientX - pan.x) / pan.size) * 100;
+          crop.y = pan.oy + ((event.clientY - pan.y) / pan.size) * 100;
+          applyCrop();
+        });
+        media.addEventListener('pointerup', endPan);
+        media.addEventListener('pointercancel', endPan);
+
+        const minus = el('button', 'btn btn--tiny btn--ghost', '−');
+        minus.type = 'button';
+        minus.title = 'Уменьшить картинку';
+        minus.setAttribute('aria-label', 'Уменьшить картинку');
+        minus.addEventListener('click', () => applyZoom(crop.zoom - 0.5));
+        const plus = el('button', 'btn btn--tiny btn--ghost', '+');
+        plus.type = 'button';
+        plus.title = 'Увеличить картинку';
+        plus.setAttribute('aria-label', 'Увеличить картинку');
+        plus.addEventListener('click', () => applyZoom(crop.zoom + 0.5));
+        const reset = el('button', 'btn btn--tiny btn--ghost', 'Сброс');
+        reset.type = 'button';
+        reset.addEventListener('click', () => {
+          crop.x = 0;
+          crop.y = 0;
+          applyZoom(1);
+        });
+        zoomBar.appendChild(minus);
+        zoomBar.appendChild(value);
+        zoomBar.appendChild(plus);
+        zoomBar.appendChild(reset);
+        figure.appendChild(zoomBar);
+        applyCrop();
+      }
+
+      const images = Array.isArray(payload.images) ? payload.images : [];
+      if (images.length > 1) {
+        const variants = el('div', 'bestiary-variants');
+        for (const candidate of images) {
+          const button = el('button', 'bestiary-variant');
+          button.type = 'button';
+          button.title = [candidate.source, candidate.credit].filter(Boolean).join(' · ') || 'Вариант';
+          button.setAttribute('aria-label', `Выбрать картинку: ${button.title}`);
+          const thumb = el('img');
+          thumb.src = candidate.thumb || candidate.url;
+          thumb.alt = '';
+          thumb.loading = 'lazy';
+          thumb.referrerPolicy = 'no-referrer';
+          button.appendChild(thumb);
+          if (candidate.url === actor.image) button.classList.add('is-active');
+          button.addEventListener('click', async () => {
+            if (candidate.url === actor.image) return;
+            const picked = await desktop.pickOpen5eImage(payload.id, candidate.url);
+            if (!picked.ok) {
+              showStatus(picked.error, 'error');
+              return;
+            }
+            payload.actor.image = picked.image;
+            payload.meta = {
+              ...(payload.meta || {}),
+              hasImage: true,
+              imageSource: picked.source,
+              imageCredit: picked.credit
+            };
+            renderPreview(payload);
+            showStatus('Картинка выбрана.');
+          });
+          variants.appendChild(button);
+        }
+        figure.appendChild(variants);
+      }
+
+      const imageTools = el('div', 'bestiary-image-tools');
+      if (typeof desktop.searchOpen5eImage === 'function') {
+        const change = el('button', 'btn btn--tiny btn--ghost', 'Сменить картинку');
+        change.type = 'button';
+        change.title = 'Найти другую картинку по своему запросу';
+        change.addEventListener('click', async () => {
+          const query = await modal({
+            title: 'Другая картинка',
+            message: 'Введите запрос для поиска. Английское название работает точнее.',
+            input: { value: `${actor.name} D&D art`, maxLength: 120 },
+            confirmLabel: 'Искать'
+          });
+          if (!query) return;
+          change.disabled = true;
+          change.textContent = 'Ищу…';
+          try {
+            const found = await desktop.searchOpen5eImage(payload.id, query);
+            if (!found.ok) {
+              showStatus(found.error, 'error');
+              change.disabled = false;
+              change.textContent = 'Сменить картинку';
+              return;
+            }
+            payload.actor.image = found.image;
+            payload.images = found.images || payload.images;
+            payload.meta = {
+              ...(payload.meta || {}),
+              hasImage: true,
+              imageSource: found.source,
+              imageCredit: found.credit
+            };
+            renderPreview(payload);
+            showStatus('Картинка обновлена.');
+          } catch (error) {
+            showStatus('Поиск картинки не удался.', 'error');
+            change.disabled = false;
+            change.textContent = 'Сменить картинку';
+          }
+        });
+        imageTools.appendChild(change);
+      }
+      if (typeof desktop.uploadOpen5eImage === 'function') {
+        const upload = el('label', 'btn btn--tiny btn--ghost', 'Загрузить свою');
+        upload.title = 'Поставить картинку с компьютера';
+        const file = el('input');
+        file.type = 'file';
+        file.accept = 'image/png,image/jpeg,image/webp';
+        file.hidden = true;
+        file.addEventListener('change', async () => {
+          const selected = file.files && file.files[0];
+          if (!selected) return;
+          const read = await readImageFile(selected);
+          if (read.canceled) return;
+          if (read.error) {
+            showStatus(read.error, 'error');
+            return;
+          }
+          try {
+            const saved = await desktop.uploadOpen5eImage(payload.id, read.dataUrl);
+            if (!saved.ok) {
+              showStatus(saved.error, 'error');
+              return;
+            }
+            payload.actor.image = saved.image;
+            payload.images = saved.images || payload.images;
+            payload.meta = {
+              ...(payload.meta || {}),
+              hasImage: true,
+              imageSource: 'Своя картинка',
+              imageCredit: ''
+            };
+            renderPreview(payload);
+            showStatus('Своя картинка выбрана.');
+          } catch (error) {
+            showStatus('Не удалось загрузить картинку.', 'error');
+          }
+        });
+        upload.appendChild(file);
+        imageTools.appendChild(upload);
+      }
+      figure.appendChild(imageTools);
+      preview.appendChild(figure);
+
+      const stats = el('div', 'bestiary-stats');
+      for (const [label, value] of [
+        ['КД', block.ac || '—'],
+        ['Хиты', block.hp || '—'],
+        ['Скорость', block.speed || '—'],
+        ['CR', block.cr || '—'],
+        ['Тип', meta.type || '—'],
+        ['Размер', meta.size || '—']
+      ]) {
+        const item = el('div', 'bestiary-stat');
+        item.appendChild(el('span', 'bestiary-stat__label', label));
+        item.appendChild(el('span', 'bestiary-stat__value', String(value)));
+        stats.appendChild(item);
+      }
+      preview.appendChild(stats);
+
+      const abilities = el('div', 'bestiary-abilities');
+      for (const ability of DnD.ABILITIES) {
+        const item = el('div', 'bestiary-ability');
+        item.appendChild(el('span', 'bestiary-ability__label', ability.abbr));
+        item.appendChild(el('span', 'bestiary-ability__value',
+          String((block.abilities && block.abilities[ability.key]) || 10)));
+        abilities.appendChild(item);
+      }
+      preview.appendChild(abilities);
+
+      const actionText = block.attacks || 'Атак и действий нет.';
+      preview.appendChild(el('div', 'bestiary-text__title', 'Атаки и действия'));
+      preview.appendChild(el('div', 'bestiary-text', actionText));
+      if (block.notes) {
+        preview.appendChild(el('div', 'bestiary-text__title', 'Особенности'));
+        preview.appendChild(el('div', 'bestiary-text', block.notes));
+      }
+
+      const buttons = el('div', 'bestiary-card__actions');
+      const back = el('button', 'btn btn--ghost', 'Назад к поиску');
+      back.type = 'button';
+      back.addEventListener('click', () => {
+        preview.hidden = true;
+        results.hidden = false;
+        setStep(1);
+      });
+      if (/^https?:\/\//i.test(actor.image || '')
+        && typeof desktop.cacheOpen5eImage === 'function') {
+        const local = el('button', 'btn btn--ghost', 'Скачать локально');
+        local.type = 'button';
+        local.title = 'Сохранить картинку в файлы кампании, чтобы она работала без интернета';
+        local.addEventListener('click', async () => {
+          local.disabled = true;
+          local.textContent = 'Скачиваю…';
+          try {
+            const cached = await desktop.cacheOpen5eImage(payload.id);
+            if (!cached.ok) {
+              showStatus(cached.error, 'error');
+              local.disabled = false;
+              local.textContent = 'Скачать локально';
+              return;
+            }
+            actor.image = cached.image;
+            payload.actor.image = cached.image;
+            payload.images = cached.images || payload.images;
+            // Локальная копия — та же картинка: кадр не сбрасываем.
+            payload.actor.imageZoom = crop.zoom;
+            payload.actor.imageX = crop.x;
+            payload.actor.imageY = crop.y;
+            payload.meta = {
+              ...(payload.meta || {}),
+              hasImage: true,
+              imageSource: 'Локальный файл',
+              imageCredit: ''
+            };
+            renderPreview(payload);
+            showStatus('Картинка будет сохранена вместе с карточкой.');
+          } catch (error) {
+            showStatus('Не удалось скачать картинку.', 'error');
+            local.disabled = false;
+            local.textContent = 'Скачать локально';
+          }
+        });
+        buttons.appendChild(local);
+      }
+      const save = el('button', 'btn btn--accent', 'Сохранить в справочник');
+      save.type = 'button';
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        back.disabled = true;
+        save.textContent = 'Сохраняю…';
+        try {
+          const saved = await desktop.importOpen5e(payload.id, {
+            zoom: crop.zoom,
+            x: crop.x,
+            y: crop.y
+          });
+          if (!saved.ok) {
+            showStatus(saved.error, 'error');
+            save.disabled = false;
+            back.disabled = false;
+            save.textContent = 'Сохранить в справочник';
+            return;
+          }
+          if (saved.adventure) app.adventure = saved.adventure;
+          closeModal();
+          renderAdventurePanel({ force: true });
+          toast(`«${actor.name}» добавлен в справочник`, 'ok');
+        } catch (error) {
+          showStatus('Не удалось сохранить карточку.', 'error');
+          save.disabled = false;
+          back.disabled = false;
+          save.textContent = 'Сохранить в справочник';
+        }
+      });
+      buttons.appendChild(back);
+      buttons.appendChild(save);
+      preview.appendChild(buttons);
+      // Фокус на кнопке сохранения прокручивал длинный предпросмотр вниз,
+      // и картинка оставалась за верхней кромкой. Держим окно на начале.
+      box.focus({ preventScroll: true });
+      box.scrollTop = 0;
+    };
+
+    const showPreview = async (item) => {
+      results.hidden = true;
+      preview.hidden = false;
+      preview.innerHTML = '';
+      showStatus('Загружаю карточку и перевожу текст…');
+      setStep(2);
+      const timer = setTimeout(() => setStep(3), 800);
+      try {
+        const payload = await desktop.previewOpen5e(item.key);
+        if (!payload.ok) {
+          preview.hidden = true;
+          results.hidden = false;
+          setStep(1);
+          showStatus(payload.error, 'error');
+          return;
+        }
+        setStep(4);
+        showStatus('');
+        markSteps(4);
+        renderPreview(payload);
+      } catch (error) {
+        preview.hidden = true;
+        results.hidden = false;
+        setStep(1);
+        showStatus('Не удалось загрузить карточку.', 'error');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const query = input.value.trim();
+      if (!query) {
+        input.focus();
+        return;
+      }
+      find.disabled = true;
+      results.innerHTML = '';
+      preview.hidden = true;
+      showStatus('Ищу…');
+      setStep(/[а-яё]/i.test(query) ? 0 : 1);
+      const timer = setTimeout(() => setStep(1), 500);
+      try {
+        const payload = await desktop.searchOpen5e(query);
+        if (!payload.ok) {
+          setStep(0);
+          showStatus(payload.error, 'error');
+          return;
+        }
+        setStep(2);
+        showStatus(`Найдено: ${payload.results.length}`);
+        markSteps(2);
+        renderResults(payload);
+      } catch (error) {
+        setStep(0);
+        showStatus('Поиск не удался. Проверьте интернет.', 'error');
+      } finally {
+        clearTimeout(timer);
+        find.disabled = false;
+      }
+    });
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    input.focus();
   }
 
   /**
@@ -1707,6 +2600,13 @@ let chosenSheetId = null;
       // Одинаковые названия схлопываются в одну группу: вместо двадцати
       // одинаковых карточек «Кобольд» мастер видит одну с пометкой «×20».
       const grouped = groupByName(visible);
+      if (section.key === 'actors') {
+        grouped.sort((left, right) => {
+          const favLeft = left.members.some((member) => member.favorite) ? 1 : 0;
+          const favRight = right.members.some((member) => member.favorite) ? 1 : 0;
+          return favRight - favLeft || left.name.localeCompare(right.name, 'ru');
+        });
+      }
       groups += grouped.length;
 
       const block = el('section', 'adv-section');
@@ -1747,12 +2647,66 @@ let chosenSheetId = null;
    * @param {{name: string, members: object[]}} group
    * @returns {HTMLElement}
    */
+  /**
+   * Бросок монстра из справочника на карту. Спрашиваем количество, потому что
+   * «пять гоблинов» — обычная подготовка, а ставить их по одному долго.
+   * @param {string} name
+   * @param {number} x
+   * @param {number} y
+   */
+  async function dropAdventureActor(name, x, y) {
+    const answer = await modal({
+      title: `Поставить «${name}» на карту`,
+      message: 'Сколько фишек создать? У каждой будут свои хиты и своя полоска здоровья.',
+      input: { value: '1', maxLength: 2 },
+      confirmLabel: 'Поставить'
+    });
+    if (answer === null) return;
+    const count = Math.max(1, Math.min(20, Number.parseInt(answer, 10) || 1));
+    const mapType = (mapView && mapView.viewedMap) || app.room.activeMap || 'battle';
+    const mapId = (mapView && mapView.currentMapId) || activeMapId();
+    emit('createTokenFromAdventureActor', { name, mapType, mapId, x, y, count });
+  }
+
   function renderAdventureGroup(section, group) {
     const card = el('article', `adv-item adv-item--group${group.members.length > 1 ? ' is-group' : ''}`);
+    // По этому имени поиск находит карточку и подсвечивает её, а не только
+    // фильтрует раздел: иначе мастер видит список без указания, что нашлось.
+    card.dataset.advName = group.name;
+    if (section.key === 'actors') {
+      // Монстра можно утащить прямо на карту. Кнопки внутри карточки не
+      // начинают перенос: иначе «Статблок» уезжал бы вместо нажатия.
+      card.draggable = true;
+      card.title = 'Перетащите на карту, чтобы поставить фишку';
+      card.addEventListener('dragstart', (event) => {
+        if (event.target.closest('button, input, select, textarea, a')) {
+          event.preventDefault();
+          return;
+        }
+        event.dataTransfer.effectAllowed = 'copy';
+        event.dataTransfer.setData('application/x-dnd-actor', group.name);
+        event.dataTransfer.setData('text/plain', group.name);
+        card.classList.add('is-dragging');
+      });
+      card.addEventListener('dragend', () => card.classList.remove('is-dragging'));
+    }
     const head = el('div', 'adv-group__head');
     head.appendChild(renderItemTitle(group.name, section.key));
     if (group.members.length > 1) {
       head.appendChild(el('span', 'adv-group__count', `× ${group.members.length}`));
+    }
+    if (section.key === 'actors') {
+      const favorite = group.members.some((member) => member.favorite);
+      const star = el('button', `adv-fav${favorite ? ' is-on' : ''}`, favorite ? '★' : '☆');
+      star.type = 'button';
+      star.title = favorite ? 'Убрать из избранного' : 'В избранное';
+      star.setAttribute('aria-label', star.title);
+      star.setAttribute('aria-pressed', String(favorite));
+      star.addEventListener('click', (event) => {
+        event.stopPropagation();
+        emit('setAdventureActorFavorite', { name: group.name, favorite: !favorite });
+      });
+      head.appendChild(star);
     }
     card.appendChild(head);
 
@@ -1768,6 +2722,24 @@ let chosenSheetId = null;
       const block = group.members[0].statblock || {};
       const summary = statblockSummary(block);
       if (summary) card.appendChild(el('div', 'adv-stat', summary));
+      const macros = attackMacros(block);
+      if (macros.length) {
+        const dice = el('div', 'adv-dice');
+        for (const macro of macros) {
+          const button = el('button', 'btn btn--tiny adv-dice__btn', macro.label);
+          button.type = 'button';
+          button.title = `Бросить ${macro.formula}`;
+          button.addEventListener('click', () => {
+            emit('rollDice', {
+              formula: macro.formula,
+              label: `${group.name}: ${macro.label}`,
+              dmOnly: true
+            });
+          });
+          dice.appendChild(button);
+        }
+        card.appendChild(dice);
+      }
       const actions = el('div', 'adv-item__actions');
       const edit = el('button', 'btn btn--tiny', 'Статблок');
       edit.type = 'button';
@@ -1782,6 +2754,23 @@ let chosenSheetId = null;
         emit('createTokenFromAdventureActor', { name: group.name, mapType, mapId });
       });
       actions.appendChild(spawn);
+      const remove = el('button', 'btn btn--tiny btn--danger btn--ghost', 'Удалить');
+      remove.type = 'button';
+      remove.title = 'Убрать персонажа из справочника';
+      remove.addEventListener('click', async () => {
+        const count = group.members.length;
+        const confirmed = await modal({
+          title: 'Удалить персонажа?',
+          message: count > 1
+            ? `Из справочника исчезнут все записи «${group.name}» (${count}). Фишки на карте останутся.`
+            : `«${group.name}» исчезнет из справочника. Фишка на карте останется.`,
+          confirmLabel: 'Удалить',
+          danger: true
+        });
+        if (!confirmed) return;
+        emit('deleteAdventureActor', { name: group.name });
+      });
+      actions.appendChild(remove);
       card.appendChild(actions);
     }
 
@@ -1826,11 +2815,43 @@ let chosenSheetId = null;
   /** Короткая строка статблока для карточки персонажа. */
   function statblockSummary(block = {}) {
     const parts = [];
-    if (block.ac) parts.push(`AC ${block.ac}`);
-    if (block.hp) parts.push(`HP ${block.hp}`);
+    if (block.ac) parts.push(`КД ${block.ac}`);
+    if (block.hp) parts.push(`Хиты ${block.hp}`);
     if (block.speed) parts.push(block.speed);
     if (block.cr) parts.push(`CR ${block.cr}`);
     return parts.join(' · ');
+  }
+
+  /**
+   * Достаёт из текста статблока броски атаки и урона.
+   *
+   * Open5e отдаёт действия одной строкой: «Клинок. Атака оружием: +4 к
+   * попаданию, 5 (1d6 + 2) рубящего урона». Из неё делаются кнопки, чтобы
+   * мастер не искал формулу глазами и не набирал её руками.
+   * @param {object} block
+   * @returns {{label: string, formula: string}[]}
+   */
+  function attackMacros(block = {}) {
+    const lines = String(block.attacks || '').split(/\n+/).filter(Boolean);
+    const macros = [];
+    const seen = new Set();
+    const add = (formula, label) => {
+      const clean = formula.replace(/\s+/g, '');
+      if (!/^1?d20[+-]\d+$|^\d*d\d+[+-]\d+$|^\d*d\d+$/i.test(clean)) return;
+      const key = `${label}|${clean}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      macros.push({ label, formula: clean });
+    };
+    for (const line of lines) {
+      const title = String(line.split('.')[0] || 'Атака').trim().slice(0, 40);
+      const hit = /([+-]\s*\d+)\s*(?:to hit|к попаданию)/i.exec(line);
+      if (hit) add(`1d20${hit[1]}`, `${title}: атака`);
+      const damage = /\b(\d*d\d+(?:\s*[+-]\s*\d+)?)\b/i.exec(line);
+      if (damage) add(damage[1], `${title}: урон`);
+      if (macros.length >= 8) break;
+    }
+    return macros.slice(0, 8);
   }
 
   /**
@@ -2039,6 +3060,7 @@ let chosenSheetId = null;
   /** Группа фишек: та же группировка и та же массовая картинка. */
   function renderTokenGroup(group) {
     const card = el('article', `adv-item adv-item--group${group.members.length > 1 ? ' is-group' : ''}`);
+    card.dataset.advName = group.name;
     const head = el('div', 'adv-group__head');
     head.appendChild(el('div', 'adv-item__title', group.name));
     if (group.members.length > 1) head.appendChild(el('span', 'adv-group__count', `× ${group.members.length}`));
@@ -2051,6 +3073,27 @@ let chosenSheetId = null;
       card.appendChild(el('div', 'muted adv-item__text',
         `На картах: ${plural(group.members.length, 'фишка', 'фишки', 'фишек')}, с картинкой ${withImage}`));
     }
+    const actions = el('div', 'adv-item__actions');
+    const remove = el('button', 'btn btn--tiny btn--danger btn--ghost', 'Удалить');
+    remove.type = 'button';
+    remove.title = 'Убрать эти фишки с карт';
+    remove.addEventListener('click', async () => {
+      const count = group.members.length;
+      const confirmed = await modal({
+        title: 'Удалить фишки?',
+        message: count > 1
+          ? `С карт исчезнут все фишки «${group.name}» (${count}). Записи в справочнике останутся.`
+          : `Фишка «${group.name}» исчезнет с карты. Запись в справочнике останется.`,
+        confirmLabel: 'Удалить',
+        danger: true
+      });
+      if (!confirmed) return;
+      // Отдельного события на группу нет: существующее удаление фишки уже
+      // чистит порядок боя и рассылает всем клиентам.
+      for (const token of group.members) emit('deleteToken', { tokenId: token.id });
+    });
+    actions.appendChild(remove);
+    card.appendChild(actions);
     return card;
   }
 
@@ -2070,6 +3113,7 @@ let chosenSheetId = null;
     renderJournalPanel();
     renderInventoryPanel();
     renderRollRequests();
+    renderReactionPrompts();
     $('#role-badge').textContent = isDm ? 'ДМ' : 'Игрок';
     $('#role-badge').className = `badge ${isDm ? 'badge--dm' : 'badge--player'}`;
     if (isDm) renderAddresses();
@@ -2609,6 +3653,132 @@ let chosenSheetId = null;
   }
 
   /* ------------------------------------------------------------------ *
+   * Реакции: атака по возможности
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Запоминает повод для реакции и показывает карточку.
+   *
+   * Карточку получает тот, чья фишка атакует: мастер для монстров, игрок для
+   * своего персонажа. Бонус и КД цели приходят из окна мастера, поэтому игроку
+   * не нужны статы чужой фишки.
+   * @param {object} attacker
+   * @param {object} target
+   * @param {{playerId?: string|null, bonus?: number, targetAc?: number|null}} [options]
+   */
+  function addReactionPrompt(attacker, target, options = {}) {
+    if (!app.room || app.training || !attacker || !target) return;
+    if (!options.playerId && app.role !== 'dm') return;
+    if (options.playerId && options.playerId !== viewer().playerId) return;
+    const id = options.id || `reaction-local-${reactionPromptSeq += 1}`;
+    if (reactionPrompts.some((item) => item.id === id)) return;
+    const wasEmpty = reactionPrompts.length === 0;
+    reactionPrompts = [...reactionPrompts.slice(-4), {
+      id,
+      server: Boolean(options.id),
+      attackerName: attacker.name || 'Противник',
+      targetName: target.name || 'Фишка',
+      bonus: Number(options.bonus) || 0,
+      targetAc: Number(options.targetAc) > 0 ? Math.round(Number(options.targetAc)) : null
+    }];
+    renderReactionPrompts();
+    // Панель свёрнута: карточку не видно, поэтому хотя бы коротко скажем,
+    // что реакция ждёт ответа. Значок на кнопке панели остаётся до ответа.
+    if (wasEmpty && panelCollapsed(RIGHT_COLLAPSED_KEY)) {
+      toast(`Реакция: ${attacker.name || 'Противник'} → ${target.name || 'Фишка'}`);
+    }
+  }
+
+  /** Заменяет карточки данными сервера: после переподключения и нового раунда. */
+  function syncReactionPrompts(list) {
+    const items = Array.isArray(list) ? list.slice(-5) : [];
+    reactionPrompts = items
+      .filter((item) => item && item.id)
+      .map((item) => ({
+        id: String(item.id),
+        server: true,
+        attackerName: item.attackerName || 'Противник',
+        targetName: item.targetName || 'Фишка',
+        bonus: Number(item.bonus) || 0,
+        targetAc: Number(item.targetAc) > 0 ? Math.round(Number(item.targetAc)) : null
+      }));
+    renderReactionPrompts();
+  }
+
+  function removeReactionPrompt(id) {
+    reactionPrompts = reactionPrompts.filter((item) => item.id !== id);
+    renderReactionPrompts();
+    renderReactionBadge();
+  }
+
+  /**
+   * Игрок ответил или отказался. Сервер снимает карточку у всех, а локальную
+   * карточку мастера снимаем только здесь.
+   * @param {object} prompt
+   */
+  function resolveReactionPrompt(prompt) {
+    if (!prompt) return;
+    if (prompt.server && app.connected) {
+      app.socket.emit('reactionResolved', { id: prompt.id });
+    }
+    removeReactionPrompt(prompt.id);
+  }
+
+  function rollReactionAttack(prompt) {
+    const bonus = Number(prompt.bonus) || 0;
+    emit('rollDice', {
+      formula: bonus ? `d20${bonus > 0 ? '+' : ''}${bonus}` : 'd20',
+      label: `Атака по возможности: ${prompt.attackerName} → ${prompt.targetName}`,
+      ...(prompt.targetAc ? { targetAc: prompt.targetAc } : {})
+    });
+    resolveReactionPrompt(prompt);
+  }
+
+  /** Счётчик на кнопке правой панели: карточка видна, даже когда панель свёрнута. */
+  function renderReactionBadge() {
+    const button = $('#btn-panel-right');
+    if (!button) return;
+    const count = reactionPrompts.length;
+    button.classList.toggle('has-reaction', count > 0);
+    if (count > 0) button.dataset.count = String(count);
+    else delete button.dataset.count;
+  }
+
+  function renderReactionPrompts() {
+    const banner = $('#reaction-banner');
+    if (!banner) return;
+    const show = Boolean(app.room) && !app.training && reactionPrompts.length > 0;
+    banner.hidden = !show;
+    banner.innerHTML = '';
+    if (!show) {
+      renderReactionBadge();
+      return;
+    }
+    banner.appendChild(el('div', 'reaction-banner__title', 'Реакция: атака по возможности'));
+    for (const prompt of reactionPrompts) {
+      const row = el('div', 'reaction-banner__row');
+      row.appendChild(el('span', 'reaction-banner__label',
+        `${prompt.attackerName} может атаковать ${prompt.targetName}`));
+      const attack = el('button', 'btn btn--accent btn--tiny',
+        prompt.bonus ? `Атака d20${prompt.bonus > 0 ? '+' : ''}${prompt.bonus}` : 'Атака d20');
+      attack.type = 'button';
+      attack.title = prompt.targetAc
+        ? `Бросок против КД ${prompt.targetAc}: попадание сервер посчитает сам`
+        : 'Бросок уходит в чат. Попадание и урон считает мастер.';
+      attack.addEventListener('click', () => rollReactionAttack(prompt));
+      row.appendChild(attack);
+      const skip = el('button', 'btn btn--ghost btn--tiny', 'Пропустить');
+      skip.type = 'button';
+      skip.addEventListener('click', () => resolveReactionPrompt(prompt));
+      row.appendChild(skip);
+      banner.appendChild(row);
+    }
+    banner.appendChild(el('div', 'reaction-banner__note',
+      'Существо покинуло досягаемость и потратило реакцию этого раунда.'));
+    renderReactionBadge();
+  }
+
+  /* ------------------------------------------------------------------ *
    * Поиск по кампании
    * ------------------------------------------------------------------ */
 
@@ -2680,7 +3850,134 @@ let chosenSheetId = null;
       }));
     if (inventory.length) groups.push({ title: 'Склад', items: inventory });
 
+    // Справочник приключения: искать НПС и предметы посреди игры приходится
+    // чаще, чем листать вкладку. Мастеру он и доступен.
+    const adventure = app.role === 'dm' ? app.adventure : null;
+    if (adventure) {
+      const found = [];
+      for (const section of ADVENTURE_SECTIONS) {
+        for (const item of (adventure[section.key] || [])) {
+          if (!match(item.title, item.name, item.text, item.description)) continue;
+          found.push({ section, item });
+        }
+      }
+      if (found.length) {
+        groups.push({
+          title: 'Приключение',
+          items: found.slice(0, 6).map(({ section, item }) => {
+            const name = item.title || item.name || 'Без названия';
+            return {
+              key: `adventure-${section.key}-${name}`,
+              title: name,
+              note: section.label,
+              open: () => {
+                activateTab('adventure');
+                // Сужаем список до найденного и подсвечиваем саму карточку:
+                // отфильтрованный раздел ещё надо найти глазами.
+                const input = $('#tab-adventure .adv-search');
+                if (!input) return;
+                input.value = name;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                setTimeout(() => {
+                  const card = [...document.querySelectorAll('#tab-adventure .adv-item[data-adv-name]')]
+                    .find((node) => node.dataset.advName === name);
+                  if (!card) return;
+                  card.classList.add('is-hit');
+                  card.scrollIntoView({ block: 'center' });
+                  setTimeout(() => card.classList.remove('is-hit'), 2000);
+                }, 180);
+              }
+            };
+          })
+        });
+      }
+    }
+
+    // Листы персонажей: имя, класс, раса и заметки.
+    const sheets = Object.entries(app.room.sheets || {})
+      .map(([playerId, sheet]) => {
+        const player = app.room.players.find((entry) => entry.playerId === playerId);
+        return { playerId, sheet, player };
+      })
+      .filter(({ sheet, player }) => match(
+        sheet.characterName, sheet.playerName, sheet.charClass, sheet.race,
+        sheet.background, sheet.notes, player && player.name
+      ))
+      .slice(0, 6);
+    if (sheets.length) {
+      groups.push({
+        title: 'Листы',
+        items: sheets.map(({ playerId, sheet, player }) => ({
+          key: `sheet-${playerId}`,
+          title: sheet.characterName || (player && player.name) || 'Лист персонажа',
+          note: [sheet.charClass, sheet.race, player && player.name].filter(Boolean).join(' · '),
+          open: () => {
+            if (app.role === 'dm') openPlayerSheet(playerId);
+            else activateTab('sheet');
+          }
+        }))
+      });
+    }
+
     return groups;
+  }
+
+  /**
+   * Шпаргалка по горячим клавишам по «?».
+   *
+   * Клавиши есть, но узнать о них можно только из кода: в интерфейсе они
+   * нигде не перечислены. Отдельное окно дешевле, чем раздел в настройках.
+   */
+  function openShortcuts() {
+    if ($('#shortcuts-overlay')) return;
+    const overlay = el('div', 'modal-overlay');
+    overlay.id = 'shortcuts-overlay';
+    const box = el('div', 'modal modal--shortcuts');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Горячие клавиши');
+    const release = trapFocus(box);
+    box.appendChild(el('div', 'modal__title', 'Горячие клавиши'));
+
+    const rows = [
+      ['1 … 9', 'Переключить вкладку'],
+      ['Ctrl + K', 'Поиск по кампании'],
+      ['Ctrl + F', 'Поиск по чату'],
+      ['← ↑ → ↓', 'Двинуть выбранную фишку на клетку'],
+      ['?', 'Эта шпаргалка'],
+      ['Esc', 'Закрыть окно или меню']
+    ];
+    const list = el('div', 'shortcuts');
+    for (const [keys, label] of rows) {
+      const row = el('div', 'shortcuts__row');
+      row.appendChild(el('span', 'shortcuts__label', label));
+      row.appendChild(el('kbd', 'shortcuts__keys', keys));
+      list.appendChild(row);
+    }
+    box.appendChild(list);
+
+    const close = () => {
+      document.removeEventListener('keydown', onKey);
+      release();
+      overlay.remove();
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('pointerdown', (event) => {
+      if (event.target === overlay) close();
+    });
+    const done = el('button', 'btn btn--accent', 'Понятно');
+    done.type = 'button';
+    done.addEventListener('click', close);
+    box.appendChild(done);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    done.focus();
   }
 
   /** Модальное окно поиска: открывается кнопкой и Ctrl+K. */
@@ -2696,10 +3993,14 @@ let chosenSheetId = null;
     const overlay = el('div', 'modal-overlay');
     overlay.id = 'campaign-search-overlay';
     const box = el('div', 'modal modal--search');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Поиск по кампании');
+    const release = trapFocus(box);
     box.appendChild(el('div', 'modal__title', 'Поиск по кампании'));
     const input = el('input', 'input');
     input.type = 'search';
-    input.placeholder = 'Журнал, чат, склад…';
+    input.placeholder = 'Журнал, чат, склад, NPC, листы…';
     input.setAttribute('aria-label', 'Поиск по кампании');
     box.appendChild(input);
     const results = el('div', 'search-results');
@@ -2708,6 +4009,7 @@ let chosenSheetId = null;
 
     const close = () => {
       document.removeEventListener('keydown', onKey);
+      release();
       overlay.remove();
     };
     const onKey = (event) => {
@@ -2725,7 +4027,8 @@ let chosenSheetId = null;
       results.innerHTML = '';
       const query = input.value;
       if (!query.trim()) {
-        results.appendChild(el('div', 'journal-empty muted', 'Начните печатать: ищем в журнале, чате и на складе'));
+        results.appendChild(el('div', 'journal-empty muted',
+          'Начните печатать: ищем в журнале, чате, складе, приключении и листах'));
         return;
       }
       const groups = campaignSearchResults(query);
@@ -2830,6 +4133,24 @@ let chosenSheetId = null;
   let settingsGridFields = null;
   let settingsPanelPosition = null;
 
+  /** Выбранный интервал автосохранения кампании в секундах. */
+  function autosaveSeconds() {
+    const saved = Number(localStorage.getItem(AUTOSAVE_KEY));
+    return AUTOSAVE_CHOICES.includes(saved) ? saved : AUTOSAVE_DEFAULT_SECONDS;
+  }
+
+  /**
+   * Запоминает интервал автосохранения и сообщает его main-процессу.
+   * Пока стол не запущен, таймера нет, и значение подхватится при старте.
+   * @param {number} seconds
+   */
+  function applyAutosaveSeconds(seconds) {
+    localStorage.setItem(AUTOSAVE_KEY, String(seconds));
+    if (desktop && typeof desktop.setAutosaveInterval === 'function') {
+      desktop.setAutosaveInterval(seconds);
+    }
+  }
+
   /**
    * Окно настроек — одно и то же на главном экране и за столом.
    * Здесь же будет выбор языка, когда в приложении появится второй.
@@ -2837,7 +4158,84 @@ let chosenSheetId = null;
   function openSettings() {
     const overlay = el('div', 'modal-overlay');
     const box = el('div', 'modal modal--settings');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Настройки');
+    box.tabIndex = -1;
+    const release = trapFocus(box);
     box.appendChild(el('div', 'modal__title', 'Настройки'));
+
+    // Разделы вместо одной длинной колонки: у каждого своя вкладка слева.
+    // Панели остаются в DOM и только скрываются, поэтому обработчики и
+    // значения полей не теряются при переключении.
+    const sectionMeta = [];
+    const settingsBody = el('div', 'settings');
+    const settingsNav = el('div', 'settings__nav');
+    settingsNav.setAttribute('role', 'tablist');
+    settingsNav.setAttribute('aria-orientation', 'vertical');
+    settingsNav.setAttribute('aria-label', 'Разделы настроек');
+    const settingsContent = el('div', 'settings__content');
+    settingsBody.appendChild(settingsNav);
+    settingsBody.appendChild(settingsContent);
+
+    function selectSection(id, focusTab) {
+      const active = sectionMeta.find((item) => item.id === id) || sectionMeta[0];
+      if (!active) return;
+      for (const item of sectionMeta) {
+        const on = item === active;
+        item.tab.classList.toggle('is-active', on);
+        item.tab.setAttribute('aria-selected', String(on));
+        item.tab.tabIndex = on ? 0 : -1;
+        item.panel.hidden = !on;
+      }
+      localStorage.setItem(SETTINGS_SECTION_KEY, active.id);
+      settingsContent.scrollTop = 0;
+      if (focusTab) active.tab.focus();
+    }
+
+    const addSection = (id, title) => {
+      const tab = el('button', 'settings__tab', title);
+      tab.type = 'button';
+      tab.id = `settings-tab-${id}`;
+      tab.dataset.settingsSection = id;
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', 'false');
+      tab.setAttribute('aria-controls', `settings-panel-${id}`);
+      tab.tabIndex = -1;
+      const panel = el('div', 'settings__panel');
+      panel.id = `settings-panel-${id}`;
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', tab.id);
+      panel.hidden = true;
+      tab.addEventListener('click', () => selectSection(id));
+      settingsNav.appendChild(tab);
+      settingsContent.appendChild(panel);
+      sectionMeta.push({ id, tab, panel });
+      return panel;
+    };
+
+    settingsNav.addEventListener('keydown', (event) => {
+      const index = sectionMeta.findIndex((item) => item.tab === document.activeElement);
+      if (index < 0) return;
+      let next = null;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % sectionMeta.length;
+      else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + sectionMeta.length) % sectionMeta.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = sectionMeta.length - 1;
+      if (next === null) return;
+      event.preventDefault();
+      selectSection(sectionMeta[next].id, true);
+    });
+
+    const generalPanel = addSection('general', 'Общие');
+    const tablePanel = addSection('table', 'Стол');
+    const campaignPanel = (app.campaign || (app.role === 'dm' && app.room))
+      ? addSection('campaign', 'Кампания')
+      : null;
+    const appearancePanel = addSection('appearance', 'Оформление');
+    const soundPanel = addSection('sound', 'Звук');
+    const a11yPanel = addSection('accessibility', 'Доступность');
+    box.appendChild(settingsBody);
 
     const config = app.config || {};
     const appBox = el('div', 'box');
@@ -2861,7 +4259,98 @@ let chosenSheetId = null;
     dirButton.addEventListener('click', () => desktop.openDataDir());
     appBox.appendChild(dirButton);
 
+    // Автосохранение кампании. Таймер живёт в main-процессе, здесь только
+    // выбор; на Android стола нет, и строки тоже нет.
+    if (typeof desktop.setAutosaveInterval === 'function') {
+      const autosaveRow = el('div', 'settings__row');
+      autosaveRow.appendChild(el('span', 'settings__label', 'Автосохранение'));
+      const autosaveSelect = el('select', 'select settings__select');
+      autosaveSelect.dataset.setting = 'autosave';
+      for (const seconds of AUTOSAVE_CHOICES) {
+        const label = seconds < 60 ? `${seconds} секунд` : `${seconds / 60} мин`;
+        const option = el('option', null, label);
+        option.value = String(seconds);
+        autosaveSelect.appendChild(option);
+      }
+      autosaveSelect.value = String(autosaveSeconds());
+      autosaveSelect.addEventListener('change', () => {
+        const seconds = Number(autosaveSelect.value);
+        applyAutosaveSeconds(seconds);
+        toast(`Автосохранение: раз в ${seconds < 60 ? `${seconds} секунд` : `${seconds / 60} мин`}`, 'ok');
+      });
+      autosaveRow.appendChild(autosaveSelect);
+      appBox.appendChild(autosaveRow);
+      appBox.appendChild(el('div', 'box__note',
+        'Действует, когда вы ведёте стол: чаще — меньше теряется при сбое, '
+        + 'реже — тише работа с диском.'));
+    }
+
     if (app.campaign) {
+      // Копии: сколько их и когда последняя. Кроме счётчика нужен список,
+      // иначе восстановление оставалось бы ручной работой с папками.
+      const backupsRow = el('div', 'settings__row');
+      backupsRow.appendChild(el('span', 'settings__label', 'Копии кампании'));
+      const backupsValue = el('span', 'settings__value', '…');
+      backupsRow.appendChild(backupsValue);
+      campaignPanel.appendChild(backupsRow);
+      const copiesList = el('div', 'settings__backups');
+      copiesList.hidden = true;
+      campaignPanel.appendChild(copiesList);
+
+      const refreshBackups = () => {
+        if (typeof desktop.backupInfo !== 'function') return;
+        desktop.backupInfo().then((info) => {
+          if (!info || !info.ok) {
+            backupsValue.textContent = 'нет данных';
+            copiesList.hidden = true;
+            return;
+          }
+          const when = info.lastAt
+            ? new Date(info.lastAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
+            : null;
+          backupsValue.textContent = info.count
+            ? `${info.count} из 5, последняя ${when}`
+            : 'пока ни одной';
+          copiesList.innerHTML = '';
+          const items = Array.isArray(info.items) ? info.items : [];
+          for (const copy of items) {
+            const row = el('div', 'settings__backup');
+            row.appendChild(el('span', 'settings__backup-date',
+              new Date(copy.at).toLocaleString('ru-RU', {
+                day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+              })));
+            // Без моста restoreBackup (Android, старый preload) список остаётся
+            // справочным: кнопка, которая ничего не делает, хуже её отсутствия.
+            if (typeof desktop.restoreBackup === 'function') {
+              const restore = el('button', 'btn btn--tiny', 'Вернуть');
+              restore.type = 'button';
+              restore.title = 'Заменить текущую кампанию этой копией';
+              restore.addEventListener('click', async () => {
+                const answer = await modal({
+                  title: 'Восстановить копию?',
+                  message: 'Текущее состояние кампании будет заменено копией. '
+                    + 'Сам стол остановится, а окно откроется заново.',
+                  confirmLabel: 'Восстановить',
+                  danger: true
+                });
+                if (!answer) return;
+                const result = await desktop.restoreBackup(app.campaign.id, copy.name);
+                if (!result || !result.ok) {
+                  toast((result && result.error) || 'Не удалось восстановить копию', 'error');
+                  return;
+                }
+                toast('Кампания восстановлена. Открываю заново…', 'ok');
+                setTimeout(() => location.reload(), 600);
+              });
+              row.appendChild(restore);
+            }
+            copiesList.appendChild(row);
+          }
+          copiesList.hidden = !items.length;
+        }).catch(() => { backupsValue.textContent = 'нет данных'; });
+      };
+      refreshBackups();
+
       const backupButton = el('button', 'btn btn--tiny', 'Сохранить копию кампании');
       backupButton.type = 'button';
       backupButton.title = 'Копия папки кампании со всеми картинками в data/backups';
@@ -2872,14 +4361,24 @@ let chosenSheetId = null;
           return;
         }
         toast(`Копия кампании: ${result.dir}`, 'ok');
+        refreshBackups();
       });
-      appBox.appendChild(backupButton);
+      campaignPanel.appendChild(backupButton);
+      if (typeof desktop.openBackups === 'function') {
+        const openBackups = el('button', 'btn btn--tiny', 'Открыть папку копий');
+        openBackups.type = 'button';
+        openBackups.addEventListener('click', () => desktop.openBackups());
+        campaignPanel.appendChild(openBackups);
+      }
+      campaignPanel.appendChild(el('div', 'box__note',
+        'Копия делается сама при первом запуске стола за сутки. Хранятся пять последних. '
+        + '«Вернуть» заменяет кампанию выбранной копией.'));
       if (app.role) {
         const exportButton = el('button', 'btn btn--tiny', 'Экспорт сессии в Markdown');
         exportButton.type = 'button';
         exportButton.title = 'Журнал, чат и броски в одном файле';
         exportButton.addEventListener('click', exportSession);
-        appBox.appendChild(exportButton);
+        campaignPanel.appendChild(exportButton);
       }
     }
 
@@ -2912,9 +4411,9 @@ let chosenSheetId = null;
       app.connected
         ? 'Меняется сразу у всех участников стола.'
         : 'Сохранится и пригодится, когда вы запустите стол или подключитесь.'));
-    box.appendChild(appBox);
+    generalPanel.appendChild(appBox);
 
-    if (app.role === 'dm' && app.room) {
+    if (app.role === 'dm' && app.room && campaignPanel) {
       const journalBox = el('div', 'box');
       journalBox.appendChild(el('div', 'box__title', 'Журнал кампании'));
       const journal = el('textarea', 'input settings__textarea');
@@ -2938,7 +4437,7 @@ let chosenSheetId = null;
       journalBox.appendChild(saveJournal);
       journalBox.appendChild(el('div', 'box__note',
         'Журнал видит только мастер. Он сохраняется вместе с кампанией.'));
-      box.appendChild(journalBox);
+      campaignPanel.insertBefore(journalBox, campaignPanel.firstChild);
     }
 
     /** Строка с галочкой: одинаково выглядит для движения, фокуса и звука. */
@@ -3051,7 +4550,7 @@ let chosenSheetId = null;
         'Тема, тон и акцент меняются сразу у вас на этом компьютере и в окне листа персонажа.'));
     };
     renderThemeBox();
-    box.appendChild(themeBox);
+    appearancePanel.appendChild(themeBox);
 
     const soundBox = el('div', 'box');
     soundBox.appendChild(el('div', 'box__title', 'Звук'));
@@ -3137,7 +4636,7 @@ let chosenSheetId = null;
         + 'лес шумит ветром и птицами, океан дышит прибоем, магия звенит, '
         + 'стимпанк шипит паром. Звук включается после первого клика.'));
     }
-    box.appendChild(soundBox);
+    soundPanel.appendChild(soundBox);
 
     const langBox = el('div', 'box');
     langBox.appendChild(el('div', 'box__title', 'Язык интерфейса'));
@@ -3152,7 +4651,7 @@ let chosenSheetId = null;
     langBox.appendChild(langRow);
     langBox.appendChild(el('div', 'box__note',
       'Сейчас приложение только на русском. Переключатель заработает здесь, когда добавим второй язык.'));
-    box.appendChild(langBox);
+    generalPanel.appendChild(langBox);
 
     const a11yBox = el('div', 'box');
     a11yBox.appendChild(el('div', 'box__title', 'Доступность'));
@@ -3189,7 +4688,7 @@ let chosenSheetId = null;
     a11yBox.appendChild(el('div', 'box__note',
       'Применяется сразу на этом компьютере и в окнах журнала и листа. '
       + 'Полный английский интерфейс пока не готов.'));
-    box.appendChild(a11yBox);
+    a11yPanel.appendChild(a11yBox);
 
     const tableBox = el('div', 'box');
     tableBox.appendChild(el('div', 'box__title', 'Стол'));
@@ -3362,7 +4861,7 @@ const gridRow = el('div', 'settings__row');
       feetPerCell: scaleInput
     };
 
-    box.appendChild(tableBox);
+    tablePanel.appendChild(tableBox);
 
     // Стол без сервера: за ним можно заранее заполнить лист персонажа и
     // посмотреть на игру глазами игрока, никого не собирая.
@@ -3381,7 +4880,7 @@ const gridRow = el('div', 'settings__row');
         'Открывает стол от лица игрока, но без сервера и без сети: лист персонажа '
         + 'сохраняется на этом компьютере, и его можно будет отправить на настоящий стол '
         + 'при подключении. Карты, фишки и чат здесь — только для проверки и до закрытия окна.'));
-      box.appendChild(trainBox);
+      tablePanel.appendChild(trainBox);
     }
 
     const actions = el('div', 'modal__actions');
@@ -3392,6 +4891,7 @@ const gridRow = el('div', 'settings__row');
       settingsGridFields = null;
       settingsPanelPosition = null;
       document.removeEventListener('keydown', onKey);
+      release();
       overlay.remove();
     };
     const onKey = (event) => {
@@ -3407,6 +4907,8 @@ const gridRow = el('div', 'settings__row');
 
     overlay.appendChild(box);
     document.body.appendChild(overlay);
+    const savedSection = localStorage.getItem(SETTINGS_SECTION_KEY);
+    selectSection(sectionMeta.some((item) => item.id === savedSection) ? savedSection : 'general', true);
   }
 
   /** Обновляет настройки сетки в открытом окне настроек (после ответа сервера). */
@@ -3521,6 +5023,58 @@ const gridRow = el('div', 'settings__row');
         ? 'Развернуть панель чата, кубиков, листа и фишек'
         : 'Свернуть панель до иконок';
       right.classList.toggle('is-on', !rightCollapsed);
+    }
+  }
+
+  /** Свёрнутые разделы левой колонки. */
+  function readCollapsedPanels() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(COLLAPSED_PANELS_KEY) || '[]');
+      return new Set(Array.isArray(raw) ? raw.map(String) : []);
+    } catch (err) {
+      return new Set();
+    }
+  }
+
+  function writeCollapsedPanels(keys) {
+    localStorage.setItem(COLLAPSED_PANELS_KEY, JSON.stringify([...keys]));
+  }
+
+  /**
+   * Сворачивает разделы левой колонки.
+   *
+   * Участники, журнал, склад, проверки и приглашение стоят друг под другом и
+   * вместе занимают больше экрана, чем карта. Каждый получает кнопку-галочку,
+   * а выбор переживает перезапуск: мастер один раз убирает то, чем в этой игре
+   * не пользуется, и колонка остаётся короткой.
+   */
+  function setupLeftPanels() {
+    const collapsed = readCollapsedPanels();
+    for (const panel of document.querySelectorAll('.col--left > .panel[data-panel]')) {
+      const title = panel.querySelector('.panel__title');
+      if (!title) continue;
+      const key = panel.dataset.panel;
+      const label = (title.querySelector('span') || title).textContent.trim() || 'раздел';
+      const fold = el('button', 'panel__fold', '▾');
+      fold.type = 'button';
+      const updateFold = () => {
+        const isCollapsed = panel.classList.contains('is-collapsed');
+        fold.setAttribute('aria-expanded', String(!isCollapsed));
+        fold.setAttribute('aria-label',
+          `${isCollapsed ? 'Развернуть' : 'Свернуть'} раздел «${label}»`);
+        fold.title = `${isCollapsed ? 'Развернуть' : 'Свернуть'}: ${label}`;
+      };
+      fold.addEventListener('click', () => {
+        const next = !panel.classList.contains('is-collapsed');
+        panel.classList.toggle('is-collapsed', next);
+        if (next) collapsed.add(key);
+        else collapsed.delete(key);
+        writeCollapsedPanels(collapsed);
+        updateFold();
+      });
+      title.insertBefore(fold, title.firstChild);
+      panel.classList.toggle('is-collapsed', collapsed.has(key));
+      updateFold();
     }
   }
 
@@ -3812,7 +5366,12 @@ const gridRow = el('div', 'settings__row');
 
   function activateTab(name, options = {}) {
     for (const button of document.querySelectorAll('.tabs__btn')) {
-      button.classList.toggle('is-active', button.dataset.tab === name);
+      const active = button.dataset.tab === name;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-selected', String(active));
+      // В табуляцию входит только открытая вкладка, остальные листаются
+      // стрелками. Так панель не отнимает семь шагов Tab у клавиатуры.
+      button.tabIndex = active ? 0 : -1;
     }
     for (const panel of document.querySelectorAll('.panel--tab')) {
       panel.classList.toggle('is-active', panel.id === `tab-${name}`);
@@ -3862,7 +5421,49 @@ const gridRow = el('div', 'settings__row');
         openSearch();
         return;
       }
+      // «?» — шпаргалка по горячим клавишам. Спрашивают о них чаще, чем
+      // находят в настройках.
+      if (event.key === '?' && !typing) {
+        event.preventDefault();
+        openShortcuts();
+        return;
+      }
       if (typing || event.ctrlKey || event.metaKey || event.altKey) return;
+
+      // Стрелки двигают выбранную в бою фишку на клетку. Только когда карта
+      // в фокусе: иначе они отобрали бы прокрутку у списков и полей.
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        const mapRoot = $('#map-root');
+        const active = document.activeElement;
+        const mapFocused = active === document.body || (mapRoot && mapRoot.contains(active));
+        if (mapFocused && mapView && mapView.moveSelectedByKey(event.key)) {
+          event.preventDefault();
+          return;
+        }
+      }
+
+      // Стрелки по вкладкам: стандартное поведение табуляции ARIA. Фокус
+      // переезжает вместе с открытой панелью, иначе он остался бы на скрытой.
+      const tabButton = target && target.closest
+        ? target.closest('.tabs__btn[role="tab"]')
+        : null;
+      if (tabButton) {
+        const buttons = [...document.querySelectorAll('.tabs__btn:not([hidden])')];
+        const current = buttons.indexOf(tabButton);
+        let next = current;
+        if (event.key === 'ArrowRight') next = (current + 1) % buttons.length;
+        else if (event.key === 'ArrowLeft') next = (current - 1 + buttons.length) % buttons.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = buttons.length - 1;
+        if (next !== current) {
+          event.preventDefault();
+          if (panelCollapsed(RIGHT_COLLAPSED_KEY)) setPanelCollapsed('right', false);
+          const button = buttons[next];
+          activateTab(button.dataset.tab);
+          button.focus();
+          return;
+        }
+      }
 
       const index = Number(event.key) - 1;
       if (!Number.isInteger(index) || index < 0 || index >= 9) return;
@@ -4076,7 +5677,6 @@ const gridRow = el('div', 'settings__row');
       sendRollRequest();
     });
 
-    $('#btn-open-datadir').addEventListener('click', () => desktop.openDataDir());
     $('#btn-settings-home').addEventListener('click', openSettings);
     $('#btn-settings-table').addEventListener('click', openSettings);
     $('#addresses-toggle').addEventListener('click', toggleAddresses);
@@ -4102,6 +5702,7 @@ const gridRow = el('div', 'settings__row');
       });
     }
     applyPanels();
+    setupLeftPanels();
     setupRightResizer();
     setupTabHotkeys();
     restoreActiveTab();
@@ -4109,7 +5710,11 @@ const gridRow = el('div', 'settings__row');
     desktop.onCampaignSaved(({ meta, reason }) => {
       app.campaign = meta;
       updateTableHeader();
-      if (reason === 'auto') toast(`Автосохранение: ${formatDateTime(meta.updatedAt)}`, 'info', 2500);
+      // На пятнадцати секундах тост каждые пятнадцать секунд — шум, а не
+      // новость: там автосохранение и так ожидаемо. Отметку в шапке не трогаем.
+      if (reason === 'auto' && autosaveSeconds() >= 60) {
+        toast(`Автосохранение: ${formatDateTime(meta.updatedAt)}`, 'info', 2500);
+      }
     });
     desktop.onCampaignError(({ message }) => toast(message, 'error'));
   }
@@ -4413,8 +6018,8 @@ const gridRow = el('div', 'settings__row');
   bindImportUi();
   updateConnBadge(false);
   // Главный экран уже активен в разметке, поэтому сцену включаем сразу.
-  // Звук стартует после первого касания: браузер не даёт запустить Web Audio
-  // до жеста пользователя.
+  // Автоплей разрешён на уровне приложения, но если браузер на старой сборке
+  // всё-таки блокирует аудио, атмосфера подхватится на первом жесте.
   if (window.DnDSound) window.DnDSound.setScene('home');
   initHome().catch((error) => toast(`Ошибка запуска: ${error.message}`, 'error'));
 

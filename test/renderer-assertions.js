@@ -1200,6 +1200,38 @@
       mapView.render(MAP_STATE, { role: 'player', playerId: 'p-1' });
     });
 
+    check('кадр из предпросмотра переносится на картинку фишки', () => {
+      const withCrop = {
+        ...MAP_STATE,
+        tokens: MAP_STATE.tokens.map((token) => (token.id === 't1'
+          ? { ...token, imageUrl: '/files/goblin.png', imageZoom: 2, imageX: 25, imageY: -10 }
+          : token))
+      };
+      mapView.render(withCrop, { role: 'dm', playerId: 'dm' });
+      const image = mapHost.querySelector('[data-token-id="t1"] .token__image');
+      assert(image, 'у фишки нет картинки');
+      assert(image.style.transform.includes('translate(25%, -10%) scale(2)'),
+        `кадр не перенёсся на фишку: ${image.style.transform}`);
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('игрок не видит полоску прочности врага, а мастер видит', () => {
+      const withHp = {
+        ...MAP_STATE,
+        tokens: MAP_STATE.tokens.map((token) => (token.id === 't1'
+          ? { ...token, side: 'enemy', maxHp: 12, hp: 7 }
+          : token))
+      };
+      mapView.render(withHp, { role: 'player', playerId: 'p-1' });
+      const enemyForPlayer = mapHost.querySelector('[data-token-id="t1"]');
+      assert(enemyForPlayer, 'враг не отрисован игроку');
+      assert(!enemyForPlayer.querySelector('.token__hp'), 'игрок увидел полоску прочности врага');
+      mapView.render(withHp, { role: 'dm', playerId: 'dm' });
+      const enemyForDm = mapHost.querySelector('[data-token-id="t1"]');
+      assert(enemyForDm.querySelector('.token__hp'), 'мастер не увидел полоску прочности врага');
+      mapView.render(MAP_STATE, { role: 'player', playerId: 'p-1' });
+    });
+
     check('карта отображается, фишки рисуются поверх неё', () => {
       assert(!mapHost.querySelector('.map-empty').getAttribute('hidden'), 'заглушка должна быть скрыта');
       assert(!mapHost.querySelector('.map-surface').hidden, 'поверхность карты скрыта');
@@ -1534,36 +1566,35 @@
       }
     };
 
-    check('расстояние по клеткам считается по сторонам клеток, без диагонали', () => {
+    check('расстояние по клеткам считает диагональ как обычную клетку', () => {
       mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
       const straight = mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 0 });
       assert.strictEqual(straight.steps, 3, 'прямая в три клетки посчитана неверно');
       assert.strictEqual(straight.feet, 15, 'в три клетки по пять футов');
-      // Диагонали в маршруте нет, поэтому до клетки по диагонали столько же
-      // шагов, сколько по сторонам: четыре на четыре — восемь, а не четыре.
+      // Диагональ в 5e стоит те же 5 футов, поэтому четыре на четыре — это
+      // четыре шага, а не восемь.
       const diagonal = mapView.combatMeasure({ col: 0, row: 0 }, { col: 4, row: 4 });
-      assert.strictEqual(diagonal.steps, 8, `по диагонали на 4 клетки: ${diagonal.steps}`);
-      assert.strictEqual(diagonal.feet, 40, 'футы по диагонали считаются неверно');
+      assert.strictEqual(diagonal.steps, 4, `по диагонали на 4 клетки: ${diagonal.steps}`);
+      assert.strictEqual(diagonal.feet, 20, 'футы по диагонали считаются неверно');
       const mixed = mapView.combatMeasure({ col: 0, row: 0 }, { col: 3, row: 1 });
-      assert.strictEqual(mixed.steps, 4, `смешанный ход: ${mixed.steps}`);
+      assert.strictEqual(mixed.steps, 3, `смешанный ход: ${mixed.steps}`);
     });
 
-    check('маршрут идёт по клеткам с одним поворотом, а не по диагонали', () => {
+    check('маршрут идёт по кратчайшей лестнице, диагональ разрешена', () => {
       mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
       const path = mapView.combatPath({ col: 1, row: 3 }, { col: 3, row: 1 });
       assert.deepStrictEqual(path, [
-        { col: 1, row: 2 }, { col: 1, row: 1 },
-        { col: 2, row: 1 }, { col: 3, row: 1 }
+        { col: 2, row: 2 }, { col: 3, row: 1 }
       ], `путь строится неверно: ${JSON.stringify(path)}`);
-      // Поворот всегда в строке цели: иначе рисунок скакал бы от клетки к клетке.
+      // Каждый шаг — соседняя клетка, в том числе по диагонали.
       for (const point of path) {
-        assert(point.col === 1 || point.row === 1,
-          `точка ${JSON.stringify(point)} не лежит на одной из сторон пути`);
+        assert(Math.max(Math.abs(point.col - 2), Math.abs(point.row - 2)) <= 1,
+          `точка ${JSON.stringify(point)} не соседняя`);
       }
       const down = mapView.combatPath({ col: 0, row: 0 }, { col: 0, row: 2 });
       assert.deepStrictEqual(down, [{ col: 0, row: 1 }, { col: 0, row: 2 }], 'ход вниз собран неверно');
       const same = mapView.combatPath({ col: 2, row: 2 }, { col: 2, row: 2 });
-      assert.deepStrictEqual(same, [{ col: 2, row: 2 }], 'ход в ту же клетку должен быть пустым');
+      assert.deepStrictEqual(same, [], 'ход в ту же клетку должен быть пустым');
     });
 
     check('подпись расстояния называет шаги, клетки и футы', () => {
@@ -1636,12 +1667,15 @@
       const node = mapHost.querySelector('[data-token-id="t1"]');
       assert(node.classList.contains('token--selectable'), 'фишка в бою не выбирается нажатием');
       node.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 0, clientY: 0 }));
+      window.dispatchEvent(new PointerEvent('pointerup', {}));
       assert.strictEqual(mapView.combat.tokenId, 't1', 'фишка не выбралась');
       // Фишки перерисовываются целиком, поэтому проверяем свежий узел.
       const marked = mapHost.querySelector('[data-token-id="t1"]');
       assert(marked.classList.contains('token--combat'), 'выбранная фишка не помечена');
-      // Повторное нажатие снимает выбор: иначе пришлось бы искать кнопку отмены.
+      // Повторное нажатие без протяжки снимает выбор: иначе пришлось бы искать
+      // кнопку отмены. Отпускание важно: нажатие с движением — это маршрут.
       marked.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 0, clientY: 0 }));
+      window.dispatchEvent(new PointerEvent('pointerup', {}));
       assert.strictEqual(mapView.combat.tokenId, null, 'выбор не снялся');
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
@@ -1709,11 +1743,232 @@
         })}`);
         assert(/\d+ шаг/.test(mapView.routeLabel.textContent), `подпись: ${mapView.routeLabel.textContent}`);
         assert(!mapView.cellMark.hidden, 'клетка назначения не подсвечена');
-        // Линию маршрута убрали: она уезжала от фишки. Клетка и число шагов
-        // остаются, а линии на карте быть не должно.
-        assert(!mapView.routeLine, 'у карты всё ещё есть линия маршрута');
-        assert(!mapHost.querySelector('.map-route'), 'линия маршрута всё ещё рисуется');
+        // Линию рисует только протяжка: наведение подсказывает клетку и число
+        // шагов, но не прокладывает путь за игрока.
+        assert(mapView.routeLayer.hidden, 'линия маршрута показана без протяжки');
+        assert(!mapView.routeLine.getAttribute('d'), 'у линии маршрута есть путь без протяжки');
         mapView.selectCombatToken(null);
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('в бою фишку тянут по маршруту, который прокладывает игрок', () => {
+      withRealMapSize(() => {
+        mapView.render(
+          { ...bigMapState(COMBAT_STATE), sheets: { 'p-1': { speed: 30 } } },
+          { role: 'dm', playerId: 'dm' }
+        );
+        const node = mapHost.querySelector('[data-token-id="t2"]');
+        const rect = mapView.surface.getBoundingClientRect();
+        assert(rect.width > 0, 'подложка карты без размера');
+        node.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, clientX: rect.left + 10, clientY: rect.top + 10
+        }));
+        assert.strictEqual(mapView.combat.tokenId, 't2', 'протяжка не выбрала фишку');
+        const at = (col, row) => ({
+          clientX: rect.left + (((col + 0.5) * 46) / 400) * rect.width,
+          clientY: rect.top + (((row + 0.5) * 46) / 300) * rect.height
+        });
+        // Фишка стоит в клетке (4,3). Ведём крюк вокруг: вправо, вниз и обратно
+        // влево. Прямой путь до (4,5) был бы два шага, нарисованный — четыре.
+        for (const cell of [[5, 3], [5, 4], [5, 5], [4, 5]]) {
+          window.dispatchEvent(new PointerEvent('pointermove', at(cell[0], cell[1])));
+        }
+        // Настоящий указатель ходит по подложке: наведение не должно затирать
+        // нарисованный путь своей прямой до клетки под курсором.
+        mapView.surface.dispatchEvent(new PointerEvent('pointermove', at(6, 3)));
+        assert(/4 шага/.test(mapView.routeLabel.textContent),
+          `наведение перебило нарисованный путь: ${mapView.routeLabel.textContent}`);
+        const line = mapHost.querySelector('.map-route__line');
+        assert(line, 'линия маршрута не нарисована');
+        assert(!mapView.routeLayer.hidden, 'слой маршрута скрыт');
+        assert(!mapView.cellMark.hidden, 'клетка назначения не показана');
+        assert(/4 шага/.test(mapView.routeLabel.textContent),
+          `шаги считаются не по нарисованному пути: ${mapView.routeLabel.textContent}`);
+        // Скорость из листа: 4 шага по 5 футов из 30 оставляют 10.
+        assert(mapView.routeLabel.textContent.includes('осталось 10 из 30 фт'),
+          `остаток скорости не показан: ${mapView.routeLabel.textContent}`);
+        const d = line.getAttribute('d') || '';
+        assert(d.split('L').length === 5, `в линии ${d.split('L').length} точек вместо 5: ${d}`);
+        window.dispatchEvent(new PointerEvent('pointerup', {}));
+        mapView.cancelPending();
+        mapView.selectCombatToken(null);
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('остаток скорости считает пройденное и краснеет при переборе', () => {
+      const hero = {
+        id: 't2', name: 'Мира', mapType: 'world', x: 0.5, y: 0.5,
+        assignedPlayerId: 'p-1', side: 'ally', maxHp: 10, hp: 10, size: 1, conditions: []
+      };
+      mapView.sheets = { 'p-1': { speed: 30 } };
+      mapView.moveSpent = { t2: 20 };
+      assert.strictEqual(mapView.routeSpeedSuffix(hero, { feet: 10 }), ' · осталось 0 из 30 фт');
+      assert(!mapView.routeLabel.classList.contains('is-over'), 'ровно в скорость помечено перебором');
+      assert.strictEqual(mapView.routeSpeedSuffix(hero, { feet: 15 }), ' · перебор 5 фт');
+      assert(mapView.routeLabel.classList.contains('is-over'), 'перебор не подсвечен');
+      // Чужой монстр без листа скорости не получает.
+      assert.strictEqual(mapView.routeSpeedSuffix({ ...hero, assignedPlayerId: null }, { feet: 10 }), '');
+      // Новый ход обнуляет пройденное.
+      mapView.moveTurnId = 'old-turn';
+      mapView.render({ ...MAP_STATE, initiative: { entries: [], turnId: 'new-turn', round: 1 } },
+        { role: 'dm', playerId: 'dm' });
+      assert.deepStrictEqual(mapView.moveSpent, {}, 'пройденное не сбросилось на новом ходу');
+    });
+
+    check('стрелка двигает выбранную фишку на клетку', () => {
+      withRealMapSize(() => {
+        mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
+        mapView.selectCombatToken('t2');
+        const hero = mapView.tokens.find((token) => token.id === 't2');
+        const point = mapView.cellCenterInMap(4, 3);
+        hero.x = point.x;
+        hero.y = point.y;
+        const from = mapView.tokenCell(hero);
+        const originalWalk = mapView.walkTokenTo;
+        let walk = null;
+        mapView.walkTokenTo = (token, target, path) => { walk = { id: token.id, target, path }; };
+        assert(mapView.moveSelectedByKey('ArrowRight'), 'шаг стрелкой не сделан');
+        assert.deepStrictEqual(walk.target, { col: from.col + 1, row: from.row }, 'стрелка увела не туда');
+        assert.deepStrictEqual(walk.path, [from, { col: from.col + 1, row: from.row }], 'путь шага не тот');
+        assert(!mapView.moveSelectedByKey('a'), 'обычная клавиша двинула фишку');
+        mapView.walkTokenTo = originalWalk;
+        mapView.selectCombatToken(null);
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('нарисованный путь укорачивается при возврате и может идти по диагонали', () => {
+      const start = [{ col: 0, row: 0 }];
+      const down = mapView.extendRoute(start, { col: 0, row: 1 });
+      assert.deepStrictEqual(down, [{ col: 0, row: 0 }, { col: 0, row: 1 }], 'шаг не добавился');
+      assert.deepStrictEqual(mapView.extendRoute(down, { col: 0, row: 0 }),
+        [{ col: 0, row: 0 }], 'путь не укоротился при возврате');
+      const diagonal = mapView.extendRoute(start, { col: 2, row: 1 });
+      assert.strictEqual(diagonal.length, 3, `диагональ прошла неверно: ${JSON.stringify(diagonal)}`);
+      for (let i = 1; i < diagonal.length; i += 1) {
+        const dc = Math.abs(diagonal[i].col - diagonal[i - 1].col);
+        const dr = Math.abs(diagonal[i].row - diagonal[i - 1].row);
+        assert(Math.max(dc, dr) === 1, `путь рвётся между ${JSON.stringify(diagonal[i - 1])} и ${JSON.stringify(diagonal[i])}`);
+      }
+    });
+
+    check('реакция учитывает нарисованный обход, а не прямую до цели', () => {
+      withRealMapSize(() => {
+        const monster = {
+          id: 'm2', name: 'Стражник', mapType: 'world', mapId: 'm-world',
+          x: 0.2, y: 0.2, maxHp: 11, hp: 11, size: 1, conditions: [], assignedPlayerId: null
+        };
+        const start = mapView.cellCenterInMap(2, 1);
+        const hero = {
+          id: 'h2', name: 'Борис', mapType: 'world', mapId: 'm-world',
+          x: start.x, y: start.y, maxHp: 10, hp: 10, size: 1,
+          conditions: [], assignedPlayerId: 'p-1'
+        };
+        const state = {
+          ...COMBAT_STATE,
+          activeMap: 'world',
+          activeMapId: 'm-world',
+          maps: { world: { items: [{ id: 'm-world', url: MAP_PNG, name: 'world.png' }], activeId: 'm-world' } },
+          tokens: [monster, hero]
+        };
+        const prompts = [];
+        mapView.handlers.onOpportunityAttack = (payload) => prompts.push(payload);
+        mapView.render(state, { role: 'dm', playerId: 'dm' });
+        const end = mapView.cellCenterInMap(0, 1);
+        // Прямая между (2,1) и (0,1) идёт мимо стража вплотную: выхода нет.
+        mapView.applyTokenMove('h2', end.x, end.y, { final: true, from: { col: 2, row: 1 } });
+        assert.strictEqual(prompts.length, 0, 'прямая вызвала реакцию без выхода из досягаемости');
+        // Тот же конец, но обходом через третью строку: из досягаемости вышли.
+        hero.x = start.x;
+        hero.y = start.y;
+        mapView.reactionRounds.clear();
+        mapView.render(state, { role: 'dm', playerId: 'dm' });
+        mapView.applyTokenMove('h2', end.x, end.y, {
+          final: true,
+          from: { col: 2, row: 1 },
+          path: [{ col: 2, row: 1 }, { col: 2, row: 3 }, { col: 0, row: 3 }, { col: 0, row: 1 }]
+        });
+        assert.strictEqual(prompts.length, 1, 'обход не вызвал реакцию');
+        delete mapView.handlers.onOpportunityAttack;
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('реакция срабатывает, когда фишка игрока покидает досягаемость противника', () => {
+      withRealMapSize(() => {
+        const monster = {
+          id: 'm1', name: 'Волк', mapType: 'world', mapId: 'm-world',
+          x: 0.2, y: 0.2, maxHp: 11, hp: 11, size: 1, conditions: [],
+          assignedPlayerId: null, side: 'enemy', attackBonus: 4
+        };
+        const hero = {
+          id: 'h1', name: 'Артём', mapType: 'world', mapId: 'm-world',
+          x: 0.2, y: 0.2, maxHp: 10, hp: 10, size: 1, conditions: [], assignedPlayerId: 'p-1'
+        };
+        const state = {
+          ...COMBAT_STATE,
+          activeMap: 'world',
+          activeMapId: 'm-world',
+          maps: { world: { items: [{ id: 'm-world', url: MAP_PNG, name: 'world.png' }], activeId: 'm-world' } },
+          tokens: [monster, hero]
+        };
+        mapView.render(state, { role: 'dm', playerId: 'dm' });
+        const prompts = [];
+        mapView.handlers.onOpportunityAttack = (payload) => prompts.push(payload);
+        const move = (col, row) => {
+          const point = mapView.cellCenterInMap(col, row);
+          mapView.applyTokenMove('h1', point.x, point.y, {
+            final: true, from: mapView.tokenCell(hero)
+          });
+        };
+        // Обе стоят в клетке (1,1). Три клетки вправо — выход из досягаемости.
+        move(3, 1);
+        assert.strictEqual(prompts.length, 1, `реакций: ${prompts.length}`);
+        assert.strictEqual(prompts[0].attacker.id, 'm1', 'реакцию получил не противник');
+        assert.strictEqual(prompts[0].target.id, 'h1', 'цель реакции не та');
+        assert.strictEqual(prompts[0].attacker.attackBonus, 4, 'бонус атаки потерялся');
+        assert.strictEqual(prompts[0].playerId, null, 'реакцию врага отдали игроку');
+        // Обратно вплотную — повода нет: вход в досягаемость не провоцирует.
+        move(1, 1);
+        assert.strictEqual(prompts.length, 1, 'вход в досягаемость вызвал реакцию');
+        // Снова вышли в этом же раунде — реакция уже потрачена.
+        move(4, 1);
+        assert.strictEqual(prompts.length, 1, 'реакция спрошена второй раз за раунд');
+        delete mapView.handlers.onOpportunityAttack;
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
+    check('монстр уходит из досягаемости союзника — карточка уходит игроку', () => {
+      withRealMapSize(() => {
+        const hero = {
+          id: 'h3', name: 'Мира', mapType: 'world', mapId: 'm-world',
+          x: 0.2, y: 0.2, maxHp: 10, hp: 10, size: 1, conditions: [],
+          assignedPlayerId: 'p-1', side: 'ally', attackBonus: 5
+        };
+        const monster = {
+          id: 'm3', name: 'Гоблин', mapType: 'world', mapId: 'm-world',
+          x: 0.2, y: 0.2, maxHp: 7, hp: 7, size: 1, conditions: [], side: 'enemy'
+        };
+        const state = {
+          ...COMBAT_STATE,
+          activeMap: 'world',
+          activeMapId: 'm-world',
+          maps: { world: { items: [{ id: 'm-world', url: MAP_PNG, name: 'world.png' }], activeId: 'm-world' } },
+          tokens: [hero, monster]
+        };
+        mapView.render(state, { role: 'dm', playerId: 'dm' });
+        const prompts = [];
+        mapView.handlers.onOpportunityAttack = (payload) => prompts.push(payload);
+        const point = mapView.cellCenterInMap(4, 1);
+        mapView.applyTokenMove('m3', point.x, point.y, { final: true, from: mapView.tokenCell(monster) });
+        assert.strictEqual(prompts.length, 1, `реакций: ${prompts.length}`);
+        assert.strictEqual(prompts[0].attacker.id, 'h3', 'реагирует не союзник');
+        assert.strictEqual(prompts[0].target.id, 'm3', 'цель ушла не от него');
+        assert.strictEqual(prompts[0].playerId, 'p-1', 'карточка не адресована игроку');
+        delete mapView.handlers.onOpportunityAttack;
       });
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
@@ -1781,6 +2036,11 @@
         mapView.surface.dispatchEvent(new PointerEvent('pointerdown', new MapViewEvent(
           rect, rect.left + ((4.5 * 46) / 400) * rect.width, rect.top + ((1.5 * 46) / 300) * rect.height
         ).payload()));
+        // Ход начинается на отпускании: пока кнопка зажата, игрок может вести
+        // маршрут или тащить карту, и фишка не должна прыгать раньше времени.
+        mapView.stage.dispatchEvent(new PointerEvent('pointerup', new MapViewEvent(
+          rect, rect.left + ((4.5 * 46) / 400) * rect.width, rect.top + ((1.5 * 46) / 300) * rect.height
+        ).payload()));
         assert(mapView.walkTimer, 'фишка не пошла по клеткам');
         assert(mapView.dragState && mapView.dragState.walk, 'слой не защищён на время хода');
         const node = mapView.tokenLayer.querySelector('[data-token-id="t1"]');
@@ -1795,6 +2055,25 @@
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
 
+    check('в бою карту можно тащить, не отправляя выбранную фишку в клетку', () => {
+      withRealMapSize(() => {
+        mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
+        mapView.selectCombatToken('t1');
+        const rect = mapView.surface.getBoundingClientRect();
+        const startX = rect.left + rect.width * 0.25;
+        const startY = rect.top + rect.height * 0.25;
+        const at = (x, y) => new MapViewEvent(rect, x, y).payload();
+        mapView.surface.dispatchEvent(new PointerEvent('pointerdown', at(startX, startY)));
+        mapView.stage.dispatchEvent(new PointerEvent('pointermove', at(startX + 40, startY + 20)));
+        mapView.stage.dispatchEvent(new PointerEvent('pointerup', at(startX + 40, startY + 20)));
+        assert(mapView.pan.x === 40 && mapView.pan.y === 20,
+          `карта не сдвинулась: ${mapView.pan.x}/${mapView.pan.y}`);
+        assert(!mapView.walkTimer, 'перетаскивание карты отправило фишку в клетку');
+        assert(!mapView.dragState, 'перетаскивание карты оставило фишку в пути');
+      });
+      mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
+    });
+
     check('в бою без выбранной фишки нажатие объясняет, что делать', () => {
       const notices = [];
       mapView.handlers.onNotice = (message) => notices.push(message);
@@ -1802,6 +2081,9 @@
         mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
         const rect = mapView.surface.getBoundingClientRect();
         mapView.surface.dispatchEvent(new PointerEvent('pointerdown', new MapViewEvent(
+          rect, rect.left + rect.width / 2, rect.top + rect.height / 2
+        ).payload()));
+        mapView.stage.dispatchEvent(new PointerEvent('pointerup', new MapViewEvent(
           rect, rect.left + rect.width / 2, rect.top + rect.height / 2
         ).payload()));
       });
@@ -2712,6 +2994,51 @@
       // дольше самого теста.
       dicePanel.finishRolling();
     });
+    check('на время броска видно столько костей, сколько в формуле', () => {
+      dicePanel.startRolling('4d6dl1+2');
+      const dice = [...diceHost.querySelectorAll('.dice__tumbler-die')];
+      assert.strictEqual(dice.length, 4, `костей в анимации: ${dice.length}`);
+      assert(dice.every((die) => die.classList.contains('dice__tumbler-die--d6')),
+        'форма кости не совпала с гранью');
+      dicePanel.finishRolling();
+    });
+    check('после падения видны отдельные грани, отброшенные гаснут', () => {
+      dicePanel.showLast({
+        playerName: 'Артём', formula: '4d6dl1', count: 4, sides: 6,
+        values: [6, 1, 4, 3], keptValues: [6, 4, 3], droppedValues: [1],
+        modifier: 0, result: 13, time: new Date().toISOString()
+      });
+      const faces = [...diceHost.querySelectorAll('.dice-face')];
+      assert.strictEqual(faces.length, 4, `граней: ${faces.length}`);
+      assert.strictEqual(faces.filter((face) => face.classList.contains('is-dropped')).length, 1,
+        'отброшенная грань не погашена');
+      assert(faces.some((face) => face.textContent === '1' && face.classList.contains('is-dropped')),
+        'погашена не та грань');
+    });
+    check('натуральная двадцатка и единица отмечаются как событие', () => {
+      dicePanel.showLast({
+        playerName: 'Артём', formula: 'd20', count: 1, sides: 20,
+        values: [20], keptValues: [20], droppedValues: [], result: 20,
+        time: new Date().toISOString()
+      });
+      const last = diceHost.querySelector('.dice__last');
+      assert(last.classList.contains('is-crit'), 'критический успех не отмечен');
+      assert(last.textContent.includes('критический успех'), 'нет подписи критического успеха');
+      assert(last.querySelectorAll('.dice__sparks i').length === 10, 'нет искр успеха');
+      dicePanel.showLast({
+        playerName: 'Артём', formula: 'd20', count: 1, sides: 20,
+        values: [1], keptValues: [1], droppedValues: [], result: 1,
+        time: new Date().toISOString()
+      });
+      assert(last.classList.contains('is-fumble'), 'критический провал не отмечен');
+      assert(last.textContent.includes('критический провал'), 'нет подписи провала');
+      dicePanel.showLast({
+        playerName: 'Артём', formula: '2d20kh1', count: 2, sides: 20,
+        values: [20, 7], keptValues: [20], droppedValues: [7], result: 20,
+        time: new Date().toISOString()
+      });
+      assert(last.classList.contains('is-crit'), 'преимущество с двадцаткой не отмечено');
+    });
     const formulaInput = diceHost.querySelector('.dice__formula');
     check('панель броска принимает формулу, а не только одну кость', () => {
       assert(formulaInput, 'нет поля формулы');
@@ -2970,25 +3297,67 @@
     let createdTokenName = null;
     let createdTokenHp = 'не вызвано';
     let createdTokenSize = null;
+    let createdTokenSide = null;
     let spawnedFrom = null;
     const hpChanges = [];
     const sizeChanges = [];
+    const acChanges = [];
     const tokenPanel = new window.TableUI.TokenPanel(tokensHost, {
-      onCreate: (name, maxHp, size) => {
+      onCreate: (name, maxHp, size, side) => {
         createdTokenName = name;
         createdTokenHp = maxHp;
         createdTokenSize = size;
+        createdTokenSide = side;
       },
       onDeleteToken: () => {},
       onSetTokenHp: (tokenId, hp) => hpChanges.push({ tokenId, hp }),
       onSetTokenSize: (tokenId, size) => sizeChanges.push({ tokenId, size }),
+      onSetTokenArmorClass: (tokenId, armorClass) => acChanges.push({ tokenId, armorClass }),
       onSpawnFromSheet: (playerId) => { spawnedFrom = playerId; }
     });
     tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
-    check('панель фишек ДМ: форма создания и список всех фишек', () => {
+    check('панель фишек ДМ делит фишки на союзников и врагов', () => {
       assert(tokensHost.querySelector('.token-form'), 'нет формы создания');
-      assert(tokensHost.textContent.includes('Гоблин') && tokensHost.textContent.includes('Мира'), 'нет списка фишек');
+      const tabs = [...tokensHost.querySelectorAll('.token-sides__btn')];
+      assert.strictEqual(tabs.length, 2, `вкладок стороны: ${tabs.length}`);
+      assert(tabs[0].textContent.includes('Союзники (1)'), `счётчик союзников: ${tabs[0].textContent}`);
+      assert(tabs[1].textContent.includes('Враги (2)'), `счётчик врагов: ${tabs[1].textContent}`);
+      assert(tabs[1].getAttribute('aria-selected') === 'true', 'по умолчанию открыта не вкладка врагов');
+      assert(
+        tokensHost.textContent.includes('Гоблин') && tokensHost.textContent.includes('Дракон'),
+        'на вкладке врагов нет монстров'
+      );
+      assert(!tokensHost.textContent.includes('Мира'), 'союзник попал на вкладку врагов');
+      tabs[0].click();
+      assert(tokensHost.textContent.includes('Мира'), 'на вкладке союзников нет персонажа');
+      assert(!tokensHost.textContent.includes('Гоблин'), 'враг попал на вкладку союзников');
+      assert.strictEqual(tokensHost.querySelectorAll('.token-row').length, 1, 'на вкладке союзников лишние строки');
+      const createButton = () => tokensHost.querySelector('.token-form button[type="submit"]');
+      assert(createButton().textContent.toLowerCase().includes('союзника'), `кнопка создания: ${createButton().textContent}`);
+      assert(tokensHost.querySelector('.token-row__side--ally'), 'у строки нет пометки стороны');
+      const back = [...tokensHost.querySelectorAll('.token-sides__btn')]
+        .find((node) => node.textContent.includes('Враги'));
+      back.click();
+      assert(createButton().textContent.toLowerCase().includes('врага'), `кнопка создания: ${createButton().textContent}`);
+      assert(tokensHost.querySelector('.token-row__side--enemy'), 'у врага нет пометки стороны');
       assert(tokensHost.querySelectorAll('.token-row button').length >= 1, 'нет кнопки удаления');
+    });
+
+    check('вкладка стороны задаёт сторону новой фишки', () => {
+      const ally = [...tokensHost.querySelectorAll('.token-sides__btn')]
+        .find((node) => node.textContent.includes('Союзники'));
+      ally.click();
+      const form = tokensHost.querySelector('.token-form');
+      form.querySelector('input').value = 'Мирный житель';
+      form.requestSubmit();
+      assert.strictEqual(createdTokenSide, 'ally', `со стороной: ${createdTokenSide}`);
+      createdTokenSide = null;
+      const enemy = [...tokensHost.querySelectorAll('.token-sides__btn')]
+        .find((node) => node.textContent.includes('Враги'));
+      enemy.click();
+      form.querySelector('input').value = 'Гоблин-2';
+      form.requestSubmit();
+      assert.strictEqual(createdTokenSide, 'enemy', `со стороной: ${createdTokenSide}`);
     });
 
     check('размер фишки выбирается при создании и меняется в списке', () => {
@@ -3204,6 +3573,11 @@
     check('кнопка «Вывести» в панели фишек отдаёт id игрока', () => {
       tokensHost.querySelector('.token-spawn__row button').click();
       assert(spawnedFrom === 'p-2', `передан игрок: ${spawnedFrom}`);
+      // Вывод фишки переключает список на союзников: возвращаем вкладку,
+      // потому что дальше проверяются монстры.
+      const enemy = [...tokensHost.querySelectorAll('.token-sides__btn')]
+        .find((node) => node.textContent.includes('Враги'));
+      enemy.click();
     });
     check('когда у всех игроков есть фишки, спавн говорит об этом', () => {
       // Бориса заменяем, а не добавляем второго: иначе старый без фишки остался бы
@@ -3224,7 +3598,9 @@
       tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
     });
     check('в списке фишек видно, какие скрыты, и есть переключатель', () => {
-      const hiddenTokens = TOKENS.map((token) => ({ ...token, hidden: token.id !== 't2' }));
+      // На вкладке врагов оставляем одну видимую (t1) и одну скрытую (t3),
+      // чтобы обе подписи были на одном экране.
+      const hiddenTokens = TOKENS.map((token) => ({ ...token, hidden: token.id !== 't1' }));
       tokenPanel.render(hiddenTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
       const rows = [...tokensHost.querySelectorAll('.token-row')];
       const hiddenRow = rows.find((row) => row.classList.contains('token-row--hidden'));
@@ -3240,7 +3616,8 @@
       assert(bulk.some((node) => node.textContent.includes('Показать все')), 'нет кнопки «Показать все»');
       tokenPanel.render(TOKENS, PLAYERS, { role: 'player', playerId: 'p-9' });
       assert(!tokensHost.querySelector('.token-bulk'), 'игрок видит массовые кнопки');
-      assert(!tokensHost.textContent.includes('Все фишки'), 'игрок видит список «Все фишки»');
+      assert(!tokensHost.querySelector('.token-sides'), 'игрок видит вкладки стороны');
+      assert(!tokensHost.textContent.includes('Фишки на столе'), 'игрок видит список «Фишки на столе»');
       tokenPanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
     });
     check('переключатель скрытия у фишки отдаёт новое состояние', () => {
@@ -3298,9 +3675,13 @@
     sandbox.appendChild(nameHost);
     const nameToggles = [];
     const renamed = [];
+    const sideChanges = [];
     const namePanel = new window.TableUI.TokenPanel(nameHost, {
       onRenameToken: (token) => renamed.push(token.id),
-      onToggleTokenNameHidden: (tokenId, hidden) => nameToggles.push([tokenId, hidden])
+      onToggleTokenNameHidden: (tokenId, hidden) => nameToggles.push([tokenId, hidden]),
+      onSetTokenSide: (tokenId, side) => sideChanges.push([tokenId, side]),
+      onSetTokenArmorClass: (tokenId, armorClass) => acChanges.push({ tokenId, armorClass }),
+      onSheetStats: () => ({ armorClass: 18, attackBonus: 5 })
     });
     namePanel.render(nameTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
 
@@ -3318,10 +3699,16 @@
         `обработчик получил: ${JSON.stringify(nameToggles)}`);
     });
     check('двойной клик по строке фишки переименовывает её', () => {
+      const ally = [...nameHost.querySelectorAll('.token-sides__btn')]
+        .find((node) => node.textContent.includes('Союзники'));
+      ally.click();
       const row = [...nameHost.querySelectorAll('.token-row')]
         .find((node) => node.textContent.includes('Мира'));
       row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
       assert(renamed.length === 1 && renamed[0] === 't2', `переименовывают: ${JSON.stringify(renamed)}`);
+      const enemy = [...nameHost.querySelectorAll('.token-sides__btn')]
+        .find((node) => node.textContent.includes('Враги'));
+      enemy.click();
     });
     check('правый клик по строке открывает то же меню, что и на карте', () => {
       const row = [...nameHost.querySelectorAll('.token-row')]
@@ -3332,9 +3719,56 @@
       const items = [...menu.querySelectorAll('.token-menu__item')].map((node) => node.textContent);
       assert(items.some((text) => text.includes('Переименовать')), `нет переименования: ${items}`);
       assert(items.some((text) => text.includes('Скрыть имя')), `нет скрытия имени: ${items}`);
-      assert(menu.querySelector('select'), 'в меню нет выбора игрока');
-      menu.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      const selects = [...menu.querySelectorAll('select')];
+      assert(selects.length === 2, 'в меню нет выбора игрока и стороны');
+      assert(menu.textContent.includes('Сторона'), 'в меню нет подписи стороны');
+      assert(menu.textContent.includes('Бонус атаки'), 'в меню нет бонуса атаки');
+      assert(menu.textContent.includes('Класс брони'), 'в меню нет класса брони');
+      const numberInputs = [...menu.querySelectorAll('input[type="number"]')];
+      assert.strictEqual(numberInputs.length, 2, `числовых полей в меню: ${numberInputs.length}`);
+      numberInputs[1].value = '15';
+      numberInputs[1].dispatchEvent(new Event('change'));
+      assert(
+        acChanges.length === 1 && acChanges[0].tokenId === 't1' && acChanges[0].armorClass === 15,
+        `класс брони: ${JSON.stringify(acChanges)}`
+      );
+      selects[1].value = 'ally';
+      selects[1].dispatchEvent(new Event('change'));
+      assert(
+        sideChanges.length === 1 && sideChanges[0][0] === 't1' && sideChanges[0][1] === 'ally',
+        `смена стороны: ${JSON.stringify(sideChanges)}`
+      );
+      namePanel.closeMenu();
+    });
+
+    check('у фишки игрока бонус и КД берутся из листа, меню помещается на экран', () => {
+      const allyTab = [...nameHost.querySelectorAll('.token-sides__btn')]
+        .find((node) => node.textContent.includes('Союзники'));
+      allyTab.click();
+      const allyRow = [...nameHost.querySelectorAll('.token-row')]
+        .find((node) => node.textContent.includes('Мира'));
+      allyRow.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, clientX: 40, clientY: 40
+      }));
+      const menu = document.querySelector('.token-menu');
+      assert(menu.textContent.includes('18 · из листа'), `КД не из листа: ${menu.textContent}`);
+      assert(menu.textContent.includes('+5 · из листа'), `бонус не из листа: ${menu.textContent}`);
+      assert.strictEqual(menu.querySelectorAll('input[type="number"]').length, 0,
+        'у фишки игрока остались поля ввода боевых чисел');
+      namePanel.closeMenu();
+
+      const enemyTab = [...nameHost.querySelectorAll('.token-sides__btn')]
+        .find((node) => node.textContent.includes('Враги'));
+      enemyTab.click();
+      const enemyRow = [...nameHost.querySelectorAll('.token-row')]
+        .find((node) => node.textContent.includes('Гоблин'));
+      enemyRow.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true,
+        clientX: window.innerWidth - 2, clientY: window.innerHeight - 2
+      }));
+      const edge = document.querySelector('.token-menu').getBoundingClientRect();
+      assert(edge.right <= window.innerWidth && edge.bottom <= window.innerHeight,
+        `меню уехало за экран: ${Math.round(edge.right)}x${Math.round(edge.bottom)}`);
       namePanel.closeMenu();
     });
 
@@ -3355,8 +3789,8 @@
         search.value = '';
         search.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      assert(nameHost.querySelectorAll('.token-row:not([hidden])').length === nameTokens.length,
-        'поиск не сбросился');
+      assert(nameHost.querySelectorAll('.token-row:not([hidden])').length === 3,
+        'поиск не сбросился: на вкладке врагов должно остаться три строки');
     });
     check('фильтр оставляет только скрытые фишки и только фишки без имени', () => {
       const filters = [...nameHost.querySelectorAll('.token-filter')];
@@ -3366,8 +3800,8 @@
       assert(nameless.length === 1 && nameless[0].textContent.includes('Имя скрыто'),
         `фильтр «Без имени» показал: ${nameless.length}`);
       byLabel('Все').click();
-      assert(nameHost.querySelectorAll('.token-row:not([hidden])').length === nameTokens.length,
-        'фильтр «Все» не вернул все фишки');
+      assert(nameHost.querySelectorAll('.token-row:not([hidden])').length === 3,
+        'фильтр «Все» не вернул все фишки вкладки');
     });
     check('поиск и кнопки скрытия есть только у ДМ и только при нескольких фишках', () => {
       namePanel.render(TOKENS.slice(0, 2), PLAYERS, { role: 'dm', playerId: 'dm' });
@@ -3381,10 +3815,10 @@
     check('секции панели фишек сворачиваются и помнят состояние', () => {
       const heads = [...nameHost.querySelectorAll('.section__head')];
       assert(heads.length >= 2, `секций: ${heads.length}`);
-      const all = heads.find((node) => node.textContent.includes('Все фишки'));
+      const all = heads.find((node) => node.textContent.includes('Фишки на столе'));
       const body = all.nextElementSibling;
       assert(body && body.classList.contains('section__body'), 'под заголовком не тело секции');
-      assert(!body.hidden, 'тело секции «Все фишки» свёрнуто по умолчанию');
+      assert(!body.hidden, 'тело секции «Фишки на столе» свёрнуто по умолчанию');
       all.click();
       assert(body.hidden, 'секция не свернулась по клику');
       assert(all.getAttribute('aria-expanded') === 'false', 'состояние не отражено в aria');
@@ -3396,7 +3830,7 @@
       // секции заново на каждом событии фишки.
       namePanel.render(TOKENS, PLAYERS, { role: 'dm', playerId: 'dm' });
       const restored = [...nameHost.querySelectorAll('.section__head')]
-        .find((node) => node.textContent.includes('Все фишки'));
+        .find((node) => node.textContent.includes('Фишки на столе'));
       assert(restored.nextElementSibling.hidden, 'после перерисовки секция снова раскрылась');
       restored.click();
       assert(!restored.nextElementSibling.hidden, 'секция не раскрылась обратно');
@@ -3962,6 +4396,15 @@
       assert(document.querySelector('#table-campaign').textContent === 'Смоук-кампания', 'название кампании');
       assert(document.querySelector('#table-sub').textContent.includes('порт'), 'нет порта в подзаголовке');
     });
+    const firstBackups = await window.desktop.backupInfo();
+    check('при первом запуске стола кампания копируется сама', () => {
+      assert(firstBackups && firstBackups.ok, `нет данных о копиях: ${JSON.stringify(firstBackups)}`);
+      assert(firstBackups.count >= 1, `копий после старта: ${firstBackups.count}`);
+      assert(firstBackups.lastAt, 'не записано время последней копии');
+      assert(Array.isArray(firstBackups.items) && firstBackups.items.length >= 1,
+        'нет списка копий для восстановления');
+      assert(typeof window.desktop.restoreBackup === 'function', 'мост восстановления не объявлен');
+    });
     check('кнопки управления кампанией видны только ДМ', () => {
       assert(!document.querySelector('#btn-save-campaign').hidden, 'нет кнопки сохранения кампании');
       assert(!document.querySelector('#btn-stop-host').hidden, 'нет кнопки остановки стола');
@@ -4231,6 +4674,56 @@
       input.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }));
       assert(document.querySelector('#tab-sheet').classList.contains('is-active'), 'цифра в поле переключила вкладку');
     });
+    check('вкладки размечены как табуляция и листаются стрелками', () => {
+      document.querySelector('#tabbtn-chat').click();
+      const chat = document.querySelector('#tabbtn-chat');
+      assert.strictEqual(chat.getAttribute('role'), 'tab', 'у вкладки нет роли tab');
+      assert.strictEqual(chat.getAttribute('aria-selected'), 'true', 'активная вкладка не отмечена');
+      assert.strictEqual(chat.tabIndex, 0, 'активная вкладка вне порядка Tab');
+      assert.strictEqual(document.querySelector('#tab-chat').getAttribute('role'), 'tabpanel',
+        'панель не размечена как tabpanel');
+      assert.strictEqual(
+        document.querySelector('#tab-chat').getAttribute('aria-labelledby'), 'tabbtn-chat',
+        'панель не связана со своей вкладкой');
+      assert.strictEqual(
+        getComputedStyle(document.querySelector('.tabs')).overflowX, 'auto',
+        'ряд вкладок не листается вбок, крайняя вкладка может пропасть');
+      // Стрелка вправо переводит фокус и открывает соседнюю вкладку.
+      chat.focus();
+      chat.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      const dice = document.querySelector('#tabbtn-dice');
+      assert.strictEqual(dice.getAttribute('aria-selected'), 'true', 'стрелка не открыла кубики');
+      assert(document.querySelector('#tab-dice').classList.contains('is-active'), 'панель кубиков не открылась');
+      assert.strictEqual(document.activeElement, dice, 'фокус остался на старой вкладке');
+      document.querySelector('#tabbtn-chat').click();
+    });
+
+    check('разделы левой колонки сворачиваются и запоминаются', () => {
+      const panel = document.querySelector('[data-panel="participants"]');
+      const fold = panel.querySelector('.panel__fold');
+      assert(fold, 'у раздела нет кнопки сворачивания');
+      assert.strictEqual(fold.getAttribute('aria-expanded'), 'true', 'раздел не помечен раскрытым');
+      fold.click();
+      assert(panel.classList.contains('is-collapsed'), 'раздел не свернулся');
+      assert.strictEqual(fold.getAttribute('aria-expanded'), 'false', 'кнопка не сообщила о сворачивании');
+      assert.strictEqual(
+        getComputedStyle(panel.querySelector('#players-root')).display, 'none',
+        'содержимое свёрнутого раздела осталось видно');
+      const saved = JSON.parse(localStorage.getItem('dnd-table.collapsedPanels') || '[]');
+      assert(saved.includes('participants'), `свёрнутые разделы не сохранены: ${saved}`);
+      fold.click();
+      assert(!panel.classList.contains('is-collapsed'), 'раздел не развернулся обратно');
+    });
+
+    check('тосты и карточки объявляются экранному диктору', () => {
+      assert.strictEqual(document.querySelector('#toasts').getAttribute('aria-live'), 'polite',
+        'тосты не объявляются');
+      assert.strictEqual(document.querySelector('#roll-request-banner').getAttribute('role'), 'status',
+        'карточка проверки не объявляется');
+      assert.strictEqual(document.querySelector('#reaction-banner').getAttribute('aria-live'), 'polite',
+        'карточка реакции не объявляется');
+    });
+
     check('Ctrl+F открывает поиск по чату', () => {
       document.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'f', ctrlKey: true, bubbles: true, cancelable: true
@@ -4238,6 +4731,20 @@
       assert(document.querySelector('#tab-chat').classList.contains('is-active'), 'Ctrl+F не открыл чат');
       const search = document.querySelector('#tab-chat .chat__search-input');
       assert(search && document.activeElement === search, `фокус не в поиске: ${document.activeElement && document.activeElement.className}`);
+    });
+    check('«?» открывает шпаргалку горячих клавиш', () => {
+      const active = document.activeElement;
+      if (active && active.blur) active.blur();
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: '?', shiftKey: true, bubbles: true, cancelable: true
+      }));
+      const overlay = document.querySelector('#shortcuts-overlay');
+      assert(overlay, 'шпаргалка не открылась');
+      assert(overlay.textContent.includes('Горячие клавиши'), 'нет заголовка шпаргалки');
+      assert(overlay.textContent.includes('Ctrl + K'), 'нет поиска по кампании');
+      assert(overlay.textContent.includes('Двинуть выбранную фишку'), 'нет движения стрелками');
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      assert(!document.querySelector('#shortcuts-overlay'), 'шпаргалка не закрылась');
     });
     check('правую колонку можно перетянуть мышью и она помнит ширину', () => {
       const layout = document.querySelector('.layout');
@@ -4316,6 +4823,9 @@
       assert(Object.keys(sheets)[0] === 'p-smoke-1', 'чужой лист в снимке');
     });
 
+    // Ждём, пока сервер примет лист: иначе вывод фишки может обогнать
+    // сохранение, и фишка получит имя участника вместо имени персонажа.
+    const sheetSaved = new Promise((resolve) => playerSocket.once('characterSheetData', resolve));
     playerSocket.emit('saveCharacterSheet', {
       sheet: {
         playerName: 'Борис', characterName: 'Мира', charClass: 'Волшебница', race: 'Полуэльф',
@@ -4325,6 +4835,7 @@
         hitDice: '1d6', hp: 48, maxHp: 48, armorClass: 13, speed: 30
       }
     });
+    await sheetSaved;
 
     const playerRow = await waitFor(
       () => [...document.querySelectorAll('#players-root .player-row')]
@@ -4488,6 +4999,40 @@
       assert(text.includes('Сетка на карте'), 'нет настройки сетки');
       assert(overlay.querySelector('[data-setting="language"]'), 'нет выбора языка');
     });
+    check('настройки разложены по разделам', () => {
+      const overlay = settingsOverlay();
+      const tabs = [...overlay.querySelectorAll('.settings__nav [role="tab"]')];
+      assert(tabs.length >= 5, `разделов настроек: ${tabs.length}`);
+      const selected = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true');
+      assert.strictEqual(selected.length, 1, 'выбран не один раздел');
+      const panels = [...overlay.querySelectorAll('.settings__panel')];
+      assert.strictEqual(panels.filter((panel) => !panel.hidden).length, 1, 'видно не один раздел');
+      assert(tabs.some((tab) => tab.textContent === 'Доступность'), 'нет раздела доступности');
+    });
+    check('вкладка «Стол» показывает настройки сетки', () => {
+      const overlay = settingsOverlay();
+      const tab = [...overlay.querySelectorAll('.settings__nav [role="tab"]')]
+        .find((node) => node.textContent === 'Стол');
+      assert(tab, 'нет вкладки «Стол»');
+      tab.click();
+      const grid = overlay.querySelector('[data-setting="grid"]');
+      assert(grid && !grid.closest('[role="tabpanel"]').hidden, 'сетка осталась в скрытом разделе');
+      assert(overlay.querySelector('#settings-panel-general').hidden, 'общий раздел не скрылся');
+      assert.strictEqual(tab.getAttribute('aria-selected'), 'true', 'вкладка не стала активной');
+    });
+    check('стрелки переключают разделы настроек', () => {
+      const overlay = settingsOverlay();
+      const tabs = [...overlay.querySelectorAll('.settings__nav [role="tab"]')];
+      const active = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true');
+      active.focus();
+      active.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      const next = tabs[(tabs.indexOf(active) + 1) % tabs.length];
+      assert.strictEqual(next.getAttribute('aria-selected'), 'true', 'стрелка не переключила раздел');
+      next.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+      assert.strictEqual(tabs[0].getAttribute('aria-selected'), 'true', 'Home не вернул первый раздел');
+      const table = tabs.find((tab) => tab.textContent === 'Стол');
+      table.click();
+    });
     check('настройки стола доступны ДМ', () => {
       const grid = document.querySelector('.modal-overlay [data-setting="grid"]');
       const cell = document.querySelector('.modal-overlay [data-setting="cell"]');
@@ -4500,6 +5045,43 @@
       assert(overlay.textContent.includes('Журнал кампании'), 'нет раздела журнала');
       assert(byText(overlay, 'Экспорт сессии в Markdown'), 'нет кнопки выгрузки сессии');
     });
+    check('в настройках видно копии кампании и папку копий', () => {
+      const overlay = settingsOverlay();
+      assert(overlay.textContent.includes('Копии кампании'), 'нет строки о копиях');
+      assert(overlay.textContent.includes('пять последних'), 'не сказано, сколько копий хранится');
+      assert(byText(overlay, 'Открыть папку копий'), 'нет кнопки папки копий');
+    });
+    await waitFor(() => settingsOverlay().querySelector('.settings__backup'), 'список копий в настройках');
+    check('в настройках копию можно вернуть кнопкой', () => {
+      const row = settingsOverlay().querySelector('.settings__backup');
+      assert(row, 'нет строки копии');
+      const restore = byText(row, 'Вернуть');
+      assert(restore, 'нет кнопки возврата копии');
+      assert(row.querySelector('.settings__backup-date').textContent.trim(), 'у копии нет даты');
+    });
+
+    // Автосохранение: время выбирает мастер, значение живёт на компьютере.
+    const autosaveSelect = settingsOverlay().querySelector('[data-setting="autosave"]');
+    check('в настройках выбирается время автосохранения', () => {
+      assert(autosaveSelect, 'нет выбора автосохранения');
+      const values = [...autosaveSelect.options].map((option) => option.value);
+      assert.deepStrictEqual(values, ['15', '30', '60', '300'], `ступени автосохранения: ${values.join(', ')}`);
+    });
+    if (autosaveSelect) {
+      autosaveSelect.value = '30';
+      autosaveSelect.dispatchEvent(new Event('change'));
+      check('выбор автосохранения запоминается на компьютере', () => {
+        assert.strictEqual(
+          window.localStorage.getItem('dnd-table.autosaveSeconds'), '30',
+          'интервал не сохранён в localStorage');
+      });
+      const rejected = await window.desktop.setAutosaveInterval(1);
+      check('слишком частый автосейв не принимается', () => {
+        assert.strictEqual(rejected.ok, false);
+      });
+      autosaveSelect.value = '60';
+      autosaveSelect.dispatchEvent(new Event('change'));
+    }
     check('в настройках есть доступность: масштаб, контраст и палитра', () => {
       const overlay = settingsOverlay();
       assert(overlay.textContent.includes('Доступность'), 'нет раздела доступности');
@@ -5507,11 +6089,11 @@
     );
     check('картинка фишки грузится с сервера, а не из корня диска', () => {
       assert(tokenImageShown, `картинка фишки не появилась: ${mapDiagnostics()}`);
-      const background = document.querySelector('#map-root .token__circle--image').style.backgroundImage;
-      assert(background.includes('http://127.0.0.1:'), `фон фишки не с сервера: ${background}`);
-      assert(background.includes('/files/'), `фон фишки без пути к файлу: ${background}`);
+      const image = document.querySelector('#map-root .token__circle--image .token__image');
+      assert(image, 'в кружке нет картинки');
+      assert(image.src.includes('http://127.0.0.1:'), `картинка фишки не с сервера: ${image.src}`);
+      assert(image.src.includes('/files/'), `картинка фишки без пути к файлу: ${image.src}`);
     });
-    dmRaw.disconnect();
 
     document.querySelector('.tabs__btn[data-tab="dice"]').click();
     // Настоящий стол: бросаем формулу и быструю кость, чтобы проверить оба пути.
@@ -5544,6 +6126,171 @@
     });
     check('бросок кубика продублирован в чат', () => {
       assert(document.querySelector('#tab-chat').textContent.includes('бросил d20'), 'нет строки о броске в чате');
+    });
+
+    document.querySelector('#btn-search').click();
+    const liveSearch = await waitFor(
+      () => document.querySelector('#campaign-search-overlay input'),
+      'окно поиска на живом столе'
+    );
+    liveSearch.value = 'Мира';
+    liveSearch.dispatchEvent(new Event('input', { bubbles: true }));
+    const sheetHit = await waitFor(
+      () => [...document.querySelectorAll('#campaign-search-overlay .search-result')]
+        .find((row) => row.textContent.includes('Мира')),
+      'лист персонажа в поиске'
+    ).catch(() => null);
+    check('общий поиск находит лист персонажа', () => {
+      assert(sheetHit, 'лист не найден');
+      assert(document.querySelector('#campaign-search-overlay').textContent.includes('Листы'),
+        'нет группы листов');
+    });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    // Справочник приключения: NPC заводят вручную, и общий поиск должен не
+    // только находить его, но и подсвечивать карточку после перехода.
+    document.querySelector('.tabs__btn[data-tab="adventure"]').click();
+    const addNpc = await waitFor(
+      () => byText(document.querySelector('#tab-adventure'), '+ NPC'),
+      'кнопка нового NPC'
+    );
+    addNpc.click();
+    const npcInput = await waitFor(
+      () => document.querySelector('.modal-overlay input'),
+      'поле имени NPC'
+    );
+    npcInput.value = 'Смоук-НПС';
+    byText(document.querySelector('.modal-overlay'), 'Создать').click();
+    await waitFor(
+      () => document.querySelector('#tab-adventure [data-adv-name="Смоук-НПС"]'),
+      'карточка NPC в справочнике'
+    );
+
+    dmRaw.emit('setAdventureGroupStatblock', {
+      name: 'Смоук-НПС',
+      statblock: {
+        ac: 12,
+        hp: 7,
+        attacks: 'Кулак. Атака оружием: +3 к попаданию, 1d4 + 1 дробящего урона.'
+      }
+    });
+    const diceButtons = await waitFor(
+      () => {
+        const list = [...document.querySelectorAll('#tab-adventure .adv-dice__btn')];
+        return list.length >= 2 ? list : null;
+      },
+      'кнопки бросков из статблока'
+    );
+    check('статблок даёт кнопки атаки и урона', () => {
+      const texts = diceButtons.map((button) => button.textContent);
+      assert(texts.some((text) => text.includes('атака')), `нет атаки: ${texts.join('; ')}`);
+      assert(texts.some((text) => text.includes('урон')), `нет урона: ${texts.join('; ')}`);
+      assert(diceButtons.some((button) => button.title.includes('1d20+3')),
+        'атака не превратилась в d20+3');
+      assert(diceButtons.some((button) => button.title.includes('1d4+1')),
+        'урон не превратился в 1d4+1');
+    });
+
+    diceButtons.find((button) => button.title.includes('1d20+3')).click();
+    const dmRollCard = await waitFor(
+      () => {
+        const card = document.querySelector('#dm-roll:not([hidden])');
+        return card && card.querySelector('.dm-roll__result').textContent ? card : null;
+      },
+      'крупная карточка приватного броска'
+    );
+    check('приватный бросок показывается мастеру крупной карточкой', () => {
+      assert(/^\d+$/.test(dmRollCard.querySelector('.dm-roll__result').textContent),
+        'в карточке нет результата');
+      assert(dmRollCard.querySelector('.dm-roll__formula').textContent === '1d20+3',
+        'в карточке нет формулы');
+      assert(dmRollCard.querySelector('.dm-roll__label').textContent.includes('атака'),
+        'в карточке нет названия действия');
+    });
+    check('приватный бросок не попадает в чат', () => {
+      const chat = document.querySelector('#tab-chat');
+      assert(!chat || !chat.textContent.includes('1d20+3'), 'формула попала в чат');
+    });
+    dmRollCard.querySelector('.dm-roll__close').click();
+
+    const npcCard = document.querySelector('#tab-adventure [data-adv-name="Смоук-НПС"]');
+    check('монстра из справочника можно перетащить на карту', () => {
+      assert(npcCard && npcCard.draggable, 'карточка NPC не перетаскивается');
+    });
+    const fav = npcCard.querySelector('.adv-fav');
+    fav.click();
+    await waitFor(
+      () => document.querySelector('#tab-adventure [data-adv-name="Смоук-НПС"] .adv-fav')
+        .getAttribute('aria-pressed') === 'true',
+      'звёздочка избранного'
+    );
+    check('избранное отмечается на карточке', () => {
+      const star = document.querySelector('#tab-adventure [data-adv-name="Смоук-НПС"] .adv-fav');
+      assert(star && star.classList.contains('is-on'), 'звезда не зажглась');
+    });
+    dmRaw.disconnect();
+
+    const bestiaryButton = byText(document.querySelector('#tab-adventure'), 'Импорт из Open5e');
+    bestiaryButton.click();
+    const bestiary = await waitFor(
+      () => document.querySelector('.modal--bestiary'),
+      'окно импорта из Open5e'
+    );
+    const bestiaryInput = bestiary.querySelector('.bestiary-search__input');
+    check('окно Open5e просит название на русском или английском', () => {
+      assert(bestiaryInput, 'нет поля поиска');
+      assert(bestiaryInput.placeholder.includes('на русском или английском'),
+        `подсказка поля: ${bestiaryInput.placeholder}`);
+      assert(bestiary.querySelectorAll('.bestiary-step').length === 4,
+        'нет четырёх шагов загрузки');
+    });
+    byText(bestiary, 'Закрыть').click();
+    await waitFor(() => !document.querySelector('.modal--bestiary'), 'закрытие окна Open5e');
+
+    document.querySelector('#btn-search').click();
+    const advSearch = await waitFor(
+      () => document.querySelector('#campaign-search-overlay input'),
+      'поиск по приключению'
+    );
+    advSearch.value = 'Смоук-НПС';
+    advSearch.dispatchEvent(new Event('input', { bubbles: true }));
+    const advHit = await waitFor(
+      () => [...document.querySelectorAll('#campaign-search-overlay .search-result')]
+        .find((row) => row.textContent.includes('Смоук-НПС')),
+      'NPC в общем поиске'
+    );
+    advHit.click();
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    check('поиск находит NPC приключения и подсвечивает карточку', () => {
+      assert(document.querySelector('#tab-adventure .adv-search').value === 'Смоук-НПС',
+        'поиск в справочнике не заполнен');
+      const card = document.querySelector('#tab-adventure .adv-item.is-hit');
+      assert(card && card.dataset.advName === 'Смоук-НПС',
+        `карточка NPC не подсвечена: ${card && card.dataset.advName}`);
+    });
+
+    const deleteNpc = byText(document.querySelector('#tab-adventure'), 'Удалить');
+    check('у карточки NPC есть кнопка удаления', () => {
+      assert(deleteNpc, 'нет кнопки «Удалить»');
+    });
+    deleteNpc.click();
+    const deleteDialog = await waitFor(
+      () => [...document.querySelectorAll('.modal-overlay')]
+        .find((node) => node.textContent.includes('Удалить персонажа')),
+      'подтверждение удаления NPC'
+    );
+    byText(deleteDialog, 'Удалить').click();
+    await waitFor(
+      () => !document.querySelector('#tab-adventure [data-adv-name="Смоук-НПС"]'),
+      'удаление NPC из справочника'
+    );
+    check('удаление убирает карточку из справочника', () => {
+      assert(!document.querySelector('#tab-adventure [data-adv-name="Смоук-НПС"]'),
+        'карточка осталась после удаления');
+    });
+    check('у группы фишек на карте тоже есть удаление', () => {
+      const button = byText(document.querySelector('#tab-adventure'), 'Удалить');
+      assert(button, 'нет кнопки удаления у группы фишек');
     });
 
     const saveResult = await window.desktop.saveCampaign();

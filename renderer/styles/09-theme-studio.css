@@ -11,13 +11,9 @@
   color-scheme: dark;
 
   /* Компонентные токены: размеры, отступы и иконки. */
-  --space-1: 4px;
   --space-2: 6px;
   --space-3: 8px;
   --space-4: 12px;
-  --space-5: 16px;
-  --space-6: 24px;
-  --control-h: 34px;
   --icon-size: 16px;
   --icon-stroke: 1.5;
   --preview-radius: 6px;
@@ -1322,6 +1318,13 @@
 .card__icon {
   display: grid;
   place-items: center;
+  transition: border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.card:hover .card__icon {
+  transform: translateY(-2px) scale(1.06);
 }
 
 .card__icon svg {
@@ -1522,6 +1525,26 @@
 @media (max-width: 560px) {
   .theme-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .settings__nav {
+    flex-direction: row;
+    padding: 0 0 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .settings__tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .modal--settings {

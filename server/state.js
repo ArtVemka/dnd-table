@@ -482,6 +482,40 @@ function normalizeStatblock(input) {
 }
 
 /**
+ * Ссылка на картинку персонажа: либо файл кампании, либо прямой http(s)-URL.
+ * data-URL в кампании не храним, иначе base64 раздувает JSON и рассылки.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function normalizeAdventureImage(value) {
+  const text = typeof value === 'string' ? sanitizeText(value, LIMITS.maxAdventureImageRef).trim() : '';
+  if (/^\/files\/[A-Za-z0-9_.-]{1,80}$/.test(text)) return text;
+  if (/^https?:\/\/[^\s]+$/i.test(text)) return text;
+  return '';
+}
+
+/**
+ * Кадрирование портрета: зум и сдвиг внутри квадрата 1:1.
+ *
+ * Сдвиг хранится в процентах от стороны кадра. Предел зависит от зума:
+ * при 200% картинка шире кадра на 50% с каждой стороны, дальше двигать
+ * нечего. Одинаковые числа понимают и предпросмотр, и круглая фишка,
+ * поэтому выбранная область переносится один в один.
+ * @param {unknown} raw
+ * @returns {{imageZoom: number, imageX: number, imageY: number}}
+ */
+function normalizeImageCrop(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const zoom = clampNumber(source.imageZoom, 1, 4, 1);
+  const limit = (zoom - 1) * 50;
+  return {
+    imageZoom: zoom,
+    imageX: clampNumber(source.imageX, -limit, limit, 0),
+    imageY: clampNumber(source.imageY, -limit, limit, 0)
+  };
+}
+
+/**
  * Приводит импортированное приключение к виду, который безопасно отдать
  * интерфейсу. Всё прогоняется через те же ограничения, что и остальной
  * текст: неизвестные поля не сохраняются, длинные строки обрезаются.
@@ -525,9 +559,12 @@ function normalizeAdventure(input) {
       name: sanitizeText(item && item.name, LIMITS.maxAdventureTitle) || 'Персонаж',
       // npc или character: только для подписи в карточке, на механику не влияет.
       type: sanitizeText(item && item.type, 20) || 'npc',
-      // Картинки импорта — это ссылки вида /files/<имя>. Не строка сюда не попадает:
-      // приводить 42 к «42» зачем, а вот тихо испорченная ссылка мешает потом.
-      image: typeof item?.image === 'string' ? sanitizeText(item.image, LIMITS.maxAdventureImageRef) : '',
+      // Картинки импорта — это ссылки вида /files/<имя> или прямой URL из
+      // Open5e. Не строка сюда не попадает: приводить 42 к «42» зачем, а вот
+      // тихо испорченная ссылка мешает потом.
+      image: normalizeAdventureImage(item && item.image),
+      ...normalizeImageCrop(item),
+      favorite: Boolean(item && item.favorite),
       statblock: normalizeStatblock(item && item.statblock),
       sourceId: String((item && item.sourceId) || '')
     }))
@@ -704,6 +741,12 @@ class RoomState {
     this.inventory = [];
     /** @type {object[]} просьбы мастера бросить проверку. */
     this.rollRequests = [];
+    /**
+     * Неподтверждённые реакции игроков. Живут до конца раунда и переживают
+     * переподключение: карточка в памяти клиента пропадала при обрыве связи.
+     * @type {object[]}
+     */
+    this.pendingReactions = [];
     /** @type {string[]} снимки карты, фишек и боя для отмены действий мастера. */
     this.undoStack = [];
     /**
@@ -713,7 +756,6 @@ class RoomState {
      * @type {object|null}
      */
     this.adventure = null;
-    this.dirty = false;
     if (campaign && campaign.state) this.hydrate(campaign.state);
   }
 
@@ -845,6 +887,7 @@ class RoomState {
       // Кто ходил, того больше нет: действует следующий по списку.
       const next = this.initiative.entries[index] || this.initiative.entries[index - 1] || null;
       this.initiative.turnId = next ? next.id : null;
+      this.resetMovement();
     }
     return true;
   }
@@ -877,6 +920,8 @@ class RoomState {
     if (!id) {
       this.initiative.round = 1;
       this.initiative.turnId = entries.length ? entries[0].id : null;
+      this.resetMovement();
+      this.pendingReactions = [];
     }
   }
 
@@ -884,6 +929,7 @@ class RoomState {
   setInitiativeTurn(entryId) {
     const id = String(entryId || '');
     if (!this.initiative.entries.some((entry) => entry.id === id)) return false;
+    if (this.initiative.turnId !== id) this.resetMovement();
     this.initiative.turnId = id;
     return true;
   }
@@ -901,23 +947,84 @@ class RoomState {
     if (!entries.length) return false;
     const step = dir >= 0 ? 1 : -1;
     const current = entries.findIndex((entry) => entry.id === this.initiative.turnId);
+    const previous = this.initiative.turnId;
+    const round = this.initiative.round;
     if (current < 0) {
       this.initiative.turnId = entries[0].id;
-      return true;
+    } else {
+      const next = current + step;
+      if (next >= entries.length) {
+        this.initiative.turnId = entries[0].id;
+        this.initiative.round += 1;
+      } else if (next < 0) {
+        // Назад из первого: не крутим раунд, а просто остаёмся в текущем раунде.
+        this.initiative.turnId = entries[0].id;
+      } else {
+        this.initiative.turnId = entries[next].id;
+      }
     }
-    const next = current + step;
-    if (next >= entries.length) {
-      this.initiative.turnId = entries[0].id;
-      this.initiative.round += 1;
-      return true;
-    }
-    if (next < 0) {
-      // Назад из первого: не крутим раунд, а просто остаёмся в текущем раунде.
-      this.initiative.turnId = entries[0].id;
-      return true;
-    }
-    this.initiative.turnId = entries[next].id;
+    // Ход сменился — счётчик движения начинается заново. Реакции прошлого
+    // раунда на новом уже не предлагаются.
+    if (this.initiative.turnId !== previous) this.resetMovement();
+    if (this.initiative.round !== round) this.clearExpiredReactions();
     return true;
+  }
+
+  /**
+   * Сбрасывает пройденные клетки у всех фишек.
+   *
+   * Скорость считается за ход, а не за бой, поэтому счётчик обнуляется при
+   * каждой смене хода. Хранится на сервере, чтобы пережить перезагрузку окна.
+   */
+  resetMovement() {
+    for (const token of this.tokens) token.movedCells = 0;
+  }
+
+  /**
+   * Убирает реакции прошлых раундов. Повод живёт до конца раунда: на новом
+   * ходу отвечать на него уже поздно.
+   */
+  clearExpiredReactions() {
+    this.pendingReactions = this.pendingReactions
+      .filter((item) => item.round >= this.initiative.round);
+  }
+
+  /**
+   * Запоминает повод для реакции игрока.
+   * @param {{playerId: string, attackerName: string, targetName: string, bonus?: number, targetAc?: number|null}} input
+   * @returns {object}
+   */
+  addReaction(input) {
+    const reaction = {
+      id: `reaction-${Date.now()}-${this.pendingReactions.length}`,
+      playerId: String(input.playerId),
+      attackerName: sanitizeText(input.attackerName, LIMITS.maxNameLength) || 'Противник',
+      targetName: sanitizeText(input.targetName, LIMITS.maxNameLength) || 'Фишка',
+      bonus: clampInt(input.bonus, -5, 20, 0),
+      targetAc: Number.isFinite(Number(input.targetAc)) && Number(input.targetAc) >= 1
+        ? clampInt(input.targetAc, 1, 60, 10)
+        : null,
+      round: this.initiative.round
+    };
+    this.pendingReactions.push(reaction);
+    // Пять карточек — потолок интерфейса; больше за один раунд не бывает.
+    if (this.pendingReactions.length > 5) this.pendingReactions.shift();
+    return reaction;
+  }
+
+  /**
+   * Снимает реакцию после броска или отказа.
+   * @param {string} id
+   * @param {{playerId: string, isDm: boolean}} viewer
+   * @returns {object|null} снятая запись или null
+   */
+  removeReaction(id, viewer) {
+    const index = this.pendingReactions.findIndex((item) => item.id === String(id));
+    if (index < 0) return null;
+    const reaction = this.pendingReactions[index];
+    if (!viewer.isDm && reaction.playerId !== viewer.playerId) return null;
+    this.pendingReactions.splice(index, 1);
+    return reaction;
   }
 
   /**
@@ -965,6 +1072,8 @@ class RoomState {
   /** Полный сброс боя: список пуст, первый ход никому не принадлежит. */
   resetInitiative() {
     this.initiative = emptyInitiative();
+    this.resetMovement();
+    this.pendingReactions = [];
   }
 
 /**
@@ -1157,10 +1266,28 @@ fogMask: normalizeFog(source.fogMask),
       y: clampNumber(token.y, 0, 1, 0.5),
       imageUrl: typeof token.imageUrl === 'string' ? token.imageUrl : null,
       assignedPlayerId: token.assignedPlayerId ? String(token.assignedPlayerId) : null,
+      // Сторона стола. Нужна реакциям (кто по кому бьёт) и двум вкладкам
+      // панели фишек. Старые кампании поля не знают: фишка с игроком — союзник,
+      // остальные — враги, как и было до появления поля.
+      side: token.side === 'ally' || token.side === 'enemy'
+        ? token.side
+        : (token.assignedPlayerId ? 'ally' : 'enemy'),
+      // Бонус к броску атаки по возможности. Ноль — бросок без модификатора.
+      attackBonus: clampInt(token.attackBonus, -5, 20, 0),
+      // Класс брони монстра: без него реакция игрока по врагу оставалась бы
+      // без исхода. null — КД неизвестен.
+      armorClass: Number.isFinite(Number(token.armorClass)) && Number(token.armorClass) >= 1
+        ? clampInt(token.armorClass, 1, 60, 10)
+        : null,
+      // Пройденные за текущий ход клетки. Считает сервер, чтобы остаток
+      // скорости пережил перезагрузку и совпадал у всех клиентов.
+      movedCells: clampInt(token.movedCells, 0, 1000, 0),
       // Фишка, выведенная из листа, носит аватар игрока и продолжает следить за
       // ним. Картинку, поставленную руками, помечаем как «свою»: дальше
       // аватар в неё не лезет.
       avatarFromSheet: Boolean(token.avatarFromSheet),
+      // Кадрирование портрета из бестиария. Ноль-сдвиг и зум 1 — центр.
+      ...normalizeImageCrop(token),
       // Скрытая фишка — заготовка мастера: он её расставляет и проверяет, а
       // игроки её не видят вовсе. Сервер такие фишки игрокам не отдаёт, поле
       // нужно самому мастеру, чтобы отличить заготовку от готовой.
@@ -1314,13 +1441,11 @@ fogMask: normalizeFog(source.fogMask),
       };
       this.players.set(playerId, player);
       this.sheets.set(playerId, createEmptySheet(name));
-      this.markDirty();
     } else {
       player.name = name;
       // Стол старого формата: ключа ещё не было, закрепляем его за игроком
       // при первом входе, дальше личность защищена.
       if (playerKey && !player.playerKey) player.playerKey = playerKey;
-      this.markDirty();
     }
     return player;
   }
@@ -1347,10 +1472,14 @@ fogMask: normalizeFog(source.fogMask),
   tokenForViewer(token, isDm) {
     if (isDm || !token) return token;
     const patch = {};
-    // Прочность прячем только у монстров: у фишки игрока она и так у всех.
-    if (token.maxHp && !token.assignedPlayerId) {
+    // Прочность и КД прячем у врагов: не только у монстров без владельца, но
+    // и у фишки, которой мастер вручную поставил сторону «враг» и назначил
+    // игрока. Своя фишка игрока остаётся с прочностью.
+    const enemy = token.side === 'enemy' || (!token.side && !token.assignedPlayerId);
+    if (token.maxHp && enemy) {
       patch.maxHp = null;
       patch.hp = null;
+      patch.armorClass = null;
     }
     if (token.hideName) {
       // Подпись и буква в кружке рисуются по имени, поэтому игрок получает
@@ -1380,7 +1509,6 @@ fogMask: normalizeFog(source.fogMask),
     player.name = name;
     const sheet = this.sheets.get(player.playerId);
     if (sheet && sheet.playerName === previous) sheet.playerName = name;
-    this.markDirty();
     return player;
   }
 
@@ -1556,13 +1684,19 @@ fogMask: normalizeFog(source.fogMask),
       journal: isDm ? this.journal : '',
       journalEntries: isDm ? this.journalEntries : [],
       inventory: this.inventory,
-      rollRequests: this.rollRequests
+      rollRequests: this.rollRequests,
+      // Реакции: мастер видит все, игрок только свои. Иначе чужой повод
+      // раскрыл бы ему статы и положение чужой фишки.
+      reactions: isDm
+        ? this.pendingReactions
+        : this.pendingReactions.filter((item) => item.playerId === viewer.playerId)
     };
   }
 
   saveJournalEntry(input) {
     const entry = normalizeJournalEntry(input);
     if (!entry) return null;
+    this.pushUndo();
     const index = this.journalEntries.findIndex((item) => item.id === entry.id);
     if (index >= 0) {
       this.journalEntries[index] = entry;
@@ -1570,21 +1704,21 @@ fogMask: normalizeFog(source.fogMask),
       this.journalEntries.push(entry);
       if (this.journalEntries.length > LIMITS.maxJournalEntries) this.journalEntries.shift();
     }
-    this.markDirty();
     return entry;
   }
 
   deleteJournalEntry(id) {
     const next = this.journalEntries.filter((item) => item.id !== id);
     if (next.length === this.journalEntries.length) return false;
+    this.pushUndo();
     this.journalEntries = next;
-    this.markDirty();
     return true;
   }
 
   saveInventoryItem(input) {
     const item = normalizeInventoryItem(input);
     if (!item) return null;
+    this.pushUndo();
     const index = this.inventory.findIndex((entry) => entry.id === item.id);
     if (index >= 0) {
       this.inventory[index] = item;
@@ -1592,15 +1726,14 @@ fogMask: normalizeFog(source.fogMask),
       this.inventory.push(item);
       if (this.inventory.length > LIMITS.maxInventoryItems) this.inventory.shift();
     }
-    this.markDirty();
     return item;
   }
 
   deleteInventoryItem(id) {
     const next = this.inventory.filter((item) => item.id !== id);
     if (next.length === this.inventory.length) return false;
+    this.pushUndo();
     this.inventory = next;
-    this.markDirty();
     return true;
   }
 
@@ -1609,7 +1742,6 @@ fogMask: normalizeFog(source.fogMask),
     if (!request) return null;
     this.rollRequests.push(request);
     if (this.rollRequests.length > LIMITS.maxRollRequests) this.rollRequests.shift();
-    this.markDirty();
     return request;
   }
 
@@ -1617,7 +1749,6 @@ fogMask: normalizeFog(source.fogMask),
     const next = this.rollRequests.filter((item) => item.id !== id);
     if (next.length === this.rollRequests.length) return false;
     this.rollRequests = next;
-    this.markDirty();
     return true;
   }
 
@@ -1629,7 +1760,12 @@ fogMask: normalizeFog(source.fogMask),
       // Какая карта показана, живёт отдельно от вкладок: без этих двух полей
       // отмена показа карты вернула бы заготовку, но оставила её на столе.
       activeMap: this.activeMap,
-      activeMapId: this.activeMapId
+      activeMapId: this.activeMapId,
+      // Журнал и склад мастер набирает руками, и потерять их страшнее, чем
+      // сдвинутую фишку: удаление записи отменяется тем же Ctrl+Z.
+      journal: this.journal,
+      journalEntries: this.journalEntries,
+      inventory: this.inventory
     }));
     if (this.undoStack.length > 20) this.undoStack.shift();
   }
@@ -1641,14 +1777,12 @@ fogMask: normalizeFog(source.fogMask),
     this.maps = data.maps;
     this.tokens = data.tokens;
     this.initiative = data.initiative;
+    this.journal = data.journal;
+    this.journalEntries = data.journalEntries;
+    this.inventory = data.inventory;
     if ('activeMap' in data) this.activeMap = data.activeMap;
     if ('activeMapId' in data) this.activeMapId = data.activeMapId;
-    this.markDirty();
     return true;
-  }
-
-  markDirty() {
-    this.dirty = true;
   }
 }
 

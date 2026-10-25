@@ -168,7 +168,6 @@ async function createTableServer(options) {
   });
 
   const markDirty = () => {
-    room.markDirty();
     onDirty();
   };
 
@@ -403,6 +402,7 @@ async function createTableServer(options) {
     for (const token of room.tokens) {
       if (!token.avatarFromSheet || token.assignedPlayerId !== playerId) continue;
       token.imageUrl = player.avatar;
+      resetImageCrop(token);
       emitToken('tokenUpdated', token);
     }
     markDirty();
@@ -419,6 +419,13 @@ async function createTableServer(options) {
    * @returns {string}
    */
   const groupKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+  /** Новая картинка начинается с центра: старый кадр к ней не подходит. */
+  const resetImageCrop = (token) => {
+    token.imageZoom = 1;
+    token.imageX = 0;
+    token.imageY = 0;
+  };
 
   io.on('connection', (socket) => {
     socket.data.role = null;
@@ -742,6 +749,8 @@ async function createTableServer(options) {
         // останется цветным кружком.
         imageUrl: player.avatar || null,
         assignedPlayerId: playerId,
+        // Фишка из листа — всегда союзник: за столом это персонаж игрока.
+        side: 'ally',
         avatarFromSheet: true,
         // Как и любая новая фишка, сначала скрыта: мастер выводит партию и
         // проверяет расстановку, потом открывает.
@@ -969,6 +978,16 @@ socket.on('setGrid', (payload) => {
         y: 0.5,
         imageUrl: null,
         assignedPlayerId: null,
+        // Новая фишка из формы — враг: форму чаще всего заполняют ради
+        // монстра. Вкладка «Союзники» создаёт союзника, см. payload.side.
+        side: payload && payload.side === 'ally' ? 'ally' : 'enemy',
+        // Бонус атаки нужен реакции: иначе карточка кидает голый d20.
+        attackBonus: clampInt(payload && payload.attackBonus, -5, 20, 0),
+        // КД можно задать сразу: он нужен, когда по фишке бьют реакцией.
+        armorClass: Number.isFinite(Number(payload && payload.armorClass))
+          && Number(payload.armorClass) >= 1
+          ? clampInt(payload.armorClass, 1, 60, 10)
+          : null,
         // Новая фишка появляется скрытой: мастер сначала расставляет и
         // проверяет, и только потом открывает её игрокам. Без этого инициатива
         // начиналась бы с того, что все монстры уже на виду.
@@ -1365,6 +1384,55 @@ socket.on('setGrid', (payload) => {
     });
 
     /**
+     * Сторона фишки: союзник или враг.
+     *
+     * От неё зависят вкладка в панели фишек и то, кто по кому бьёт реакцией.
+     * Решает мастер: игроку чужую фишку перекрашивать незачем.
+     */
+    socket.on('setTokenSide', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      const side = payload && payload.side;
+      if (side !== 'ally' && side !== 'enemy') return emitError(socket, 'Неизвестная сторона фишки');
+      if (token.side === side) return;
+      token.side = side;
+      markDirty();
+      emitToken('tokenUpdated', token);
+      onLog(`Фишка «${token.name}» теперь ${side === 'ally' ? 'союзник' : 'враг'}`);
+    });
+
+    /** Бонус атаки фишки: попадает в бросок реакции. */
+    socket.on('setTokenAttackBonus', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      if (token.assignedPlayerId) {
+        return emitError(socket, 'Бонус атаки игрока берётся из его листа');
+      }
+      token.attackBonus = clampInt(payload && payload.attackBonus, -5, 20, 0);
+      markDirty();
+      emitToken('tokenUpdated', token);
+    });
+
+    /** Класс брони фишки: по нему реакция сама считает попадание. */
+    socket.on('setTokenArmorClass', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      if (token.assignedPlayerId) {
+        return emitError(socket, 'Класс брони игрока берётся из его листа');
+      }
+      const raw = payload && payload.armorClass;
+      // Пустое поле или ноль означают «КД неизвестен», а не КД 0.
+      token.armorClass = raw === null || raw === '' || Number(raw) === 0
+        ? null
+        : clampInt(raw, 1, 60, 10);
+      markDirty();
+      emitToken('tokenUpdated', token);
+    });
+
+    /**
      * Скрытие одной фишки. Правка только мастерская: скрытость решает, что
      * видно игроку, а значит, решать её должен тот, кто за столом видит всё.
      */
@@ -1380,9 +1448,14 @@ socket.on('setGrid', (payload) => {
     socket.on('setAllTokensHidden', (payload) => {
       if (!requireDm(socket)) return;
       const hidden = !(payload && payload.hidden === false);
+      // Вкладки делят стол на союзников и врагов, поэтому «показать все»
+      // на вкладке не должно открывать фишки с другой стороны.
+      const side = payload && payload.side;
+      const scoped = side === 'ally' || side === 'enemy';
       // Считаем реальное изменение, иначе playersUpdate и лог врут.
       let changed = 0;
       for (const token of room.tokens) {
+        if (scoped && token.side !== side) continue;
         if (Boolean(token.hidden) === hidden) continue;
         changed += 1;
         emitTokenVisibility(token, hidden);
@@ -1452,6 +1525,13 @@ socket.on('setGrid', (payload) => {
         const playerId = String(raw);
         if (!room.players.has(playerId)) return emitError(socket, 'Игрок не найден');
         token.assignedPlayerId = playerId;
+        // За фишкой игрока стоит его персонаж, а персонаж игрока — союзник.
+        // Если мастер всё же выставил врага, он переключит сторону в меню.
+        token.side = 'ally';
+        // Боевые числа теперь берутся из листа: старые значения монстра
+        // иначе остались бы в снимке и путали реакцию.
+        token.armorClass = null;
+        token.attackBonus = 0;
       }
       markDirty();
       emitToken('tokenUpdated', token);
@@ -1471,6 +1551,9 @@ socket.on('setGrid', (payload) => {
       try {
         const fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
         token.imageUrl = `/files/${fileName}`;
+        // Новый файл — новый кадр: старый зум и сдвиг к чужой картинке
+        // не подходят и показывали бы пустой угол.
+        resetImageCrop(token);
         // Картинку поставили руками — она перестаёт быть аватаром игрока.
         // Иначе следующая смена портрета тихо затёрла бы то, что нарисовали
         // для этой фишки специально.
@@ -1504,7 +1587,10 @@ socket.on('setGrid', (payload) => {
       try {
         const fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
         const url = `/files/${fileName}`;
-        for (const token of group) token.imageUrl = url;
+        for (const token of group) {
+          token.imageUrl = url;
+          resetImageCrop(token);
+        }
         markDirty();
         // Одним событием, а не по одному на фишку: клиент на каждое событие
         // перерисовывает и карту, и список фишек, и весь справочник приключения.
@@ -1557,6 +1643,47 @@ socket.on('setGrid', (payload) => {
         emitError(socket, error && error.quota ? error.message : 'Не получилось сохранить картинку');
         onLog(`Ошибка сохранения картинки: ${error.message}`);
       }
+    });
+
+    /**
+     * Удаление персонажа из справочника. Удаляется вся группа с этим именем:
+     * импорт кладёт «Кобольда» двадцатью записями, и оставлять их после
+     * нажатия «Удалить» было бы обманом. Фишки на карте не трогаем: это уже
+     * отдельные объекты стола, и мастер мог поставить их осознанно.
+     */
+    socket.on('deleteAdventureActor', (payload) => {
+      if (!requireDm(socket)) return;
+      if (!room.adventure) return emitError(socket, 'В кампании нет приключения');
+      const name = sanitizeText(payload && payload.name, LIMITS.maxAdventureTitle).trim();
+      if (!name) return emitError(socket, 'Не указано название персонажа');
+      const key = groupKey(name);
+      const before = room.adventure.actors.length;
+      room.adventure.actors = room.adventure.actors.filter((entry) => groupKey(entry.name) !== key);
+      if (room.adventure.actors.length === before) {
+        return emitError(socket, 'В приключении нет такого персонажа');
+      }
+      markDirty();
+      io.to('dm-sockets').emit('adventureUpdated', room.adventure);
+      onLog(`Персонаж <${name}> удалён из справочника`);
+    });
+
+    /**
+     * Избранное в справочнике: звёздочка на карточке. Хранится у всех записей
+     * группы, чтобы после импорта «Кобольд ×20» она не разъехалась.
+     */
+    socket.on('setAdventureActorFavorite', (payload) => {
+      if (!requireDm(socket)) return;
+      if (!room.adventure) return emitError(socket, 'В кампании нет приключения');
+      const name = sanitizeText(payload && payload.name, LIMITS.maxAdventureTitle).trim();
+      if (!name) return emitError(socket, 'Не указано название персонажа');
+      const key = groupKey(name);
+      const group = room.adventure.actors.filter((entry) => groupKey(entry.name) === key);
+      if (!group.length) return emitError(socket, 'В приключении нет такого персонажа');
+      const favorite = Boolean(payload && payload.favorite);
+      for (const actor of group) actor.favorite = favorite;
+      markDirty();
+      io.to('dm-sockets').emit('adventureUpdated', room.adventure);
+      onLog(`Персонаж <${name}> ${favorite ? 'в избранном' : 'удалён из избранного'}`);
     });
 
     /**
@@ -1614,29 +1741,57 @@ socket.on('setGrid', (payload) => {
       const requestedMap = payload && payload.mapType;
       const mapType = MAP_TYPES.includes(requestedMap) ? requestedMap : (room.activeMap || 'battle');
       const maxHp = Number(block.hp) > 0 ? clampInt(block.hp, 1, LIMITS.maxTokenHp, 1) : null;
-      const image = typeof actor.image === 'string' && /^\/files\/[A-Za-z0-9_.-]{1,80}$/.test(actor.image)
+      const image = typeof actor.image === 'string'
+        && (/^\/files\/[A-Za-z0-9_.-]{1,80}$/.test(actor.image) || /^https?:\/\/\S+$/i.test(actor.image))
         ? actor.image
         : null;
-      const token = {
-        id: newTokenId(),
-        name: actor.name,
-        mapType,
-        mapId: sanitizeText(payload && payload.mapId, 80),
-        x: 0.5,
-        y: 0.5,
-        imageUrl: image,
-        assignedPlayerId: null,
-        hidden: true,
-        color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length],
-        size: clampInt(block.size, 1, 4, 1),
-        maxHp,
-        hp: maxHp,
-        conditions: []
-      };
-      room.tokens.push(token);
+      const requested = clampInt(payload && payload.count, 1, 20, 1);
+      const free = LIMITS.maxTokens - room.tokens.length;
+      if (free <= 0) return emitError(socket, 'Лимит фишек на столе уже достигнут');
+      const count = Math.min(requested, free);
+      const baseX = clampNumber(payload && payload.x, 0, 1, 0.5);
+      const baseY = clampNumber(payload && payload.y, 0, 1, 0.5);
+      const rows = Math.ceil(count / 3);
+      const mapId = sanitizeText(payload && payload.mapId, 80);
+      for (let index = 0; index < count; index += 1) {
+        const token = {
+          id: newTokenId(),
+          name: actor.name,
+          mapType,
+          mapId,
+          // Копии ставим сеткой вокруг точки броска, чтобы они не легли
+          // друг на друга и их можно было сразу растащить.
+          x: clampNumber(baseX + ((index % 3) - 1) * 0.05, 0.02, 0.98, 0.5),
+          y: clampNumber(baseY + (Math.floor(index / 3) - (rows - 1) / 2) * 0.05, 0.02, 0.98, 0.5),
+          imageUrl: image,
+          imageZoom: actor.imageZoom,
+          imageX: actor.imageX,
+          imageY: actor.imageY,
+          assignedPlayerId: null,
+          // Статблок из приключения — по умолчанию враг. Дружелюбного НПС
+          // мастер переключит в меню фишки.
+          side: 'enemy',
+          // КД из статблока: без него атака игрока по этому монстру не имела
+          // бы исхода и мастер считал бы попадание вручную.
+          armorClass: Number.isFinite(Number(block.ac)) && Number(block.ac) >= 1
+            ? clampInt(block.ac, 1, 60, 10)
+            : null,
+          attackBonus: 0,
+          movedCells: 0,
+          hidden: true,
+          color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length],
+          size: clampInt(block.size, 1, 4, 1),
+          maxHp,
+          hp: maxHp,
+          conditions: []
+        };
+        room.tokens.push(token);
+        emitToken('tokenCreated', token);
+      }
       markDirty();
-      emitToken('tokenCreated', token);
-      onLog(`Фишка <${token.name}> создана из статблока`);
+      onLog(count > 1
+        ? `Фишки <${actor.name}> созданы из статблока: ${count} шт.`
+        : `Фишка <${actor.name}> создана из статблока`);
     });
 
     socket.on('moveToken', (payload) => {
@@ -1667,7 +1822,33 @@ socket.on('setGrid', (payload) => {
       markDirty();
       // Позиция меняется часто: рассылаем без истории и обновляем только это поле.
       // Заготовка мастера двигается молча: игрокам её координаты не нужны.
-      emitToken('tokenMoved', token, { tokenId: token.id, x, y });
+      const meta = { tokenId: token.id, x, y };
+      // Конец хода и стартовая клетка нужны для реакции на выход из
+      // досягаемости: промежуточные сообщения перетаскивания её не считают.
+      if (payload && payload.final) meta.final = true;
+      const from = payload && payload.from;
+      if (from && Number.isFinite(Number(from.col)) && Number.isFinite(Number(from.row))) {
+        meta.from = { col: Math.round(Number(from.col)), row: Math.round(Number(from.row)) };
+      }
+      // Путь, который игрок провёл мышью: по нему считается реакция на выход из
+      // досягаемости. Клиентский, но только для подсказки мастеру, поэтому
+      // достаточно проверить форму и потолок.
+      const path = payload && payload.path;
+      if (Array.isArray(path)) {
+        const cells = path.slice(0, 200)
+          .filter((cell) => cell && Number.isFinite(Number(cell.col)) && Number.isFinite(Number(cell.row)))
+          .map((cell) => ({ col: Math.round(Number(cell.col)), row: Math.round(Number(cell.row)) }));
+        if (cells.length > 1) meta.path = cells;
+      }
+      // Пройденные клетки копятся на сервере: остаток скорости должен
+      // пережить перезагрузку окна и совпадать у всех, кто смотрит на фишку.
+      if (meta.final && meta.path) {
+        const steps = meta.path.length - 1;
+        token.movedCells = Math.min(1000, (Number(token.movedCells) || 0) + steps);
+        meta.spent = steps;
+        meta.movedCells = token.movedCells;
+      }
+      emitToken('tokenMoved', token, meta);
     });
 
     /**
@@ -1873,6 +2054,43 @@ socket.on('setGrid', (payload) => {
      * Кубики
      * ------------------------------------------------------------------ */
 
+    /**
+     * Мастер передаёт повод для реакции игроку.
+     *
+     * Бросок делает тот, чья фишка атакует: иначе игрок не участвует в
+     * собственной реакции. Имя и бонус передаются в событии, а не читаются
+     * игроком из фишки: статы монстра ему не выдаются.
+     */
+    socket.on('reactionPrompt', (payload) => {
+      if (!requireDm(socket)) return;
+      const playerId = String((payload && payload.playerId) || '');
+      const player = room.players.get(playerId);
+      if (!player || player.role !== ROLE_PLAYER) return emitError(socket, 'Игрок не найден');
+      const rawAc = Number(payload && payload.targetAc);
+      const targetAc = Number.isFinite(rawAc) && rawAc >= 1 && rawAc <= 60 ? Math.round(rawAc) : null;
+      // Повод хранится в состоянии: игрок может переподключиться, и карточка
+      // не должна исчезнуть вместе с его сокетом.
+      const reaction = room.addReaction({
+        playerId,
+        attackerName: payload && payload.attackerName,
+        targetName: payload && payload.targetName,
+        bonus: payload && payload.bonus,
+        targetAc
+      });
+      io.to(playerId).emit('reactionPrompt', reaction);
+    });
+
+    /** Игрок бросил или отказался: карточка снимается у него и у мастера. */
+    socket.on('reactionResolved', (payload) => {
+      if (!requireJoined(socket)) return;
+      const removed = room.removeReaction(
+        payload && payload.id,
+        { playerId: socket.data.playerId, isDm: socket.data.role === ROLE_DM }
+      );
+      if (!removed) return;
+      io.to(removed.playerId).emit('reactionResolved', { id: removed.id });
+    });
+
 socket.on('rollDice', (payload) => {
       if (!requireJoined(socket)) return;
       // Формулу разбирает общий модуль renderer/dice.js: им же считает бросок
@@ -1891,6 +2109,12 @@ socket.on('rollDice', (payload) => {
       // поле hidden, но число увидят все: иначе «слепой» бросок игрока был бы
       // виден только ему самому.
       const hidden = socket.data.role === ROLE_DM && Boolean(payload && payload.hidden);
+      // Бросок из статблока: только мастеру, без строки в чате. Игроки не
+      // должны видеть ни формулу, ни результат, даже в истории.
+      const dmOnly = socket.data.role === ROLE_DM && Boolean(payload && payload.dmOnly);
+      // Подпись броска: «Атака по возможности: Волк → Артём». Без неё в ленте
+      // непонятно, что это за d20 и к кому он относится.
+      const label = sanitizeText(payload && payload.label, 80).trim();
 
       // Кубик бросает сервер, а не клиент.
       const rolled = dice.rollFormula(parsed, (min, max) => crypto.randomInt(min, max + 1));
@@ -1902,6 +2126,24 @@ socket.on('rollDice', (payload) => {
         hidden,
         time: new Date().toISOString()
       };
+      // Атака по возможности: если передан КД цели, сервер сам говорит,
+      // попал ли бросок. Сравнивать на клиенте нельзя: число броска игрок
+      // получает уже готовым, а лишняя арифметика в двух окнах разойдётся.
+      const rawAc = Number(payload && payload.targetAc);
+      const targetAc = Number.isFinite(rawAc) && rawAc >= 1 && rawAc <= 60
+        ? Math.round(rawAc)
+        : null;
+      if (targetAc !== null && !hidden && parsed.count === 1 && parsed.sides === 20) {
+        roll.targetAc = targetAc;
+        roll.hit = roll.result >= targetAc;
+      }
+      if (dmOnly) {
+        // Приватный бросок не попадает ни в общий чат, ни в историю кампании:
+        // иначе формула утекла бы игрокам при следующем снимке стола.
+        io.to('dm-sockets').emit('diceRollResult', { ...roll, hidden: true });
+        io.to('dm-sockets').emit('dmRollResult', { ...roll, hidden: true, label });
+        return;
+      }
       room.diceHistory.push(roll);
       if (room.diceHistory.length > LIMITS.maxDiceHistory) {
         room.diceHistory = room.diceHistory.slice(-LIMITS.maxDiceHistory);
@@ -1920,7 +2162,10 @@ socket.on('rollDice', (payload) => {
         // остаться тем, каким был в момент броска.
         avatar: room.players.get(socket.data.playerId)?.avatar
           || (socket.data.role === ROLE_DM ? DEFAULT_DM_AVATAR : null),
-        text: dice.describeRoll(roll),
+        text: (label ? `${label} — ${dice.describeRoll(roll)}` : dice.describeRoll(roll))
+          + (roll.hit === true
+            ? `, попадание по КД ${roll.targetAc}`
+            : roll.hit === false ? `, промах по КД ${roll.targetAc}` : ''),
         isRoll: true,
         hidden,
         time: roll.time
@@ -2016,6 +2261,7 @@ socket.on('rollDice', (payload) => {
         if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
         return;
       }
+      room.pushUndo();
       room.journal = sanitizeText(payload && payload.text, LIMITS.maxJournal);
       markDirty();
       if (typeof ack === 'function') ack({ ok: true, text: room.journal });
@@ -2033,6 +2279,7 @@ socket.on('rollDice', (payload) => {
         return;
       }
       io.to('dm-sockets').emit('journalUpdated', room.journalEntries);
+      markDirty();
       if (typeof ack === 'function') ack({ ok: true, entry });
     });
 
@@ -2047,6 +2294,7 @@ socket.on('rollDice', (payload) => {
         return;
       }
       io.to('dm-sockets').emit('journalUpdated', room.journalEntries);
+      markDirty();
       if (typeof ack === 'function') ack({ ok: true });
     });
 
@@ -2067,6 +2315,7 @@ socket.on('rollDice', (payload) => {
         return;
       }
       io.to('table').emit('inventoryUpdated', room.inventory);
+      markDirty();
       if (typeof ack === 'function') ack({ ok: true, item });
     });
 
@@ -2081,6 +2330,7 @@ socket.on('rollDice', (payload) => {
         return;
       }
       io.to('table').emit('inventoryUpdated', room.inventory);
+      markDirty();
       if (typeof ack === 'function') ack({ ok: true });
     });
 
@@ -2096,6 +2346,7 @@ socket.on('rollDice', (payload) => {
         return;
       }
       io.to('table').emit('rollRequestUpdated', room.rollRequests);
+      markDirty();
       if (typeof ack === 'function') ack({ ok: true, request });
     });
 
@@ -2106,6 +2357,7 @@ socket.on('rollDice', (payload) => {
       }
       room.clearRollRequest(payload && payload.id);
       io.to('table').emit('rollRequestUpdated', room.rollRequests);
+      markDirty();
       if (typeof ack === 'function') ack({ ok: true });
     });
 
@@ -2118,6 +2370,7 @@ socket.on('rollDice', (payload) => {
         if (typeof ack === 'function') ack({ ok: false, error: 'Нечего отменять' });
         return;
       }
+      markDirty();
       broadcastSnapshot();
       if (typeof ack === 'function') ack({ ok: true });
     });

@@ -67,7 +67,8 @@ const TRACKED = [
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
   'tokensUpdated', 'mapPing', 'reactionPrompt',
   'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
-  'journalUpdated', 'inventoryUpdated', 'inventoryCoinsUpdated', 'rollRequestUpdated', 'stateReload'
+  'journalUpdated', 'inventoryUpdated', 'inventoryCoinsUpdated', 'rollRequestUpdated', 'stateReload',
+  'gameTimeUpdated'
 ];
 
 /**
@@ -860,6 +861,65 @@ async function main() {
   check('ноль возвращает ручной размер клетки', () => {
     assert.strictEqual(room.grid.columns, 0);
     assert.strictEqual(room.grid.cell, 56, 'ручной размер клетки не должен слететь');
+  });
+
+  /* ------------------------------------------------------- время в игре */
+
+  console.log('\nВремя в игре');
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setGameTime', { day: 3, hour: 12 });
+  await waitFor(() => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')), 'отказ игроку в часах');
+  check('игрок не может перевести часы', () => {
+    assert.deepStrictEqual(room.gameTime, { day: 1, hour: 8 });
+  });
+
+  p1.log.gameTimeUpdated.length = 0;
+  emit(dm, 'setGameTime', { day: 3, hour: 25 });
+  const timeEvent = await waitFor(() => p1.log.gameTimeUpdated[0], 'рассылка времени');
+  check('мастер переводит часы, час режется сутками', () => {
+    assert.deepStrictEqual(timeEvent, { day: 3, hour: 23 });
+    assert.deepStrictEqual(room.gameTime, { day: 3, hour: 23 });
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    assert.deepStrictEqual(snapshot.gameTime, { day: 3, hour: 23 }, 'время не попало в снимок игрока');
+  });
+
+  check('время переживает сохранение и загрузку кампании', () => {
+    const saved = new RoomState({ state: room.serialize() });
+    assert.deepStrictEqual(saved.gameTime, { day: 3, hour: 23 });
+  });
+
+  // Старая кампания без часов открывается утром первого дня.
+  check('кампания без часов начинает утро первого дня', () => {
+    const legacy = new RoomState({ state: { players: [], sheets: {} } });
+    assert.deepStrictEqual(legacy.gameTime, { day: 1, hour: 8 });
+  });
+
+  emit(dm, 'setGameTime', { day: 1, hour: 8 });
+  await waitFor(() => room.gameTime.hour === 8 && room.gameTime.day === 1, 'возврат часов');
+
+  /* --------------------------------------------------------- истощение */
+
+  console.log('\nИстощение');
+  check('помеха инициативе берёт худший из двух бросков', () => {
+    const sample = new RoomState();
+    const entry = sample.addInitiativeEntry({ kind: 'other', name: 'Тест' });
+    // randomInt зовётся дважды: выпало 20 и 3, при помехе остаётся 3.
+    const values = [20, 3];
+    sample.rollInitiative(() => values.shift(), null, new Set([entry.id]));
+    assert.strictEqual(entry.roll, 3);
+    assert.strictEqual(entry.total, 3);
+  });
+
+  check('без помехи инициатива бросается один раз', () => {
+    const sample = new RoomState();
+    const entry = sample.addInitiativeEntry({ kind: 'other', name: 'Тест' });
+    let calls = 0;
+    sample.rollInitiative(() => {
+      calls += 1;
+      return 12;
+    });
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(entry.roll, 12);
   });
 
   /* -------------------------------------------------------------- фишки */

@@ -34,6 +34,8 @@ const normalizeSurface = fogModel.normalizeSurface;
 const normalizeWalls = fogModel.normalizeWalls;
 const normalizeLights = fogModel.normalizeLights;
 const LIGHT_LIMITS = fogModel.LIGHT_LIMITS || { maxRadius: 200 };
+/** Максимум хитов с поправкой на истощение: правило читают лист, карта и сервер. */
+const effectiveMaxHp = fogModel.effectiveMaxHp;
 /** Цвет света по умолчанию: тёплый, как факел. */
 const DEFAULT_LIGHT_COLOR = '#ffb347';
 
@@ -129,6 +131,30 @@ const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
  */
 const INITIATIVE_KINDS = ['player', 'token', 'other'];
 const INITIATIVE = { minModifier: -20, maxModifier: 20 };
+/** Время в игре: день и час, без минут. Минуты настольной игре не нужны. */
+const TIME_LIMITS = { minDay: 1, maxDay: 9999, minHour: 0, maxHour: 23 };
+const DEFAULT_GAME_TIME = { day: 1, hour: 8 };
+
+function emptyTime() {
+  return { ...DEFAULT_GAME_TIME };
+}
+
+/**
+ * Приводит время в игре к дню и часу.
+ *
+ * Часы за пределы суток не переносятся: мастер вводит время сам, и «25:00»
+ * в поле выглядело бы опечаткой. Кнопки смены часов перенос на сутки считают
+ * на клиенте.
+ * @param {unknown} raw
+ * @returns {{day: number, hour: number}}
+ */
+function normalizeTime(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    day: clampInt(source.day, TIME_LIMITS.minDay, TIME_LIMITS.maxDay, DEFAULT_GAME_TIME.day),
+    hour: clampInt(source.hour, TIME_LIMITS.minHour, TIME_LIMITS.maxHour, DEFAULT_GAME_TIME.hour)
+  };
+}
 
 /** @returns {{entries: object[], turnId: string|null, round: number}} */
 function emptyInitiative() {
@@ -712,6 +738,11 @@ function normalizeSheet(input, fallbackPlayerName = '') {
   sheet.features = sanitizeText(raw.features, LIMITS.maxSheetTextLength);
   sheet.notes = sanitizeText(raw.notes, LIMITS.maxSheetTextLength);
 
+  // Истощение 4 уровня уменьшает максимум хитов, а вместе с ним и текущие:
+  // иначе в листе осталось бы здоровье выше нового потолка.
+  const maxHp = effectiveMaxHp(sheet);
+  if (sheet.hp > maxHp) sheet.hp = maxHp;
+
   return sheet;
 }
 
@@ -740,6 +771,8 @@ class RoomState {
     this.activeMapId = null;
     /** @type {{enabled: boolean, cell: number}} */
     this.grid = { enabled: false, cell: GRID.defaultCell, columns: 0 };
+    /** Время в игре: день и час, общее для всего стола. */
+    this.gameTime = emptyTime();
     /** @type {object[]} */
     this.tokens = [];
     /**
@@ -858,6 +891,8 @@ class RoomState {
     // Правила сетки — из того же файла, что читает интерфейс: иначе снимок
     // состояния и сообщение о смене сетки разошлись бы с тем, что рисует карта.
     this.grid = normalizeGrid(grid);
+    // В кампаниях до появления часов поля нет: стол начинает с утра первого дня.
+    this.gameTime = normalizeTime(data.gameTime);
 
     const tokens = Array.isArray(data.tokens) ? data.tokens.slice(0, LIMITS.maxTokens) : [];
     this.tokens = tokens
@@ -934,13 +969,17 @@ class RoomState {
    * иначе у игроков разный порядок из-за разной сортировки одинаковых чисел.
    * @param {crypto.RandomInt} randomInt
    * @param {string|null} [onlyId] Перебросить одного участника, а не всех.
+   * @param {Set<string>|null} [disadvantage] Записи с помехой: бросок дважды, берём худший.
    */
-  rollInitiative(randomInt, onlyId) {
+  rollInitiative(randomInt, onlyId, disadvantage = null) {
     const id = onlyId ? String(onlyId) : null;
     const entries = this.initiative.entries;
     for (const entry of entries) {
       if (id && entry.id !== id) continue;
       entry.roll = randomInt(1, 20);
+      if (disadvantage && disadvantage.has(entry.id)) {
+        entry.roll = Math.min(entry.roll, randomInt(1, 20));
+      }
       entry.total = entry.roll + entry.modifier;
     }
     if (!entries.some((entry) => entry.total !== null)) return;
@@ -1440,6 +1479,7 @@ fogMask: normalizeFog(source.fogMask),
       activeMap: this.activeMap,
       activeMapId: this.activeMapId,
       grid: this.grid,
+      gameTime: this.gameTime,
       tokens: this.tokens,
       // Порядок боя видят все: он и есть объявление для игроков.
       initiative: this.initiative,
@@ -1695,6 +1735,8 @@ fogMask: normalizeFog(source.fogMask),
       activeMap: isDm ? this.activeMap : (this.activeMapId ? this.activeMap : null),
       activeMapId: this.activeMapId,
       grid: this.grid,
+      // Время в игре видят все: по нему мастер объявляет, что стемнело.
+      gameTime: this.gameTime,
       // Скрытые фишки — заготовки мастера, и игрокам их видеть нельзя.
       // Фильтруем здесь, а не в интерфейсе: иначе фишка утекает в снимок
       // состояния, который игрок получает целиком.
@@ -1794,6 +1836,19 @@ fogMask: normalizeFog(source.fogMask),
     return coins;
   }
 
+  /**
+   * Время в игре. Меняет только мастер; игроки видят часы, но не крутят их.
+   * @param {unknown} input
+   * @returns {boolean} изменилось ли время
+   */
+  setGameTime(input) {
+    const next = normalizeTime(input);
+    if (next.day === this.gameTime.day && next.hour === this.gameTime.hour) return false;
+    this.pushUndo();
+    this.gameTime = next;
+    return true;
+  }
+
   addRollRequest(input) {
     const request = normalizeRollRequest(input);
     if (!request) return null;
@@ -1823,7 +1878,9 @@ fogMask: normalizeFog(source.fogMask),
       journal: this.journal,
       journalEntries: this.journalEntries,
       inventory: this.inventory,
-      inventoryCoins: this.inventoryCoins
+      inventoryCoins: this.inventoryCoins,
+      // Часы мастер крутит руками: «+8 часов» тоже отменяется Ctrl+Z.
+      gameTime: this.gameTime
     }));
     if (this.undoStack.length > 20) this.undoStack.shift();
   }
@@ -1839,6 +1896,7 @@ fogMask: normalizeFog(source.fogMask),
     this.journalEntries = data.journalEntries;
     this.inventory = data.inventory;
     this.inventoryCoins = normalizeCoins(data.inventoryCoins);
+    if ('gameTime' in data) this.gameTime = normalizeTime(data.gameTime);
     if ('activeMap' in data) this.activeMap = data.activeMap;
     if ('activeMapId' in data) this.activeMapId = data.activeMapId;
     return true;
@@ -1984,6 +2042,7 @@ module.exports = {
   SKILLS,
   TEMPLATE_KINDS,
   TEMPLATE_LIMITS,
+  TIME_LIMITS,
   TOKEN_PALETTE,
   RoomState,
   abilityModifier,
@@ -1991,6 +2050,7 @@ module.exports = {
   clampNumber,
   createEmptySheet,
   emptyMaps,
+  emptyTime,
   newMapId,
   newTokenId,
   normalizeSheet,
@@ -1999,6 +2059,7 @@ module.exports = {
   normalizeDarkness,
   normalizeTemplate,
   normalizeTemplates,
+  normalizeTime,
   normalizeTokenLight,
   proficiencyBonus,
   sanitizeText

@@ -4140,8 +4140,11 @@
       this.routeLabel.classList.remove('is-over');
       if (!token || !token.assignedPlayerId) return '';
       const sheet = this.sheets && this.sheets[token.assignedPlayerId];
-      const speed = Number(sheet && sheet.speed);
-      if (!Number.isFinite(speed) || speed <= 0) return '';
+      // Истощение 2 уровня режет скорость вдвое, а 5 обнуляет: подпись пути
+      // должна считать от того же числа, что и лист.
+      const speed = sheet ? DnD.effectiveSpeed(sheet) : 0;
+      if (!sheet) return '';
+      if (speed <= 0) return ' · скорость 0';
       const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
       // Своё значение точнее: серверное приходит с задержкой. Если его ещё
       // нет (перезагрузка посреди хода), берём счёт с сервера.
@@ -4725,7 +4728,10 @@
       if (!token.assignedPlayerId || token.assignedPlayerId !== this.myPlayerId) return false;
       // Состояние, отнимающее скорость, запрещает игроку переставить фишку самому.
       // Мастеру движение остаётся всегда: он водит фишки руками в любом случае.
-      return !DnD.conditionBlocksMove(token.conditions);
+      if (DnD.conditionBlocksMove(token.conditions)) return false;
+      // Истощение 5 уровня обнуляет скорость: фишка стоит, пока уровень не снят.
+      const sheet = this.sheets && this.sheets[this.myPlayerId];
+      return !sheet || DnD.exhaustionEffects(sheet.exhaustion).speedMultiplier > 0;
     }
 
     /**
@@ -4735,7 +4741,16 @@
      * @returns {object|null}
      */
     moveBlocker(token) {
-      return DnD.conditionBlocksMove(token && token.conditions);
+      const condition = DnD.conditionBlocksMove(token && token.conditions);
+      if (condition) return condition;
+      const sheet = token && token.assignedPlayerId && this.sheets
+        ? this.sheets[token.assignedPlayerId]
+        : null;
+      if (sheet && token.assignedPlayerId === this.myPlayerId
+        && DnD.exhaustionEffects(sheet.exhaustion).speedMultiplier === 0) {
+        return { label: 'Истощение' };
+      }
+      return null;
     }
 
     buildToken(token) {

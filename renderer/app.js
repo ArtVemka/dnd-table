@@ -595,6 +595,8 @@ let chosenSheetId = null;
       activeMap: state.activeMap || null,
       activeMapId: state.activeMapId || null,
       grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
+      // Часы стола: старые кампании приходят без поля, и стол начинает с утра.
+      gameTime: state.gameTime || { day: 1, hour: 8 },
       tokens: state.tokens || [],
       initiative: state.initiative || { entries: [], turnId: null, round: 1 },
       // Режим боя приходит в снимке состояния. Без него при переподключении
@@ -1023,6 +1025,11 @@ let chosenSheetId = null;
       app.room.grid = grid;
       mapView.render(app.room, viewer());
       syncSettingsGrid();
+    });
+
+    socket.on('gameTimeUpdated', (time) => {
+      app.room.gameTime = time || { day: 1, hour: 8 };
+      renderGameTime();
     });
 
     socket.on('tokenCreated', (token) => {
@@ -3403,10 +3410,55 @@ let chosenSheetId = null;
     renderInventoryPanel();
     renderRollRequests();
     renderReactionPrompts();
+    renderGameTime();
     $('#role-badge').textContent = isDm ? 'ДМ' : 'Игрок';
     $('#role-badge').className = `badge ${isDm ? 'badge--dm' : 'badge--player'}`;
     if (isDm) renderAddresses();
     applyAddressesCollapsed();
+  }
+
+  /** Часы стола: день и час, без минут. */
+  function gameTime() {
+    const raw = app.room && app.room.gameTime;
+    return {
+      day: DnD.clampNumber(raw && raw.day, 1, 9999, 1),
+      hour: DnD.clampNumber(raw && raw.hour, 0, 23, 8)
+    };
+  }
+
+  /** Сдвиг часов с переносом на следующие сутки. */
+  function shiftGameTime(time, hours) {
+    const total = (time.day - 1) * 24 + time.hour + hours;
+    return {
+      day: Math.floor(total / 24) + 1,
+      hour: ((total % 24) + 24) % 24
+    };
+  }
+
+  function gameTimeLabel(time) {
+    return `День ${time.day}, ${String(time.hour).padStart(2, '0')}:00`;
+  }
+
+  /** Часы видят все; кнопка долгого отдыха есть только у мастера. */
+  function renderGameTime() {
+    const node = $('#game-time');
+    if (node) node.textContent = gameTimeLabel(gameTime());
+    const rest = $('#btn-game-rest');
+    if (rest) rest.hidden = app.role !== 'dm';
+  }
+
+  /** Сохраняет время на сервере; в тренировке двигает только это окно. */
+  function sendGameTime(time) {
+    const next = {
+      day: DnD.clampNumber(time && time.day, 1, 9999, 1),
+      hour: DnD.clampNumber(time && time.hour, 0, 23, 8)
+    };
+    if (app.training || !app.socket || !app.connected) {
+      if (app.room) app.room.gameTime = next;
+      renderGameTime();
+      return;
+    }
+    app.socket.emit('setGameTime', next);
   }
 
   function updateTableHeader() {
@@ -4782,6 +4834,55 @@ let chosenSheetId = null;
     generalPanel.appendChild(appBox);
 
     if (app.role === 'dm' && app.room && campaignPanel) {
+      // Часы кампании: мастер ставит время сам, кнопки двигают его на час или
+      // на долгий отдых. Игроки видят то же время в шапке стола.
+      const timeBox = el('div', 'box');
+      timeBox.appendChild(el('div', 'box__title', 'Время в игре'));
+      const timeRow = el('div', 'settings__row');
+      const timeInput = (label, value, min, max) => {
+        const wrap = el('label', 'settings__check');
+        wrap.appendChild(el('span', null, label));
+        const input = el('input', 'input settings__input');
+        input.type = 'number';
+        input.min = String(min);
+        input.max = String(max);
+        input.value = String(value);
+        wrap.appendChild(input);
+        timeRow.appendChild(wrap);
+        return input;
+      };
+      const current = gameTime();
+      const dayInput = timeInput('День', current.day, 1, 9999);
+      const hourInput = timeInput('Час', current.hour, 0, 23);
+      timeBox.appendChild(timeRow);
+      const timeActions = el('div', 'inline-row');
+      const read = () => ({
+        day: DnD.clampNumber(dayInput.value, 1, 9999, 1),
+        hour: DnD.clampNumber(hourInput.value, 0, 23, 8)
+      });
+      const apply = (next) => {
+        dayInput.value = String(next.day);
+        hourInput.value = String(next.hour);
+        sendGameTime(next);
+      };
+      const plusHour = el('button', 'btn btn--tiny', '+1 час');
+      plusHour.type = 'button';
+      plusHour.addEventListener('click', () => apply(shiftGameTime(read(), 1)));
+      const plusRest = el('button', 'btn btn--tiny', '+8 часов');
+      plusRest.type = 'button';
+      plusRest.title = 'Долгий отдых';
+      plusRest.addEventListener('click', () => apply(shiftGameTime(read(), 8)));
+      const saveTime = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
+      saveTime.type = 'button';
+      saveTime.addEventListener('click', () => apply(read()));
+      timeActions.appendChild(plusHour);
+      timeActions.appendChild(plusRest);
+      timeActions.appendChild(saveTime);
+      timeBox.appendChild(timeActions);
+      timeBox.appendChild(el('div', 'box__note',
+        'Видят все участники. Само время не идёт: бой считается раундами, а отдых отмечается в листе.'));
+      campaignPanel.appendChild(timeBox);
+
       const journalBox = el('div', 'box');
       journalBox.appendChild(el('div', 'box__title', 'Журнал кампании'));
       const journal = el('textarea', 'input settings__textarea');
@@ -6101,6 +6202,10 @@ const gridRow = el('div', 'settings__row');
     $('#btn-leave').addEventListener('click', leaveTable);
     $('#btn-search').addEventListener('click', openSearch);
     $('#btn-undo').addEventListener('click', undoDmAction);
+    $('#btn-game-rest').addEventListener('click', () => {
+      sendGameTime(shiftGameTime(gameTime(), 8));
+      toast('Прошло 8 часов', 'ok');
+    });
     $('#btn-inventory-add').addEventListener('click', () => {
       inventoryEditingId = 'new';
       renderInventoryPanel();

@@ -1243,9 +1243,51 @@ const GRID = {
     }
 
     const initiative = modifiers.dex + (Math.round(Number(safe.initiativeMisc) || 0));
-    const passivePerception = 10 + skills.perception.total;
+    // Помеха пассивной проверке даёт -5: это то же преимущество/помеха, но
+    // без броска. Истощение 1 уровня как раз её и накладывает.
+    const passivePenalty = exhaustionEffects(safe.exhaustion).checkDisadvantage ? 5 : 0;
+    const passivePerception = 10 + skills.perception.total - passivePenalty;
 
     return { level, profBonus, modifiers, saves, skills, initiative, passivePerception };
+  }
+
+  /**
+   * Последствия истощения по PHB 2014.
+   *
+   * Уровни складываются: на третьем уже есть и помеха проверкам, и скорость
+   * вдвое, поэтому наружу отдаём не одно число, а набор флагов. Формулы
+   * живут здесь, потому что их читают лист, карта и сервер: своя копия в
+   * каждом месте разошлась бы при первой правке правил.
+   * @param {unknown} rawLevel
+   * @returns {{level: number, checkDisadvantage: boolean, speedMultiplier: number,
+   *   attackDisadvantage: boolean, saveDisadvantage: boolean,
+   *   maxHpMultiplier: number, dead: boolean}}
+   */
+  function exhaustionEffects(rawLevel) {
+    const level = clampNumber(rawLevel, 0, LIMITS.maxExhaustion, 0);
+    return {
+      level,
+      checkDisadvantage: level >= 1,
+      speedMultiplier: level >= 5 ? 0 : (level >= 2 ? 0.5 : 1),
+      attackDisadvantage: level >= 3,
+      saveDisadvantage: level >= 3,
+      maxHpMultiplier: level >= 4 ? 0.5 : 1,
+      dead: level >= 6
+    };
+  }
+
+  /** Скорость с поправкой на истощение: число, которое видит игрок. */
+  function effectiveSpeed(sheet) {
+    const speed = Number(sheet && sheet.speed);
+    if (!Number.isFinite(speed)) return 0;
+    return Math.max(0, Math.floor(speed * exhaustionEffects(sheet && sheet.exhaustion).speedMultiplier));
+  }
+
+  /** Максимум хитов с поправкой на истощение 4 уровня. */
+  function effectiveMaxHp(sheet) {
+    const maxHp = Number(sheet && sheet.maxHp);
+    if (!Number.isFinite(maxHp)) return 0;
+    return Math.max(0, Math.floor(maxHp * exhaustionEffects(sheet && sheet.exhaustion).maxHpMultiplier));
   }
 
   /*
@@ -1423,6 +1465,9 @@ abilityModifier,
       conditionBlocksMove,
       conditionEffects,
       crValue,
+      effectiveMaxHp,
+      effectiveSpeed,
+      exhaustionEffects,
       encounterDifficulty,
       encounterMultiplier,
       encounterXp,

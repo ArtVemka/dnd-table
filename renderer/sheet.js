@@ -196,7 +196,7 @@
         // Проверка характеристики нажатием на кубик: за столом это самый
         // частый бросок, и искать модификатор в уме незачем.
         const rollButton = this.rollButton(ability.label, () => {
-          this.rollCheck('Проверка ' + ability.label, DnD.formatModifier(this.derived.modifiers[ability.key]));
+          this.rollCheck('Проверка ' + ability.label, DnD.formatModifier(this.derived.modifiers[ability.key]), 'check');
         });
         card.appendChild(rollButton);
         this.abilityNodes[ability.key] = { input, mod, rollButton };
@@ -221,7 +221,7 @@
         row.appendChild(value);
         row.appendChild(el('span', 'prof-row__label', ability.label));
         const rollButton = this.rollButton('Спасбросок ' + ability.label, () => {
-          this.rollCheck('Спасбросок ' + ability.label, DnD.formatModifier(this.derived.saves[ability.key].total));
+          this.rollCheck('Спасбросок ' + ability.label, DnD.formatModifier(this.derived.saves[ability.key].total), 'save');
         });
         row.appendChild(rollButton);
         this.saveNodes[ability.key] = { check, value, rollButton };
@@ -497,7 +497,7 @@
         row.appendChild(el('span', 'prof-row__label', skill.label));
         row.appendChild(el('span', 'prof-row__ability', DnD.ABILITY_LABELS[skill.ability]));
         const rollButton = this.rollButton('Навык: ' + skill.label, () => {
-          this.rollCheck('Навык: ' + skill.label, DnD.formatModifier(this.derived.skills[skill.key].total));
+          this.rollCheck('Навык: ' + skill.label, DnD.formatModifier(this.derived.skills[skill.key].total), 'check');
         });
         row.appendChild(rollButton);
         this.skillNodes[skill.key] = { check, expert, value, rollButton };
@@ -554,7 +554,7 @@
       const exhaustionLabels = [
         'нет',
         '1: помеха проверкам',
-        '2: скорость −10 футов',
+        '2: скорость вдвое меньше',
         '3: помеха атакам и спасброскам',
         '4: максимум хитов вдвое меньше',
         '5: скорость 0',
@@ -567,6 +567,13 @@
       }
       exhRow.appendChild(exh);
       box.appendChild(exhRow);
+
+      // Текущие последствия истощения словами: на уровне 3 их уже три, и
+      // держать их в голове игрок не обязан.
+      const exhNote = el('div', 'box__note');
+      exhNote.hidden = true;
+      box.appendChild(exhNote);
+      this.exhaustionNote = exhNote;
 
       const concRow = el('label', 'field');
       concRow.appendChild(el('span', 'field__label', 'Концентрация на'));
@@ -583,7 +590,7 @@
       const concRoll = this.rollButton('Проверка КОН при уроне', () => {
         const name = conc.value.trim();
         this.rollCheck(name ? `Концентрация: ${name}` : 'Концентрация',
-          DnD.formatModifier(this.derived.saves.con.total));
+          DnD.formatModifier(this.derived.saves.con.total), 'save');
       });
       concRoll.title = 'Спасбросок Телосложения: СЛ 10 или половина полученного урона';
       concActions.appendChild(concRoll);
@@ -891,7 +898,7 @@
         const label = name.value.trim() || 'Атака';
         this.rollCheck('Атака: ' + label, DnD.formatModifier(
           DnD.clampNumber(bonus.value, -20, 30, 0)
-        ));
+        ), 'attack');
       });
 
       const dmg = el('button', 'btn btn--tiny attack-row__roll', 'урон');
@@ -1146,7 +1153,9 @@ if (this.stateNodes) {
       const spent = DnD.clampNumber(this.sheet && this.sheet.hitDiceSpent, 0, total, 0);
       const remaining = Math.max(0, total - spent);
       const hp = Number(this.sheet && this.sheet.hp) || 0;
-      const maxHp = Number(this.sheet && this.sheet.maxHp) || 0;
+      // Истощение 4 уровня уменьшает максимум: «полное здоровье» для кости
+      // хитов и долгого отдыха считается от нового потолка.
+      const maxHp = DnD.effectiveMaxHp(this.sheet);
       if (this.hitDiePool) {
         this.hitDiePool.textContent = total
           ? `Кости хитов: ${remaining} из ${total}`
@@ -1197,7 +1206,7 @@ if (this.stateNodes) {
       const spent = DnD.clampNumber(sheet.hitDiceSpent, 0, total, 0);
       const sides = DnD.hitDieSides(this.hitDieSelected || sheet.hitDice);
       const hp = Number(sheet.hp) || 0;
-      const maxHp = Number(sheet.maxHp) || 0;
+      const maxHp = DnD.effectiveMaxHp(sheet);
       if (!sides || spent >= total || hp >= maxHp) return;
       const roll = secureDie(sides);
       const con = this.derived && Number.isFinite(this.derived.modifiers.con)
@@ -1224,7 +1233,7 @@ if (this.stateNodes) {
       const total = pool.reduce((sum, item) => sum + item.count, 0);
       const spent = DnD.clampNumber(sheet.hitDiceSpent, 0, total, 0);
       const restore = Math.min(spent, Math.max(1, Math.floor(total / 2)));
-      sheet.hp = sheet.maxHp;
+      sheet.hp = DnD.effectiveMaxHp(sheet);
       sheet.tempHp = 0;
       sheet.deathSavesSuccesses = 0;
       sheet.deathSavesFailures = 0;
@@ -1259,8 +1268,26 @@ if (this.stateNodes) {
       this.setDerived('profBonus', DnD.formatModifier(d.profBonus));
       this.setDerived('initiative', DnD.formatModifier(d.initiative));
       this.setDerived('passivePerception', String(d.passivePerception));
+      this.paintExhaustion();
       this.paintVitalState();
       this.paintSpellSlots();
+    }
+
+    /** Последствия истощения словами: что именно сейчас действует. */
+    paintExhaustion() {
+      const node = this.exhaustionNote;
+      if (!node) return;
+      const effects = DnD.exhaustionEffects(this.sheet && this.sheet.exhaustion);
+      const parts = [];
+      if (effects.checkDisadvantage) parts.push('помеха проверкам');
+      if (effects.attackDisadvantage) parts.push('помеха атакам');
+      if (effects.saveDisadvantage) parts.push('помеха спасброскам');
+      if (effects.speedMultiplier === 0) parts.push('скорость 0');
+      else if (effects.speedMultiplier < 1) parts.push(`скорость ${DnD.effectiveSpeed(this.sheet)} фт`);
+      if (effects.maxHpMultiplier < 1) parts.push(`максимум хитов ${DnD.effectiveMaxHp(this.sheet)}`);
+      if (effects.dead) parts.push('смерть');
+      node.hidden = !parts.length;
+      node.textContent = parts.length ? `Истощение: ${parts.join(', ')}.` : '';
     }
 
     /**
@@ -1630,13 +1657,24 @@ if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
      * Формулу собирает тот же разбор, что и панель кубиков: преимущество это
      * две кости и лучшая из них, помеха две и худшая. Модификатор подставляется
      * как есть, со знаком, поэтому «-1» превращается в «-1», а не в «--1».
+     *
+     * Истощение накладывает помеху само: проверкам с 1 уровня, атакам и
+     * спасброскам с 3. Помеха и преимущество друг друга гасят, как в правилах.
      * @param {string} label
      * @param {string} modifier
+     * @param {'check'|'save'|'attack'} [kind]
      */
-    rollCheck(label, modifier) {
+    rollCheck(label, modifier, kind = 'check') {
       if (!this.handlers.onRollCheck || this.readOnly) return;
-      const dice = this.rollMode === 'advantage' ? '2d20kh1'
-        : (this.rollMode === 'disadvantage' ? '2d20kl1' : 'd20');
+      const effects = DnD.exhaustionEffects(this.sheet && this.sheet.exhaustion);
+      const forced = kind === 'attack'
+        ? effects.attackDisadvantage
+        : (kind === 'save' ? effects.saveDisadvantage : effects.checkDisadvantage);
+      let mode = this.rollMode;
+      if (forced && mode === 'advantage') mode = 'normal';
+      else if (forced) mode = 'disadvantage';
+      const dice = mode === 'advantage' ? '2d20kh1'
+        : (mode === 'disadvantage' ? '2d20kl1' : 'd20');
       // Модуль приходит уже со знаком: formatModifier даёт «+2» и «-1».
       // Дописывать знак ещё раз нельзя, вышло бы «d20++2», такой формулы нет.
       this.handlers.onRollCheck(dice + String(modifier || '+0'), label);

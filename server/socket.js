@@ -569,7 +569,12 @@ async function createTableServer(options) {
       if (!sheet) return emitError(socket, 'Лист персонажа ещё не готов');
       if (sheet.hp > 0) return emitError(socket, 'Спасброски смерти идут при нулевом здоровье');
 
-      const die = crypto.randomInt(1, 21);
+      // Истощение 3 уровня даёт помеху спасброскам, а спасбросок смерти — тоже
+      // спасбросок: бросаем две кости и берём худшую.
+      const disadvantage = fogModel.exhaustionEffects(sheet.exhaustion).saveDisadvantage;
+      const die = disadvantage
+        ? Math.min(crypto.randomInt(1, 21), crypto.randomInt(1, 21))
+        : crypto.randomInt(1, 21);
       let outcome;
       if (die === 20) {
         sheet.hp = 1;
@@ -933,6 +938,21 @@ socket.on('setGrid', (payload) => {
       markDirty();
       // Сетка — дело мастера: её видят и двигают только он.
       io.emit('gridUpdated', room.grid);
+    });
+
+    /**
+     * Время в игре: день и час. Ведёт мастер, видят все.
+     *
+     * Часы не двигаются сами ни от отдыха в листе, ни от раундов боя: лист
+     * живёт на компьютере игрока и о столе не знает, а бой идёт секундами.
+     * Мастер ставит время сам, кнопка «+8 часов» в шапке делает долгий отдых.
+     */
+    socket.on('setGameTime', (payload) => {
+      if (!requireDm(socket)) return;
+      if (!room.setGameTime(payload)) return;
+      markDirty();
+      io.emit('gameTimeUpdated', room.gameTime);
+      onLog(`Время в игре: день ${room.gameTime.day}, ${String(room.gameTime.hour).padStart(2, '0')}:00`);
     });
 
     socket.on('setActiveMap', (payload) => {
@@ -1852,6 +1872,12 @@ socket.on('setGrid', (payload) => {
         if (blocker) {
           return emitError(socket, `Фишка «${blocker.label.toLowerCase()}»: двигать её нельзя, пока состояние не снято`);
         }
+        // Истощение 5 уровня обнуляет скорость. Это не состояние фишки, а
+        // свойство листа, поэтому проверяется отдельно.
+        const sheet = room.sheets.get(socket.data.playerId);
+        if (sheet && fogModel.exhaustionEffects(sheet.exhaustion).speedMultiplier === 0) {
+          return emitError(socket, 'Истощение 5: скорость 0, двигать фишку нельзя');
+        }
       }
       const x = clampNumber(payload && payload.x, 0, 1, token.x);
       const y = clampNumber(payload && payload.y, 0, 1, token.y);
@@ -1992,6 +2018,15 @@ socket.on('setGrid', (payload) => {
       // Модификатор инициативы игрока присылает мастер из его листа: сервер
       // производные значения листа не считает, а вторая копия расчёта
       // разошлась бы с клиентской.
+      // Инициатива — проверка Ловкости, поэтому истощение 1 уровня даёт помеху.
+      const disadvantage = new Set();
+      for (const entry of room.initiative.entries) {
+        if (entry.kind !== 'player') continue;
+        const sheet = room.sheets.get(entry.refId);
+        if (sheet && fogModel.exhaustionEffects(sheet.exhaustion).checkDisadvantage) {
+          disadvantage.add(entry.id);
+        }
+      }
       if (payload && payload.id) {
         const entry = room.initiative.entries.find((item) => item.id === String(payload.id));
         if (!entry) return emitError(socket, 'Участник боя не найден');
@@ -2001,9 +2036,9 @@ socket.on('setGrid', (payload) => {
             Math.min(INITIATIVE.maxModifier, Math.round(Number(payload.modifier)))
           );
         }
-        room.rollInitiative((min, max) => crypto.randomInt(min, max + 1), entry.id);
+        room.rollInitiative((min, max) => crypto.randomInt(min, max + 1), entry.id, disadvantage);
       } else {
-        room.rollInitiative((min, max) => crypto.randomInt(min, max + 1));
+        room.rollInitiative((min, max) => crypto.randomInt(min, max + 1), null, disadvantage);
         // Бой начался: включаем режим боя, чтобы фишки пошли по клеткам. Именно
         // тут, а не по кнопке: порядок боя и есть объявление начала боя.
         if (room.combat && !room.combat.enabled) {

@@ -12,6 +12,7 @@ const path = require('path');
 global.window = {};
 require('../renderer/dnd5e.js');
 const DnD = global.window.DnD5e;
+const { normalizeSheet } = require('../server/state');
 
 const LIMITS_SERVER = { minAbility: 1, maxAbility: 30, minLevel: 1, maxLevel: 20 };
 const checks = [];
@@ -165,6 +166,60 @@ check('лист хранит вдохновение, истощение, кон�
   assert.strictEqual(sheet.concentration, '');
   assert.deepStrictEqual(sheet.coins, { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 });
   assert.strictEqual(DnD.LIMITS.maxExhaustion, 6);
+});
+
+check('истощение даёт последствия по PHB 2014', () => {
+  const none = DnD.exhaustionEffects(0);
+  assert.strictEqual(none.checkDisadvantage, false);
+  assert.strictEqual(none.speedMultiplier, 1);
+  assert.strictEqual(none.maxHpMultiplier, 1);
+
+  const first = DnD.exhaustionEffects(1);
+  assert.strictEqual(first.checkDisadvantage, true);
+  assert.strictEqual(first.attackDisadvantage, false);
+  assert.strictEqual(first.saveDisadvantage, false);
+
+  // Уровни складываются: второй режет скорость, третий добавляет помеху
+  // атакам и спасброскам, четвёртый — максимум хитов.
+  const second = DnD.exhaustionEffects(2);
+  assert.strictEqual(second.checkDisadvantage, true);
+  assert.strictEqual(DnD.effectiveSpeed({ speed: 30, exhaustion: 2 }), 15);
+  const third = DnD.exhaustionEffects(3);
+  assert.strictEqual(third.attackDisadvantage, true);
+  assert.strictEqual(third.saveDisadvantage, true);
+  assert.strictEqual(DnD.effectiveMaxHp({ maxHp: 30, exhaustion: 3 }), 30);
+  const fourth = DnD.exhaustionEffects(4);
+  assert.strictEqual(fourth.maxHpMultiplier, 0.5);
+  assert.strictEqual(DnD.effectiveMaxHp({ maxHp: 25, exhaustion: 4 }), 12);
+
+  assert.strictEqual(DnD.exhaustionEffects(5).speedMultiplier, 0);
+  assert.strictEqual(DnD.effectiveSpeed({ speed: 30, exhaustion: 5 }), 0);
+  assert.strictEqual(DnD.exhaustionEffects(6).dead, true);
+
+  // Мусор из кампании режется до шести уровней, а не превращается в NaN.
+  assert.strictEqual(DnD.exhaustionEffects(99).level, 6);
+  assert.strictEqual(DnD.exhaustionEffects(-3).level, 0);
+  assert.strictEqual(DnD.exhaustionEffects('нет').level, 0);
+
+  // Помеха пассивной проверке — это -5, а не бросок.
+  const sheet = DnD.createEmptySheet();
+  assert.strictEqual(DnD.computeDerived(sheet).passivePerception, 10);
+  assert.strictEqual(DnD.computeDerived({ ...sheet, exhaustion: 1 }).passivePerception, 5);
+});
+
+check('сервер режет здоровье по истощению 4 уровня', () => {
+  const weakened = normalizeSheet({ maxHp: 40, hp: 40, exhaustion: 4 });
+  assert.strictEqual(weakened.maxHp, 40, 'исходный максимум хитов должен остаться в листе');
+  assert.strictEqual(weakened.hp, 20, 'текущее здоровье должно упереться в половину максимума');
+
+  const aboveCap = normalizeSheet({ maxHp: 41, hp: 40, exhaustion: 4 });
+  assert.strictEqual(aboveCap.hp, 20, 'половина от нечётного максимума округляется вниз');
+
+  // До четвёртого уровня потолок не меняется, а снятое истощение не лечит.
+  const third = normalizeSheet({ maxHp: 40, hp: 30, exhaustion: 3 });
+  assert.strictEqual(third.hp, 30);
+  const recovered = normalizeSheet({ maxHp: 40, hp: 20, exhaustion: 0 });
+  assert.strictEqual(recovered.hp, 20);
 });
 
 check('опыт встречи считается по DMG с множителем за число монстров', () => {

@@ -34,6 +34,14 @@ html.is-android #btn-open-datadir {
   display: none !important;
 }
 
+/* Группа мастера скрыта, и единственная группа «Игроку» оставалась в левой
+   колонке двухколоночной сетки. Складываем сетку в одну колонку и держим
+   ширину карточек: блок стоит по центру, а не уезжает влево. */
+html.is-android .home__groups {
+  grid-template-columns: minmax(0, 1fr);
+  width: min(100%, 560px);
+}
+
 /* На телефоне вставлять длинный билет вручную неудобно. */
 html.is-android #btn-paste-ticket,
 html.is-android #btn-scan-ticket {

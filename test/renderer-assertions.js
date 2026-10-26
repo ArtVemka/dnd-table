@@ -5101,6 +5101,25 @@
       assert(overlay.querySelector('#settings-panel-general').hidden, 'общий раздел не скрылся');
       assert.strictEqual(tab.getAttribute('aria-selected'), 'true', 'вкладка не стала активной');
     });
+    check('в настройках кампании можно переписать названия месяцев', () => {
+      const overlay = settingsOverlay();
+      const campaignTab = [...overlay.querySelectorAll('.settings__nav [role="tab"]')]
+        .find((node) => node.textContent === 'Кампания');
+      assert(campaignTab, 'нет вкладки «Кампания»');
+      campaignTab.click();
+      const months = overlay.querySelector('#calendar-months-input');
+      assert(months && !months.closest('[role="tabpanel"]').hidden, 'нет поля названий месяцев');
+      const month = overlay.querySelector('#calendar-month-input');
+      assert(month && month.type === 'text', 'месяц нельзя написать словом');
+      assert.strictEqual(month.getAttribute('list'), 'calendar-month-names');
+      assert(overlay.querySelectorAll('#calendar-month-names option').length >= 12,
+        'в списке месяцев нет стандартных названий');
+      // Возвращаем вкладку «Стол»: следующие проверки ищут сетку.
+      const tableTab = [...overlay.querySelectorAll('.settings__nav [role="tab"]')]
+        .find((node) => node.textContent === 'Стол');
+      tableTab.click();
+    });
+
     check('стрелки переключают разделы настроек', () => {
       const overlay = settingsOverlay();
       const tabs = [...overlay.querySelectorAll('.settings__nav [role="tab"]')];

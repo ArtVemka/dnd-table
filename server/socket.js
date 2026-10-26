@@ -1001,6 +1001,20 @@ socket.on('setGrid', (payload) => {
      * живёт на компьютере игрока и о столе не знает, а бой идёт секундами.
      * Мастер ставит время сам, кнопка «+8 часов» в шапке делает долгий отдых.
      */
+    socket.on('setCalendarMonths', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const changed = room.setCalendarMonths(payload && payload.months);
+      if (changed) {
+        markDirty();
+        io.emit('calendarMonthsUpdated', room.calendarMonths);
+        onLog(`Календарь: ${room.calendarMonths.join(', ')}`);
+      }
+      if (typeof ack === 'function') ack({ ok: true, months: room.calendarMonths });
+    });
+
     socket.on('setGameTime', (payload) => {
       if (!requireDm(socket)) return;
       const before = { ...room.gameTime };
@@ -1011,7 +1025,7 @@ socket.on('setGrid', (payload) => {
       markDirty();
       io.emit('gameTimeUpdated', room.gameTime);
       for (const token of changed) emitToken('tokenUpdated', token);
-      onLog(`Время в игре: ${fogModel.formatGameTime(room.gameTime)}`);
+      onLog(`Время в игре: ${fogModel.formatGameTime(room.gameTime, room.calendarMonths)}`);
     });
 
     /**

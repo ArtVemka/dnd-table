@@ -916,39 +916,86 @@ const GRID = {
    */
   const CALENDAR = {
     daysPerMonth: 30,
-    monthsPerYear: 12,
+    maxMonths: 24,
     monthNames: [
       'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
       'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
     ]
   };
 
-  /** @param {number} rawDay @returns {{year: number, month: number, day: number}} */
-  function calendarFromDay(rawDay) {
+  /** @param {unknown} months @returns {string[]} */
+  function resolveCalendarMonths(months) {
+    if (!Array.isArray(months) || !months.length) return CALENDAR.monthNames;
+    return months;
+  }
+
+  /**
+   * @param {number} rawDay
+   * @param {string[]} [months]
+   * @returns {{year: number, month: number, day: number, name: string}}
+   */
+  function calendarFromDay(rawDay, months) {
+    const names = resolveCalendarMonths(months);
     const total = Math.max(0, Math.floor(Number(rawDay) || 1) - 1);
-    const yearLength = CALENDAR.daysPerMonth * CALENDAR.monthsPerYear;
+    const yearLength = CALENDAR.daysPerMonth * names.length;
     const year = Math.floor(total / yearLength) + 1;
     const rest = total % yearLength;
+    const month = Math.floor(rest / CALENDAR.daysPerMonth) + 1;
     return {
       year,
-      month: Math.floor(rest / CALENDAR.daysPerMonth) + 1,
-      day: (rest % CALENDAR.daysPerMonth) + 1
+      month,
+      day: (rest % CALENDAR.daysPerMonth) + 1,
+      name: names[month - 1] || `Месяц ${month}`
     };
   }
 
-  /** @param {number} year @param {number} month @param {number} day @returns {number} */
-  function dayFromCalendar(year, month, day) {
+  /** @param {number} year @param {number} month @param {number} day @param {string[]} [months] @returns {number} */
+  function dayFromCalendar(year, month, day, months) {
+    const names = resolveCalendarMonths(months);
     const y = Math.max(1, Math.min(9999, Math.floor(Number(year) || 1)));
-    const m = Math.max(1, Math.min(CALENDAR.monthsPerYear, Math.floor(Number(month) || 1)));
+    const m = Math.max(1, Math.min(names.length, Math.floor(Number(month) || 1)));
     const d = Math.max(1, Math.min(CALENDAR.daysPerMonth, Math.floor(Number(day) || 1)));
-    return ((y - 1) * CALENDAR.monthsPerYear + (m - 1)) * CALENDAR.daysPerMonth + d;
+    return ((y - 1) * names.length + (m - 1)) * CALENDAR.daysPerMonth + d;
   }
 
-  /** @param {{day: number, hour: number}} time @returns {string} */
-  function formatGameTime(time) {
-    const date = calendarFromDay(time && time.day);
+  /** @param {{day: number, hour: number}} time @param {string[]} [months] @returns {string} */
+  function formatGameTime(time, months) {
+    const date = calendarFromDay(time && time.day, months);
     const hour = Math.max(0, Math.min(23, Math.floor(Number(time && time.hour) || 0)));
-    return `${date.day} ${CALENDAR.monthNames[date.month - 1]} ${date.year} г., ${String(hour).padStart(2, '0')}:00`;
+    return `${date.day} ${date.name} ${date.year} г., ${String(hour).padStart(2, '0')}:00`;
+  }
+
+  /** @param {unknown} value @returns {string} */
+  function normalizeCalendarName(value) {
+    return String(value || '').toLowerCase().replace(/ё/g, 'е')
+      .replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Понимает и номер месяца, и его название. Название можно писать целиком
+   * или началом, если такой месяц один.
+   * @param {unknown} value
+   * @param {string[]} [months]
+   * @returns {number} номер с единицы или -1
+   */
+  function monthIndexFromValue(value, months) {
+    const names = resolveCalendarMonths(months);
+    const raw = String(value === null || value === undefined ? '' : value).trim();
+    if (/^\d+$/.test(raw)) {
+      const number = Number(raw);
+      return number >= 1 && number <= names.length ? number : -1;
+    }
+    const needle = normalizeCalendarName(raw);
+    if (!needle) return -1;
+    let exact = -1;
+    const matches = [];
+    names.forEach((name, index) => {
+      const normalized = normalizeCalendarName(name);
+      if (normalized === needle) exact = index + 1;
+      if (normalized.startsWith(needle) || needle.startsWith(normalized)) matches.push(index + 1);
+    });
+    if (exact > 0) return exact;
+    return matches.length === 1 ? matches[0] : -1;
   }
 
   /**
@@ -1499,6 +1546,7 @@ const GRID = {
     calendarFromDay,
     dayFromCalendar,
     formatGameTime,
+    monthIndexFromValue,
     CLASSES,
     CONDITIONS,
     MOVE_BLOCKING,

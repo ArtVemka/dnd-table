@@ -138,7 +138,15 @@ const INITIATIVE = { minModifier: -20, maxModifier: 20 };
  * дня в календаре по 30 дней и 12 месяцев: так старые кампании с «днём 37»
  * открываются без миграции.
  */
-const TIME_LIMITS = { minDay: 1, maxDay: 360 * 9999, minHour: 0, maxHour: 23 };
+/** Календарь по умолчанию: 12 месяцев по 30 дней. Мастер может переписать названия. */
+const CALENDAR_CONFIG = fogModel.CALENDAR || { maxMonths: 24, monthNames: [] };
+const DEFAULT_CALENDAR_MONTHS = CALENDAR_CONFIG.monthNames.slice();
+const TIME_LIMITS = {
+  minDay: 1,
+  maxDay: 30 * (CALENDAR_CONFIG.maxMonths || 24) * 9999,
+  minHour: 0,
+  maxHour: 23
+};
 const DEFAULT_GAME_TIME = { day: 1, hour: 8 };
 
 function emptyTime() {
@@ -160,6 +168,25 @@ function normalizeTime(raw) {
     day: clampInt(source.day, TIME_LIMITS.minDay, TIME_LIMITS.maxDay, DEFAULT_GAME_TIME.day),
     hour: clampInt(source.hour, TIME_LIMITS.minHour, TIME_LIMITS.maxHour, DEFAULT_GAME_TIME.hour)
   };
+}
+
+/**
+ * Названия месяцев кампании. Пустой список означает стандартные.
+ *
+ * В месяце всегда 30 дней: длина месяца — отдельное правило, а не название.
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function normalizeCalendarMonths(raw) {
+  const source = Array.isArray(raw) ? raw : [];
+  const months = [];
+  for (const item of source) {
+    const name = sanitizeText(item, 40).replace(/\s+/g, ' ').trim();
+    if (!name) continue;
+    months.push(name);
+    if (months.length >= (CALENDAR_CONFIG.maxMonths || 24)) break;
+  }
+  return months.length ? months : DEFAULT_CALENDAR_MONTHS.slice();
 }
 
 /** @returns {{entries: object[], turnId: string|null, round: number}} */
@@ -817,6 +844,8 @@ class RoomState {
     this.grid = { enabled: false, cell: GRID.defaultCell, columns: 0 };
     /** Время в игре: день и час, общее для всего стола. */
     this.gameTime = emptyTime();
+    /** @type {string[]} названия месяцев; длина задаёт длину года. */
+    this.calendarMonths = DEFAULT_CALENDAR_MONTHS.slice();
     /** @type {object[]} */
     this.tokens = [];
     /**
@@ -937,6 +966,7 @@ class RoomState {
     this.grid = normalizeGrid(grid);
     // В кампаниях до появления часов поля нет: стол начинает с утра первого дня.
     this.gameTime = normalizeTime(data.gameTime);
+    this.calendarMonths = normalizeCalendarMonths(data.calendarMonths);
 
     const tokens = Array.isArray(data.tokens) ? data.tokens.slice(0, LIMITS.maxTokens) : [];
     this.tokens = tokens
@@ -1699,6 +1729,7 @@ fogMask: normalizeFog(source.fogMask),
       activeMapId: this.activeMapId,
       grid: this.grid,
       gameTime: this.gameTime,
+      calendarMonths: this.calendarMonths,
       tokens: this.tokens,
       // Порядок боя видят все: он и есть объявление для игроков.
       initiative: this.initiative,
@@ -1965,6 +1996,8 @@ fogMask: normalizeFog(source.fogMask),
       grid: this.grid,
       // Время в игре видят все: по нему мастер объявляет, что стемнело.
       gameTime: this.gameTime,
+      // Названия месяцев тоже общие: иначе игрок видел бы чужую дату.
+      calendarMonths: this.calendarMonths,
       // Скрытые фишки — заготовки мастера, и игрокам их видеть нельзя.
       // Фильтруем здесь, а не в интерфейсе: иначе фишка утекает в снимок
       // состояния, который игрок получает целиком.
@@ -2101,6 +2134,22 @@ fogMask: normalizeFog(source.fogMask),
   }
 
   /**
+   * Названия месяцев. Меняет только мастер: от них зависит подпись даты,
+   * которую видят все.
+   * @param {unknown} input
+   * @returns {boolean}
+   */
+  setCalendarMonths(input) {
+    const next = normalizeCalendarMonths(input);
+    const same = next.length === this.calendarMonths.length
+      && next.every((name, index) => name === this.calendarMonths[index]);
+    if (same) return false;
+    this.pushUndo();
+    this.calendarMonths = next;
+    return true;
+  }
+
+  /**
    * Время в игре. Меняет только мастер; игроки видят часы, но не крутят их.
    * @param {unknown} input
    * @returns {boolean} изменилось ли время
@@ -2143,8 +2192,9 @@ fogMask: normalizeFog(source.fogMask),
       journalEntries: this.journalEntries,
       inventory: this.inventory,
       inventoryCoins: this.inventoryCoins,
-      // Часы мастер крутит руками: «+8 часов» тоже отменяется Ctrl+Z.
-      gameTime: this.gameTime
+      // Часы и календарь мастер крутит руками: смена названий тоже отменяется.
+      gameTime: this.gameTime,
+      calendarMonths: this.calendarMonths
     }));
     if (this.undoStack.length > 20) this.undoStack.shift();
   }
@@ -2161,6 +2211,7 @@ fogMask: normalizeFog(source.fogMask),
     this.inventory = data.inventory;
     this.inventoryCoins = normalizeCoins(data.inventoryCoins);
     if ('gameTime' in data) this.gameTime = normalizeTime(data.gameTime);
+    if ('calendarMonths' in data) this.calendarMonths = normalizeCalendarMonths(data.calendarMonths);
     if ('activeMap' in data) this.activeMap = data.activeMap;
     if ('activeMapId' in data) this.activeMapId = data.activeMapId;
     return true;
@@ -2322,6 +2373,7 @@ module.exports = {
   newTokenId,
   normalizeSheet,
   normalizeAdventure,
+  normalizeCalendarMonths,
   normalizeStatblock,
   normalizeDarkness,
   normalizeTemplate,

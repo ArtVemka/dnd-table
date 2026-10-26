@@ -267,13 +267,26 @@ check('пороги партии складываются по уровням, �
 });
 
 check('календарь переводит номер дня в месяц и год', () => {
-  assert.deepStrictEqual(DnD.calendarFromDay(1), { year: 1, month: 1, day: 1 });
-  assert.deepStrictEqual(DnD.calendarFromDay(31), { year: 1, month: 2, day: 1 });
-  assert.deepStrictEqual(DnD.calendarFromDay(361), { year: 2, month: 1, day: 1 });
+  assert.deepStrictEqual(DnD.calendarFromDay(1), { year: 1, month: 1, day: 1, name: 'января' });
+  assert.deepStrictEqual(DnD.calendarFromDay(31), { year: 1, month: 2, day: 1, name: 'февраля' });
+  assert.deepStrictEqual(DnD.calendarFromDay(361), { year: 2, month: 1, day: 1, name: 'января' });
   const day = DnD.dayFromCalendar(1492, 3, 5);
-  assert.deepStrictEqual(DnD.calendarFromDay(day), { year: 1492, month: 3, day: 5 });
+  assert.deepStrictEqual(DnD.calendarFromDay(day), { year: 1492, month: 3, day: 5, name: 'марта' });
   // Старый номер дня за пределами месяца не теряется при выводе.
   assert.strictEqual(DnD.formatGameTime({ day: 31, hour: 8 }), '1 февраля 1 г., 08:00');
+
+  // Свой календарь: число месяцев задаёт длину года, название можно писать.
+  const custom = ['Снежень', 'Ветрень', 'Травень'];
+  assert.deepStrictEqual(DnD.calendarFromDay(31, custom),
+    { year: 1, month: 2, day: 1, name: 'Ветрень' });
+  assert.deepStrictEqual(DnD.calendarFromDay(91, custom),
+    { year: 2, month: 1, day: 1, name: 'Снежень' });
+  assert.strictEqual(DnD.dayFromCalendar(2, 1, 3, custom), 93);
+  assert.strictEqual(DnD.formatGameTime({ day: 31, hour: 8 }, custom), '1 Ветрень 1 г., 08:00');
+  assert.strictEqual(DnD.monthIndexFromValue('Ветрень', custom), 2);
+  assert.strictEqual(DnD.monthIndexFromValue('вет', custom), 2);
+  assert.strictEqual(DnD.monthIndexFromValue('2', custom), 2);
+  assert.strictEqual(DnD.monthIndexFromValue('нет', custom), -1);
 });
 
 function assert(condition, message) {

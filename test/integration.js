@@ -68,7 +68,7 @@ const TRACKED = [
   'tokensUpdated', 'mapPing', 'reactionPrompt',
   'diceRollResult', 'chatMessage', 'chatDeleted', 'chatCleared', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
   'journalUpdated', 'inventoryUpdated', 'inventoryCoinsUpdated', 'rollRequestUpdated', 'stateReload',
-  'gameTimeUpdated'
+  'gameTimeUpdated', 'calendarMonthsUpdated'
 ];
 
 /**
@@ -896,6 +896,55 @@ async function main() {
 
   emit(dm, 'setGameTime', { day: 1, hour: 8 });
   await waitFor(() => room.gameTime.hour === 8 && room.gameTime.day === 1, 'возврат часов');
+
+  /* ----------------------------------------------------------- календарь */
+
+  console.log('\nКалендарь');
+  const defaultMonths = require('../renderer/dnd5e.js').CALENDAR.monthNames.slice();
+  const customMonths = ['Снежень', 'Ветрень', 'Травень'];
+  check('старая кампания получает стандартные названия месяцев', () => {
+    const legacy = new RoomState({ state: { players: [], sheets: {} } });
+    assert.deepStrictEqual(legacy.calendarMonths, defaultMonths);
+  });
+
+  p1.log.calendarMonthsUpdated.length = 0;
+  const monthsAck = await new Promise((resolve) => {
+    dm.emit('setCalendarMonths', { months: customMonths }, resolve);
+  });
+  const monthsEvent = await waitFor(() => p1.log.calendarMonthsUpdated[0], 'рассылка календаря');
+  check('мастер задаёт свои названия месяцев, и их видят все', () => {
+    assert.strictEqual(monthsAck.ok, true);
+    assert.deepStrictEqual(monthsAck.months, customMonths);
+    assert.deepStrictEqual(monthsEvent, customMonths);
+    assert.deepStrictEqual(
+      room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).calendarMonths,
+      customMonths
+    );
+  });
+  check('календарь переживает сохранение кампании', () => {
+    const saved = new RoomState({ state: room.serialize() });
+    assert.deepStrictEqual(saved.calendarMonths, customMonths);
+  });
+
+  p1.log.errorMessage.length = 0;
+  const deniedMonths = await new Promise((resolve) => {
+    p1.emit('setCalendarMonths', { months: ['Нельзя'] }, resolve);
+  });
+  check('игрок не может менять календарь', () => {
+    assert.strictEqual(deniedMonths.ok, false);
+    assert.match(deniedMonths.error, /только ДМ/);
+    assert.deepStrictEqual(room.calendarMonths, customMonths);
+  });
+
+  await new Promise((resolve) => dm.emit('setCalendarMonths', { months: ['Один', 'Два'] }, resolve));
+  await new Promise((resolve) => dm.emit('undoDmAction', {}, resolve));
+  await waitFor(() => room.calendarMonths.length === customMonths.length, 'отмена календаря');
+  check('смена названий месяцев отменяется через Ctrl+Z', () => {
+    assert.deepStrictEqual(room.calendarMonths, customMonths);
+  });
+
+  await new Promise((resolve) => dm.emit('setCalendarMonths', { months: defaultMonths }, resolve));
+  await waitFor(() => room.calendarMonths.length === defaultMonths.length, 'возврат календаря');
 
   /* ------------------------------------------------ долгий отдых партии */
 

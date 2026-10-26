@@ -749,6 +749,11 @@
   resize: vertical;
 }
 
+.settings__textarea.settings__textarea--months {
+  min-height: 110px;
+  font-family: var(--font-num);
+}
+
 /* ------------------------------------------- Лист в отдельном окне */
 
 .sheet-window {

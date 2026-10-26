@@ -715,6 +715,8 @@ let chosenSheetId = null;
       grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
       // Часы стола: старые кампании приходят без поля, и стол начинает с утра.
       gameTime: state.gameTime || { day: 1, hour: 8 },
+      // Пустой список означает стандартные названия месяцев.
+      calendarMonths: state.calendarMonths || [],
       tokens: state.tokens || [],
       initiative: state.initiative || { entries: [], turnId: null, round: 1 },
       // Режим боя приходит в снимке состояния. Без него при переподключении
@@ -1151,6 +1153,12 @@ let chosenSheetId = null;
     socket.on('gameTimeUpdated', (time) => {
       app.room.gameTime = time || { day: 1, hour: 8 };
       renderGameTime();
+    });
+
+    socket.on('calendarMonthsUpdated', (months) => {
+      app.room.calendarMonths = Array.isArray(months) ? months : [];
+      renderGameTime();
+      syncCalendarSettings();
     });
 
     socket.on('tokenCreated', (token) => {
@@ -3566,14 +3574,51 @@ let chosenSheetId = null;
     applyAddressesCollapsed();
   }
 
-  /** Последний день календаря: 9999 лет по 360 дней. */
-  const MAX_GAME_DAY = 360 * 9999;
+  /** Названия месяцев кампании; пустой список означает стандартные. */
+  function calendarMonths() {
+    const raw = app.room && app.room.calendarMonths;
+    return Array.isArray(raw) && raw.length ? raw : DnD.CALENDAR.monthNames;
+  }
+
+  /**
+   * Обновляет открытые настройки календаря после смены названий. Если окно
+   * настроек закрыто, ничего не делает.
+   */
+  function syncCalendarSettings() {
+    const months = calendarMonths();
+    const monthsInput = document.getElementById('calendar-months-input');
+    if (monthsInput) monthsInput.value = months.join('\n');
+    const monthList = document.getElementById('calendar-month-names');
+    if (monthList) {
+      monthList.innerHTML = '';
+      for (const name of months) {
+        const option = document.createElement('option');
+        option.value = name;
+        monthList.appendChild(option);
+      }
+    }
+    const current = gameTime();
+    const date = DnD.calendarFromDay(current.day, months);
+    const dayInput = document.getElementById('calendar-day-input');
+    if (dayInput) dayInput.value = String(date.day);
+    const monthInput = document.getElementById('calendar-month-input');
+    if (monthInput) monthInput.value = date.name;
+    const yearInput = document.getElementById('calendar-year-input');
+    if (yearInput) yearInput.value = String(date.year);
+    const hourInput = document.getElementById('calendar-hour-input');
+    if (hourInput) hourInput.value = String(current.hour);
+  }
+
+  /** Последний день календаря: 9999 лет по текущему числу месяцев. */
+  function maxGameDay() {
+    return calendarMonths().length * DnD.CALENDAR.daysPerMonth * 9999;
+  }
 
   /** Часы стола: номер дня и час, без минут. */
   function gameTime() {
     const raw = app.room && app.room.gameTime;
     return {
-      day: DnD.clampNumber(raw && raw.day, 1, MAX_GAME_DAY, 1),
+      day: DnD.clampNumber(raw && raw.day, 1, maxGameDay(), 1),
       hour: DnD.clampNumber(raw && raw.hour, 0, 23, 8)
     };
   }
@@ -3582,13 +3627,13 @@ let chosenSheetId = null;
   function shiftGameTime(time, hours) {
     const total = (time.day - 1) * 24 + time.hour + hours;
     return {
-      day: Math.max(1, Math.min(MAX_GAME_DAY, Math.floor(total / 24) + 1)),
+      day: Math.max(1, Math.min(maxGameDay(), Math.floor(total / 24) + 1)),
       hour: ((total % 24) + 24) % 24
     };
   }
 
   function gameTimeLabel(time) {
-    return DnD.formatGameTime(time);
+    return DnD.formatGameTime(time, calendarMonths());
   }
 
   /** Часы видят все; кнопка долгого отдыха есть только у мастера. */
@@ -3602,7 +3647,7 @@ let chosenSheetId = null;
   /** Сохраняет время на сервере; в тренировке двигает только это окно. */
   function sendGameTime(time) {
     const next = {
-      day: DnD.clampNumber(time && time.day, 1, MAX_GAME_DAY, 1),
+      day: DnD.clampNumber(time && time.day, 1, maxGameDay(), 1),
       hour: DnD.clampNumber(time && time.hour, 0, 23, 8)
     };
     if (app.training || !app.socket || !app.connected) {
@@ -5076,6 +5121,50 @@ let chosenSheetId = null;
     generalPanel.appendChild(appBox);
 
     if (app.role === 'dm' && app.room && campaignPanel) {
+      // Названия месяцев. Месяц длится 30 дней, а число строк задаёт длину
+      // года, поэтому календарь сеттинга не привязан к двенадцати месяцам.
+      const monthsBox = el('div', 'box');
+      monthsBox.appendChild(el('div', 'box__title', 'Названия месяцев'));
+      const monthsInput = el('textarea', 'input settings__textarea settings__textarea--months');
+      monthsInput.id = 'calendar-months-input';
+      monthsInput.rows = 6;
+      monthsInput.placeholder = 'По одному названию в строке';
+      monthsInput.value = calendarMonths().join('\n');
+      monthsInput.setAttribute('aria-label', 'Названия месяцев');
+      monthsBox.appendChild(monthsInput);
+      const saveMonths = el('button', 'btn btn--tiny', 'Сохранить названия');
+      saveMonths.type = 'button';
+      saveMonths.addEventListener('click', async () => {
+        const names = monthsInput.value.split(/\r?\n/)
+          .map((name) => name.replace(/\s+/g, ' ').trim())
+          .filter(Boolean);
+        if (!names.length) return toast('Нужен хотя бы один месяц', 'error');
+        if (names.length > DnD.CALENDAR.maxMonths) {
+          return toast(`Не больше ${DnD.CALENDAR.maxMonths} месяцев`, 'error');
+        }
+        if (new Set(names.map((name) => name.toLowerCase())).size !== names.length) {
+          return toast('Названия месяцев не должны повторяться', 'error');
+        }
+        if (app.training || !app.socket || !app.connected) {
+          app.room.calendarMonths = names;
+          renderGameTime();
+          syncCalendarSettings();
+          return toast('Названия сохранены', 'ok');
+        }
+        const result = await emitAck('setCalendarMonths', { months: names });
+        if (!result || !result.ok) {
+          return toast((result && result.error) || 'Не удалось сохранить календарь', 'error');
+        }
+        app.room.calendarMonths = result.months || names;
+        renderGameTime();
+        syncCalendarSettings();
+        toast('Календарь сохранён', 'ok');
+      });
+      monthsBox.appendChild(saveMonths);
+      monthsBox.appendChild(el('div', 'box__note',
+        'По одному названию в строке. В каждом месяце 30 дней, число месяцев задаёт длину года.'));
+      campaignPanel.appendChild(monthsBox);
+
       // Часы кампании: мастер ставит время сам, кнопки двигают его на час или
       // на долгий отдых. Игроки видят то же время в шапке стола.
       const timeBox = el('div', 'box');
@@ -5094,46 +5183,81 @@ let chosenSheetId = null;
         return input;
       };
       const current = gameTime();
-      const date = DnD.calendarFromDay(current.day);
+      const date = DnD.calendarFromDay(current.day, calendarMonths());
       const dayInput = timeInput('День', date.day, 1, DnD.CALENDAR.daysPerMonth);
-      const monthInput = timeInput('Месяц', date.month, 1, DnD.CALENDAR.monthsPerYear);
+      dayInput.id = 'calendar-day-input';
+      // Месяц можно написать словом из списка или числом.
+      const monthWrap = el('label', 'settings__check');
+      monthWrap.appendChild(el('span', null, 'Месяц'));
+      const monthInput = el('input', 'input settings__input');
+      monthInput.id = 'calendar-month-input';
+      monthInput.type = 'text';
+      monthInput.maxLength = 40;
+      monthInput.value = date.name;
+      monthInput.setAttribute('list', 'calendar-month-names');
+      monthInput.setAttribute('aria-label', 'Месяц: название или номер');
+      monthWrap.appendChild(monthInput);
+      timeRow.appendChild(monthWrap);
       const yearInput = timeInput('Год', date.year, 1, 9999);
+      yearInput.id = 'calendar-year-input';
       const hourInput = timeInput('Час', current.hour, 0, 23);
+      hourInput.id = 'calendar-hour-input';
+      const monthList = document.createElement('datalist');
+      monthList.id = 'calendar-month-names';
+      for (const name of calendarMonths()) {
+        const option = document.createElement('option');
+        option.value = name;
+        monthList.appendChild(option);
+      }
+      timeBox.appendChild(monthList);
       timeBox.appendChild(timeRow);
       const timeActions = el('div', 'inline-row');
-      const read = () => ({
-        day: DnD.dayFromCalendar(yearInput.value, monthInput.value, dayInput.value),
-        hour: DnD.clampNumber(hourInput.value, 0, 23, 8)
-      });
+      const read = () => {
+        const month = DnD.monthIndexFromValue(monthInput.value, calendarMonths());
+        if (month < 0) return null;
+        return {
+          day: DnD.dayFromCalendar(yearInput.value, month, dayInput.value, calendarMonths()),
+          hour: DnD.clampNumber(hourInput.value, 0, 23, 8)
+        };
+      };
       const apply = (next) => {
-        const parts = DnD.calendarFromDay(next.day);
+        if (!next) return false;
+        const parts = DnD.calendarFromDay(next.day, calendarMonths());
         dayInput.value = String(parts.day);
-        monthInput.value = String(parts.month);
+        monthInput.value = parts.name;
         yearInput.value = String(parts.year);
         hourInput.value = String(next.hour);
         sendGameTime(next);
+        return true;
+      };
+      const shift = (hours) => {
+        const next = read();
+        if (!next) return toast('Такого месяца нет в календаре', 'error');
+        return apply(shiftGameTime(next, hours));
       };
       const plusHour = el('button', 'btn btn--tiny', '+1 час');
       plusHour.type = 'button';
-      plusHour.addEventListener('click', () => apply(shiftGameTime(read(), 1)));
+      plusHour.addEventListener('click', () => shift(1));
       const plusRest = el('button', 'btn btn--tiny', '+8 часов');
       plusRest.type = 'button';
       plusRest.title = 'Сдвинуть время на 8 часов';
-      plusRest.addEventListener('click', () => apply(shiftGameTime(read(), 8)));
+      plusRest.addEventListener('click', () => shift(8));
       const restParty = el('button', 'btn btn--tiny', 'Долгий отдых партии');
       restParty.type = 'button';
       restParty.title = 'Вылечить всю партию и сдвинуть время на 8 часов';
       restParty.addEventListener('click', () => partyLongRest());
       const saveTime = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
       saveTime.type = 'button';
-      saveTime.addEventListener('click', () => apply(read()));
+      saveTime.addEventListener('click', () => {
+        if (!apply(read())) toast('Такого месяца нет в календаре', 'error');
+      });
       timeActions.appendChild(plusHour);
       timeActions.appendChild(plusRest);
       timeActions.appendChild(restParty);
       timeActions.appendChild(saveTime);
       timeBox.appendChild(timeActions);
       timeBox.appendChild(el('div', 'box__note',
-        'Видят все участники. Само время не идёт: его двигает мастер, а долгий отдых лечит партию и переводит часы на 8 часов вперёд.'));
+        'Видят все участники. Месяц можно написать словом или числом. Само время не идёт: его двигает мастер, а долгий отдых лечит партию и переводит часы на 8 часов вперёд.'));
       campaignPanel.appendChild(timeBox);
 
       const journalBox = el('div', 'box');

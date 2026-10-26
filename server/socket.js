@@ -363,6 +363,21 @@ async function createTableServer(options) {
   };
 
   /**
+   * Рассылает заявки на броски каждому свою версию.
+   *
+   * Скрытая проверка не должна утекать в общий список: игрок, которому она не
+   * адресована, не должен увидеть даже её название.
+   */
+  const broadcastRollRequests = () => {
+    io.to('dm-sockets').emit('rollRequestUpdated', room.rollRequests);
+    for (const player of room.players.values()) {
+      if (player.role !== ROLE_PLAYER) continue;
+      io.to(player.playerId).emit('rollRequestUpdated',
+        room.rollRequests.filter((request) => !request.to || request.to === player.playerId));
+    }
+  };
+
+  /**
    * Объявление об изменении прочности в чате.
    *
    * Монстрам прочность в чат не пишем: сервер намеренно прячет её от игроков,
@@ -381,17 +396,18 @@ async function createTableServer(options) {
     const pending = hpNotices.get(tokenId);
     if (!pending) return;
     hpNotices.delete(tokenId);
-    const { token, before, actor } = pending;
+    const { token, before, actor, type } = pending;
     if (!room.tokens.includes(token) || !room.isTokenVisibleToPlayers(token)) return;
     const after = token.hp;
     if (after === before) return;
     const delta = after - before;
     const name = room.tokenForViewer(token, false).name || 'Фишка';
+    const kind = `${delta < 0 ? 'урон' : 'лечение'} ${Math.abs(delta)}${type ? `, ${type}` : ''}`;
     const notice = {
       from: actor.name,
       playerId: actor.playerId,
       role: actor.role,
-      text: `${name}: ${after}/${token.maxHp} (${delta < 0 ? 'урон' : 'лечение'} ${Math.abs(delta)})`,
+      text: `${name}: ${after}/${token.maxHp} (${kind})`,
       system: true,
       time: new Date().toISOString()
     };
@@ -403,8 +419,9 @@ async function createTableServer(options) {
    * @param {object} token
    * @param {number} before прочность до правки
    * @param {{playerId: string, name: string, role: string}} actor
+   * @param {string} [type] тип урона для подписи
    */
-  const announceTokenHp = (token, before, actor) => {
+  const announceTokenHp = (token, before, actor, type) => {
     if (!token.assignedPlayerId) return;
     if (!room.isTokenVisibleToPlayers(token)) return;
     const pending = hpNotices.get(token.id);
@@ -417,6 +434,7 @@ async function createTableServer(options) {
       token,
       before,
       actor,
+      type,
       timer: setTimeout(() => flushHpNotice(token.id), HP_NOTICE_DELAY)
     });
   };
@@ -993,7 +1011,7 @@ socket.on('setGrid', (payload) => {
       markDirty();
       io.emit('gameTimeUpdated', room.gameTime);
       for (const token of changed) emitToken('tokenUpdated', token);
-      onLog(`Время в игре: день ${room.gameTime.day}, ${String(room.gameTime.hour).padStart(2, '0')}:00`);
+      onLog(`Время в игре: ${fogModel.formatGameTime(room.gameTime)}`);
     });
 
     /**
@@ -1517,6 +1535,61 @@ socket.on('setGrid', (payload) => {
           role: socket.data.role
         });
       }
+    });
+
+    /**
+     * Урон или лечение по фишке с временными хитами.
+     *
+     * Отдельно от точного значения: «-1» и «-5» остаются быстрыми кнопками, а
+     * здесь мастер вводит число из броска. Если персонаж держит концентрацию,
+     * игроку сразу уходит заявка на спасбросок с готовой СЛ.
+     */
+    socket.on('applyTokenDamage', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      const amount = clampInt(payload && payload.amount, 0, 9999, 0);
+      if (!amount) return emitError(socket, 'Укажите количество урона или лечения');
+      const before = token.assignedPlayerId
+        ? (room.sheets.get(token.assignedPlayerId)?.hp ?? token.hp)
+        : token.hp;
+      const result = room.applyTokenDamage(token, amount, payload && payload.type, Boolean(payload && payload.healing));
+      if (!result) return emitError(socket, `У фишки «${token.name}» нет прочности`);
+      markDirty();
+      const tokens = result.sheet && token.assignedPlayerId
+        ? room.syncSheetTokens(token.assignedPlayerId)
+        : [token];
+      for (const item of tokens) emitToken('tokenUpdated', item);
+      if (result.sheet && token.assignedPlayerId) {
+        io.to(token.assignedPlayerId).emit('characterSheetData', {
+          playerId: token.assignedPlayerId,
+          sheet: result.sheet
+        });
+        io.to('dm-sockets').emit('characterSheetUpdated', {
+          playerId: token.assignedPlayerId,
+          sheet: result.sheet
+        });
+      }
+      announceTokenHp(token, before, {
+        playerId: socket.data.playerId,
+        name: socket.data.name,
+        role: socket.data.role
+      }, result.type);
+      if (result.concentration) {
+        const player = room.players.get(token.assignedPlayerId);
+        const modifier = fogModel.computeDerived(result.sheet).saves.con.total;
+        const request = room.addRollRequest({
+          label: `Концентрация: ${result.concentration.spell} (СЛ ${result.concentration.dc})`,
+          dc: result.concentration.dc,
+          formula: `1d20${modifier >= 0 ? '+' : ''}${modifier}`,
+          to: token.assignedPlayerId,
+          toName: player ? player.name : '',
+          by: socket.data.name
+        });
+        if (request) broadcastRollRequests();
+      }
+      const kind = result.healing ? 'лечение' : 'урон';
+      onLog(`${kind} ${amount}${result.type ? ` (${result.type})` : ''} по фишке «${token.name}»`);
     });
 
     socket.on('setTokenSize', (payload) => {
@@ -2454,6 +2527,19 @@ socket.on('rollDice', (payload) => {
       const decoded = decodeImage(payload && payload.image, LIMITS.maxImageBytes);
       if (decoded.error) return emitError(socket, decoded.error);
 
+      // Картинку тоже можно отдать одному игроку: тайная карта или письмо
+      // не должны появляться у всего стола. Адресата проверяем до сохранения,
+      // иначе отклонённая картинка оставила бы файл-сироту.
+      let to = null;
+      if (payload && payload.to) {
+        const target = room.players.get(String(payload.to));
+        if (!target || target.role !== ROLE_PLAYER) {
+          return emitError(socket, 'Игрок для изображения не найден');
+        }
+        to = target.playerId;
+      }
+      const target = to ? room.players.get(to) : null;
+
       let fileName;
       try {
         fileName = await store.saveImage(room.campaign.id, decoded.buffer, decoded.ext);
@@ -2462,7 +2548,6 @@ socket.on('rollDice', (payload) => {
         onLog(`Ошибка сохранения картинки в чат: ${error.message}`);
         return;
       }
-
       const text = sanitizeText(payload && payload.text, LIMITS.maxChatLength).trim();
       const message = {
         from: socket.data.name,
@@ -2470,11 +2555,21 @@ socket.on('rollDice', (payload) => {
         role: socket.data.role,
         text,
         image: `/files/${fileName}`,
+        whisper: to ? true : undefined,
+        to: to || undefined,
+        toName: target ? target.name : undefined,
         time: new Date().toISOString()
       };
       pushChat(message);
-      io.emit('chatMessage', message);
-      onLog(`Мастер отправил изображение в чат`);
+      if (to) {
+        io.to('dm-sockets').emit('chatMessage', message);
+        io.to(to).emit('chatMessage', message);
+      } else {
+        io.emit('chatMessage', message);
+      }
+      onLog(to
+        ? `Мастер отправил изображение игроку ${target.name}`
+        : 'Мастер отправил изображение в чат');
     });
 
     // Журнал: мастеру все записи, игрокам только отмеченные «показать».
@@ -2583,18 +2678,66 @@ socket.on('rollDice', (payload) => {
       if (typeof ack === 'function') ack({ ok: true, coins });
     });
 
+    /**
+     * Делит монеты склада поровну между игроками с листами.
+     *
+     * Остаток остаётся в общем складе. Листы меняются без Ctrl+Z: снимок
+     * отмены их не хранит, и откат разошёлся бы с кошельками.
+     */
+    socket.on('splitInventoryCoins', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const result = room.splitInventoryCoins();
+      if (!result) {
+        emitError(socket, 'Нечего делить: нет игроков с листами');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Нечего делить: нет игроков с листами' });
+        return;
+      }
+      markDirty();
+      io.emit('inventoryCoinsUpdated', room.inventoryCoins);
+      for (const playerId of result.players) {
+        const sheet = room.sheets.get(playerId);
+        if (!sheet) continue;
+        io.to(playerId).emit('characterSheetData', { playerId, sheet });
+        io.to('dm-sockets').emit('characterSheetUpdated', { playerId, sheet });
+      }
+      if (typeof ack === 'function') ack({ ok: true, shares: result.shares, coins: result.coins });
+    });
+
     socket.on('rollRequest', (payload, ack) => {
       if (!requireDm(socket)) {
         if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
         return;
       }
-      const request = room.addRollRequest(payload || {});
+      // Адресат необязателен: без него проверка общая. Если мастер выбрал
+      // игрока, проверяем его по списку, чтобы нельзя было отправить заявку
+      // несуществующему участнику.
+      let to = '';
+      let toName = '';
+      if (payload && payload.to) {
+        const target = room.players.get(String(payload.to));
+        if (!target || target.role !== ROLE_PLAYER) {
+          emitError(socket, 'Игрок для проверки не найден');
+          if (typeof ack === 'function') ack({ ok: false, error: 'Игрок для проверки не найден' });
+          return;
+        }
+        to = target.playerId;
+        toName = target.name;
+      }
+      const request = room.addRollRequest({
+        ...(payload || {}),
+        to,
+        toName,
+        by: socket.data.name
+      });
       if (!request) {
         emitError(socket, 'Нужно название проверки');
         if (typeof ack === 'function') ack({ ok: false, error: 'Нужно название проверки' });
         return;
       }
-      io.to('table').emit('rollRequestUpdated', room.rollRequests);
+      broadcastRollRequests();
       markDirty();
       if (typeof ack === 'function') ack({ ok: true, request });
     });
@@ -2605,7 +2748,7 @@ socket.on('rollDice', (payload) => {
         return;
       }
       room.clearRollRequest(payload && payload.id);
-      io.to('table').emit('rollRequestUpdated', room.rollRequests);
+      broadcastRollRequests();
       markDirty();
       if (typeof ack === 'function') ack({ ok: true });
     });

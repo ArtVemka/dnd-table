@@ -275,6 +275,42 @@ let chosenSheetId = null;
         box.appendChild(field);
       }
 
+      // Несколько полей в одном окне: урон, тип и действие. Возвращаем объект,
+      // чтобы вызывающий не разбирал строки по порядку.
+      let fields = null;
+      if (Array.isArray(options.fields)) {
+        fields = {};
+        for (const spec of options.fields) {
+          const wrap = el('label', 'modal__field');
+          wrap.appendChild(el('span', 'modal__field-label', spec.label || ''));
+          let control;
+          if (spec.type === 'select') {
+            control = el('select', 'select');
+            for (const option of spec.options || []) {
+              const node = el('option', null, option.label);
+              node.value = String(option.value);
+              control.appendChild(node);
+            }
+          } else {
+            control = el('input', 'input');
+            control.type = spec.type || 'text';
+            if (spec.min !== undefined) control.min = String(spec.min);
+            if (spec.max !== undefined) control.max = String(spec.max);
+            if (spec.step !== undefined) control.step = String(spec.step);
+          }
+          control.value = String(spec.value ?? '');
+          control.setAttribute('aria-label', spec.label || '');
+          fields[spec.key] = control;
+          wrap.appendChild(control);
+          if (control.tagName === 'INPUT') {
+            control.addEventListener('keydown', (event) => {
+              if (event.key === 'Enter') confirm.click();
+            });
+          }
+          box.appendChild(wrap);
+        }
+      }
+
       const actions = el('div', 'modal__actions');
       const cancel = el('button', 'btn btn--ghost', options.cancelLabel || 'Отмена');
       cancel.type = 'button';
@@ -291,7 +327,15 @@ let chosenSheetId = null;
         if (event.key === 'Escape') close(null);
       };
       cancel.addEventListener('click', () => close(null));
-      confirm.addEventListener('click', () => close(field ? (field.value.trim() || null) : true));
+      confirm.addEventListener('click', () => {
+        if (fields) {
+          const value = {};
+          for (const key of Object.keys(fields)) value[key] = fields[key].value;
+          close(value);
+        } else {
+          close(field ? (field.value.trim() || null) : true);
+        }
+      });
       if (field) {
         field.addEventListener('keydown', (event) => {
           if (event.key === 'Enter') confirm.click();
@@ -308,6 +352,7 @@ let chosenSheetId = null;
       overlay.appendChild(box);
       document.body.appendChild(overlay);
       if (field) field.focus();
+      else if (fields && Object.keys(fields).length) fields[Object.keys(fields)[0]].focus();
       else confirm.focus();
     });
   }
@@ -532,6 +577,67 @@ let chosenSheetId = null;
     };
   }
 
+  /** Типы урона для подписи в чате. Сопротивления в листе пока не хранятся. */
+  const DAMAGE_TYPES = [
+    ['', 'без типа'],
+    ['огонь', 'огонь'],
+    ['холод', 'холод'],
+    ['электричество', 'электричество'],
+    ['кислота', 'кислота'],
+    ['яд', 'яд'],
+    ['некротический', 'некротический'],
+    ['излучение', 'излучение'],
+    ['силовой', 'силовой'],
+    ['дробящий', 'дробящий'],
+    ['колющий', 'колющий'],
+    ['рубящий', 'рубящий'],
+    ['психический', 'психический']
+  ];
+
+  /**
+   * Урон или лечение по фишке. Временные хиты съедает сервер, а проверку
+   * концентрации он же превращает в заявку игроку.
+   */
+  async function openTokenDamage(tokenId) {
+    const token = (app.room.tokens || []).find((item) => item.id === tokenId);
+    if (!token) return;
+    const sheet = token.assignedPlayerId && app.room.sheets
+      ? app.room.sheets[token.assignedPlayerId]
+      : null;
+    const temp = sheet ? ` Временных хитов: ${sheet.tempHp || 0}.` : '';
+    const answer = await modal({
+      title: 'Урон или лечение',
+      message: `${token.name}.${temp}`,
+      confirmLabel: 'Применить',
+      fields: [
+        {
+          key: 'mode',
+          label: 'Действие',
+          type: 'select',
+          value: 'damage',
+          options: [{ value: 'damage', label: 'Урон' }, { value: 'heal', label: 'Лечение' }]
+        },
+        { key: 'amount', label: 'Количество', type: 'number', min: 1, max: 9999, value: '1' },
+        {
+          key: 'type',
+          label: 'Тип урона',
+          type: 'select',
+          value: '',
+          options: DAMAGE_TYPES.map(([value, label]) => ({ value, label }))
+        }
+      ]
+    });
+    if (!answer) return;
+    const amount = DnD.clampNumber(answer.amount, 1, 9999, 0);
+    if (!amount) return toast('Укажите количество', 'error');
+    emit('applyTokenDamage', {
+      tokenId,
+      amount,
+      type: answer.type || '',
+      healing: answer.mode === 'heal'
+    });
+  }
+
   function emit(event, payload) {
     if (!app.socket || !app.connected) {
       toast('Нет соединения со столом', 'error');
@@ -564,14 +670,14 @@ let chosenSheetId = null;
    * Хендаут в чат: картинка сохраняется в папку кампании, в ленте остаётся URL.
    * Текст из поля ввода идёт подписью, поэтому его не нужно вводить заново.
    */
-  async function uploadChatImage(file, text) {
+  async function uploadChatImage(file, text, to) {
     const read = await readImageFile(file);
     if (read.canceled) return false;
     if (read.error) {
       toast(read.error, 'error');
       return false;
     }
-    return emit('chatImage', { image: read.dataUrl, text: text || '' });
+    return emit('chatImage', { image: read.dataUrl, text: text || '', to: to || undefined });
   }
 
   /** Очистка ленты: спрашиваем подтверждение, история не восстанавливается. */
@@ -978,8 +1084,9 @@ let chosenSheetId = null;
       playersList.render(app.room.players, viewer());
       playersList.renderSelfAvatar({ avatarUrl: ownAvatarOf('dm'), name: dmName() });
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
-      // Новый игрок должен сразу появиться в списке адресатов шёпота.
+      // Новый игрок должен сразу появиться в списке адресатов шёпота и проверок.
       if (chatPanel) chatPanel.syncWhisperTargets();
+      renderRollRequests();
       // Список выбора в панели боя собран из игроков и фишек: новый участник
       // должен появиться в нём сразу.
       renderInitiativePanel();
@@ -1582,6 +1689,7 @@ let chosenSheetId = null;
         // Прочность ведёт мастер: игрок правит своё здоровье в листе, и две
         // правки одного числа за столом разошлись бы.
         onSetTokenHp: (tokenId, hp) => emit('setTokenHp', { tokenId, hp }),
+        onTokenDamage: openTokenDamage,
         onSetTokenSize: (tokenId, size) => emit('setTokenSize', { tokenId, size }),
         onSetTokenSide: (tokenId, side) => emit('setTokenSide', { tokenId, side }),
         onSetTokenAttackBonus: (tokenId, attackBonus) => emit('setTokenAttackBonus', { tokenId, attackBonus }),
@@ -3458,11 +3566,14 @@ let chosenSheetId = null;
     applyAddressesCollapsed();
   }
 
-  /** Часы стола: день и час, без минут. */
+  /** Последний день календаря: 9999 лет по 360 дней. */
+  const MAX_GAME_DAY = 360 * 9999;
+
+  /** Часы стола: номер дня и час, без минут. */
   function gameTime() {
     const raw = app.room && app.room.gameTime;
     return {
-      day: DnD.clampNumber(raw && raw.day, 1, 9999, 1),
+      day: DnD.clampNumber(raw && raw.day, 1, MAX_GAME_DAY, 1),
       hour: DnD.clampNumber(raw && raw.hour, 0, 23, 8)
     };
   }
@@ -3471,13 +3582,13 @@ let chosenSheetId = null;
   function shiftGameTime(time, hours) {
     const total = (time.day - 1) * 24 + time.hour + hours;
     return {
-      day: Math.floor(total / 24) + 1,
+      day: Math.max(1, Math.min(MAX_GAME_DAY, Math.floor(total / 24) + 1)),
       hour: ((total % 24) + 24) % 24
     };
   }
 
   function gameTimeLabel(time) {
-    return `День ${time.day}, ${String(time.hour).padStart(2, '0')}:00`;
+    return DnD.formatGameTime(time);
   }
 
   /** Часы видят все; кнопка долгого отдыха есть только у мастера. */
@@ -3491,7 +3602,7 @@ let chosenSheetId = null;
   /** Сохраняет время на сервере; в тренировке двигает только это окно. */
   function sendGameTime(time) {
     const next = {
-      day: DnD.clampNumber(time && time.day, 1, 9999, 1),
+      day: DnD.clampNumber(time && time.day, 1, MAX_GAME_DAY, 1),
       hour: DnD.clampNumber(time && time.hour, 0, 23, 8)
     };
     if (app.training || !app.socket || !app.connected) {
@@ -3827,7 +3938,36 @@ let chosenSheetId = null;
       field.appendChild(input);
       row.appendChild(field);
     }
+    if (isDm && !app.training) {
+      const split = el('button', 'btn btn--tiny btn--ghost inventory-coins__split', 'Разделить');
+      split.type = 'button';
+      split.title = 'Разделить монеты поровну между игроками с листами';
+      split.addEventListener('click', splitInventoryCoins);
+      row.appendChild(split);
+    }
     return row;
+  }
+
+  /** Делит монеты склада поровну; остаток остаётся в общем кошельке. */
+  async function splitInventoryCoins() {
+    const players = (app.room.players || [])
+      .filter((player) => player.role === 'player' && app.room.sheets && app.room.sheets[player.playerId]);
+    if (!players.length) return toast('Нет игроков с листами: делить некому', 'error');
+    const coins = inventoryCoins();
+    if (!Object.values(coins).some((value) => value > 0)) {
+      return toast('В общем складе нет монет', 'error');
+    }
+    const answer = await modal({
+      title: 'Разделить монеты?',
+      message: `Монеты склада разделятся поровну между игроками с листами: ${players.map((player) => player.name).join(', ')}. Остаток от деления останется в общем складе.`,
+      confirmLabel: 'Разделить'
+    });
+    if (!answer) return;
+    const result = await emitAck('splitInventoryCoins', {});
+    if (!result || !result.ok) {
+      return toast((result && result.error) || 'Не удалось разделить монеты', 'error');
+    }
+    toast('Монеты разделены поровну', 'ok');
   }
 
   /** Имя владельца предмета: пустой ownerId — общий склад. */
@@ -4041,9 +4181,11 @@ let chosenSheetId = null;
     return app.room && Array.isArray(app.room.rollRequests) ? app.room.rollRequests : [];
   }
 
-  /** Подпись проверки: название и, если задана, сложность. */
+  /** Подпись проверки: название, сложность и адресат. */
   function rollRequestLabel(request) {
-    return request.dc ? `${request.label} (СЛ ${request.dc})` : request.label;
+    const dc = request.dc ? ` (СЛ ${request.dc})` : '';
+    const target = request.toName ? ` → ${request.toName}` : '';
+    return `${request.label}${dc}${target}`;
   }
 
   function requestRoll(request) {
@@ -4063,6 +4205,25 @@ let chosenSheetId = null;
     const isDm = app.role === 'dm';
     const panel = $('#roll-requests-panel');
     if (panel) {
+      const toSelect = $('#roll-request-to');
+      if (toSelect) {
+        const previous = toSelect.value;
+        toSelect.innerHTML = '';
+        const all = el('option', null, 'Всем');
+        all.value = '';
+        toSelect.appendChild(all);
+        for (const player of app.room.players || []) {
+          if (player.role !== 'player') continue;
+          const option = el('option', null, player.name);
+          option.value = player.playerId;
+          toSelect.appendChild(option);
+        }
+        // Игрок мог выйти, пока форма была открыта: выбор не должен указывать
+        // на несуществующего адресата.
+        if ([...toSelect.options].some((option) => option.value === previous)) {
+          toSelect.value = previous;
+        }
+      }
       panel.hidden = !(isDm && app.room && !app.training);
       const form = $('#roll-request-form');
       if (form) form.hidden = panel.hidden;
@@ -4112,10 +4273,12 @@ let chosenSheetId = null;
     if (!label) return toast('Нужно название проверки', 'error');
     const dc = $('#roll-request-dc').value.trim();
     const formula = $('#roll-request-formula').value.trim();
+    const toSelect = $('#roll-request-to');
     app.socket.emit('rollRequest', {
       label,
       dc: dc ? Number(dc) : null,
-      formula
+      formula,
+      to: toSelect ? toSelect.value : ''
     }, (result) => {
       if (!result || !result.ok) {
         return toast((result && result.error) || 'Не удалось попросить бросок', 'error');
@@ -4123,6 +4286,7 @@ let chosenSheetId = null;
       $('#roll-request-label').value = '';
       $('#roll-request-dc').value = '';
       $('#roll-request-formula').value = '';
+      if (toSelect) toSelect.value = '';
     });
   }
 
@@ -4916,7 +5080,7 @@ let chosenSheetId = null;
       // на долгий отдых. Игроки видят то же время в шапке стола.
       const timeBox = el('div', 'box');
       timeBox.appendChild(el('div', 'box__title', 'Время в игре'));
-      const timeRow = el('div', 'settings__row');
+      const timeRow = el('div', 'settings__row settings__row--time');
       const timeInput = (label, value, min, max) => {
         const wrap = el('label', 'settings__check');
         wrap.appendChild(el('span', null, label));
@@ -4930,16 +5094,22 @@ let chosenSheetId = null;
         return input;
       };
       const current = gameTime();
-      const dayInput = timeInput('День', current.day, 1, 9999);
+      const date = DnD.calendarFromDay(current.day);
+      const dayInput = timeInput('День', date.day, 1, DnD.CALENDAR.daysPerMonth);
+      const monthInput = timeInput('Месяц', date.month, 1, DnD.CALENDAR.monthsPerYear);
+      const yearInput = timeInput('Год', date.year, 1, 9999);
       const hourInput = timeInput('Час', current.hour, 0, 23);
       timeBox.appendChild(timeRow);
       const timeActions = el('div', 'inline-row');
       const read = () => ({
-        day: DnD.clampNumber(dayInput.value, 1, 9999, 1),
+        day: DnD.dayFromCalendar(yearInput.value, monthInput.value, dayInput.value),
         hour: DnD.clampNumber(hourInput.value, 0, 23, 8)
       });
       const apply = (next) => {
-        dayInput.value = String(next.day);
+        const parts = DnD.calendarFromDay(next.day);
+        dayInput.value = String(parts.day);
+        monthInput.value = String(parts.month);
+        yearInput.value = String(parts.year);
         hourInput.value = String(next.hour);
         sendGameTime(next);
       };

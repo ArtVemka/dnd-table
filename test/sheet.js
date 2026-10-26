@@ -266,6 +266,16 @@ check('пороги партии складываются по уровням, �
   assert.strictEqual(DnD.encounterDifficulty(100, null), null);
 });
 
+check('календарь переводит номер дня в месяц и год', () => {
+  assert.deepStrictEqual(DnD.calendarFromDay(1), { year: 1, month: 1, day: 1 });
+  assert.deepStrictEqual(DnD.calendarFromDay(31), { year: 1, month: 2, day: 1 });
+  assert.deepStrictEqual(DnD.calendarFromDay(361), { year: 2, month: 1, day: 1 });
+  const day = DnD.dayFromCalendar(1492, 3, 5);
+  assert.deepStrictEqual(DnD.calendarFromDay(day), { year: 1492, month: 3, day: 5 });
+  // Старый номер дня за пределами месяца не теряется при выводе.
+  assert.strictEqual(DnD.formatGameTime({ day: 31, hour: 8 }), '1 февраля 1 г., 08:00');
+});
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }

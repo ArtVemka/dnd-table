@@ -5532,11 +5532,15 @@
       fileInput.addEventListener('change', () => {
         const file = fileInput.files && fileInput.files[0];
         const caption = input.value.trim();
+        const to = this.toSelect && !this.toSelect.hidden ? this.toSelect.value : '';
         fileInput.value = '';
         if (!file || !this.handlers.onImage) return;
-        const sent = this.handlers.onImage(file, caption);
+        const sent = this.handlers.onImage(file, caption, to || undefined);
         Promise.resolve(sent).then((ok) => {
-          if (ok && input.value.trim() === caption) input.value = '';
+          if (!ok) return;
+          if (input.value.trim() === caption) input.value = '';
+          // Адресат картинки одноразовый, как и у текстового шёпота.
+          if (this.toSelect) this.toSelect.value = '';
         });
       });
       attach.addEventListener('click', () => fileInput.click());
@@ -6436,6 +6440,43 @@
         current ? `Ходит: ${current.name}` : (rolled ? 'Ход не объявлен' : 'Бросьте инициативу')));
     }
 
+    /**
+     * Боевые числа для строки: здоровье, КД и состояния.
+     *
+     * Источник — лист игрока, если он есть, иначе фишка. У «другого имени»
+     * данных нет, и строка остаётся прежней.
+     * @param {object} entry
+     * @returns {{hp: number|null, max: number|null, ac: number|null, conditions: string[]}}
+     */
+    entryInfo(entry) {
+      const empty = { hp: null, max: null, ac: null, conditions: [] };
+      let token = null;
+      let sheet = null;
+      if (entry.kind === 'player') {
+        sheet = this.sheets[entry.refId] || null;
+        token = this.tokens.find((item) => item.assignedPlayerId === entry.refId) || null;
+      } else if (entry.kind === 'token') {
+        token = this.tokens.find((item) => item.id === entry.refId) || null;
+        sheet = token && token.assignedPlayerId ? this.sheets[token.assignedPlayerId] : null;
+      } else {
+        return empty;
+      }
+      const rawHp = sheet ? sheet.hp : (token ? token.hp : null);
+      const hp = rawHp === null || rawHp === undefined ? null : Number(rawHp);
+      const max = sheet
+        ? (DnD.effectiveMaxHp ? DnD.effectiveMaxHp(sheet) : Number(sheet.maxHp))
+        : (token && token.maxHp !== null && token.maxHp !== undefined ? Number(token.maxHp) : null);
+      const ac = sheet && Number(sheet.armorClass)
+        ? Number(sheet.armorClass)
+        : (token && Number(token.armorClass) ? Number(token.armorClass) : null);
+      return {
+        hp: Number.isFinite(hp) ? hp : null,
+        max: Number.isFinite(max) && max > 0 ? max : null,
+        ac: Number.isFinite(ac) && ac > 0 ? Math.round(ac) : null,
+        conditions: token && Array.isArray(token.conditions) ? token.conditions : []
+      };
+    }
+
     renderList() {
       this.list.innerHTML = '';
       const { entries, turnId } = this.state;
@@ -6444,7 +6485,31 @@
         const row = el('div', 'initiative__row');
         if (entry.id === turnId) row.classList.add('is-current');
         row.appendChild(el('span', 'initiative__index', String(index + 1)));
-        row.appendChild(el('span', 'initiative__name', entry.name));
+        const info = this.entryInfo(entry);
+        const who = el('div', 'initiative__who');
+        who.appendChild(el('span', 'initiative__name', entry.name));
+        const meta = el('div', 'initiative__info');
+        if (info.hp !== null) {
+          const hpNode = el('span', 'initiative__hp', `${info.hp}${info.max ? `/${info.max}` : ''}`);
+          if (info.hp <= 0) hpNode.classList.add('is-down');
+          else if (info.max && info.hp * 2 <= info.max) hpNode.classList.add('is-low');
+          meta.appendChild(hpNode);
+        }
+        if (info.ac !== null) meta.appendChild(el('span', 'initiative__ac', `КД ${info.ac}`));
+        if (info.conditions.length) {
+          const labels = info.conditions
+            .map((id) => (DnD.CONDITIONS || []).find((item) => item.id === id))
+            .filter(Boolean)
+            .map((item) => item.short || item.label);
+          if (labels.length) {
+            const conditions = el('span', 'initiative__conditions',
+              labels.slice(0, 3).join(', ') + (labels.length > 3 ? ` +${labels.length - 3}` : ''));
+            conditions.title = labels.join(', ');
+            meta.appendChild(conditions);
+          }
+        }
+        if (meta.childNodes.length) who.appendChild(meta);
+        row.appendChild(who);
         const total = entry.total === null || entry.total === undefined ? '—' : String(entry.total);
         row.appendChild(el('span', 'initiative__total', total));
         row.appendChild(el('span', 'initiative__modifier',
@@ -7181,6 +7246,15 @@
         });
         box.appendChild(button);
       }
+      // Точный урон из броска: временные хиты и проверка концентрации живут
+      // на сервере, поэтому кнопка открывает окно, а не прибавляет число.
+      const precise = el('button', 'btn btn--tiny token-hp__btn', 'Урон…');
+      precise.type = 'button';
+      precise.title = 'Урон или лечение с временными хитами';
+      precise.addEventListener('click', () => {
+        if (this.handlers.onTokenDamage) this.handlers.onTokenDamage(token.id);
+      });
+      box.appendChild(precise);
       return box;
     }
 

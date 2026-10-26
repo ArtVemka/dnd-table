@@ -908,6 +908,50 @@ const GRID = {
   }
 
   /**
+   * Календарь стола: 12 месяцев по 30 дней.
+   *
+   * В кампании хранится только номер дня, поэтому старые сохранения с «днём 37»
+   * открываются как 7 февраля первого года без миграции. Год и месяц считаются
+   * от номера дня, а не хранятся отдельно.
+   */
+  const CALENDAR = {
+    daysPerMonth: 30,
+    monthsPerYear: 12,
+    monthNames: [
+      'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+      'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+    ]
+  };
+
+  /** @param {number} rawDay @returns {{year: number, month: number, day: number}} */
+  function calendarFromDay(rawDay) {
+    const total = Math.max(0, Math.floor(Number(rawDay) || 1) - 1);
+    const yearLength = CALENDAR.daysPerMonth * CALENDAR.monthsPerYear;
+    const year = Math.floor(total / yearLength) + 1;
+    const rest = total % yearLength;
+    return {
+      year,
+      month: Math.floor(rest / CALENDAR.daysPerMonth) + 1,
+      day: (rest % CALENDAR.daysPerMonth) + 1
+    };
+  }
+
+  /** @param {number} year @param {number} month @param {number} day @returns {number} */
+  function dayFromCalendar(year, month, day) {
+    const y = Math.max(1, Math.min(9999, Math.floor(Number(year) || 1)));
+    const m = Math.max(1, Math.min(CALENDAR.monthsPerYear, Math.floor(Number(month) || 1)));
+    const d = Math.max(1, Math.min(CALENDAR.daysPerMonth, Math.floor(Number(day) || 1)));
+    return ((y - 1) * CALENDAR.monthsPerYear + (m - 1)) * CALENDAR.daysPerMonth + d;
+  }
+
+  /** @param {{day: number, hour: number}} time @returns {string} */
+  function formatGameTime(time) {
+    const date = calendarFromDay(time && time.day);
+    const hour = Math.max(0, Math.min(23, Math.floor(Number(time && time.hour) || 0)));
+    return `${date.day} ${CALENDAR.monthNames[date.month - 1]} ${date.year} г., ${String(hour).padStart(2, '0')}:00`;
+  }
+
+  /**
    * Состояния фишки.
    *
    * У каждого состояния два поля, которых раньше не было:
@@ -1451,6 +1495,10 @@ const GRID = {
     ABILITY_KEYS,
     ABILITIES,
     ABILITY_LABELS,
+    CALENDAR,
+    calendarFromDay,
+    dayFromCalendar,
+    formatGameTime,
     CLASSES,
     CONDITIONS,
     MOVE_BLOCKING,

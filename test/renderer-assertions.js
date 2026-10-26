@@ -3194,9 +3194,25 @@
       { playerId: 'p-1', name: 'Артём', role: 'player', online: true },
       { playerId: 'p-2', name: 'Борис', role: 'player', online: true }
     ];
-    const initiativeTokens = [{ id: 't-1', name: 'Гоблин' }];
+    const initiativeTokens = [{
+      id: 't-1',
+      name: 'Гоблин',
+      hp: 5,
+      maxHp: 12,
+      armorClass: 13,
+      conditions: ['poisoned']
+    }];
     // Инициатива Артёма считается из его листа: Dex 16 -> +3, прочий бонус 0.
-    const initiativeSheets = { 'p-1': { abilities: { dex: 16 }, initiativeMisc: 0, level: 5 } };
+    const initiativeSheets = {
+      'p-1': {
+        abilities: { dex: 16 },
+        initiativeMisc: 0,
+        level: 5,
+        hp: 18,
+        maxHp: 24,
+        armorClass: 16
+      }
+    };
     const emptyInitiative = { entries: [], turnId: null, round: 1 };
     initiativePanel.render(emptyInitiative, initiativePlayers, initiativeTokens, { role: 'dm', playerId: 'dm' }, initiativeSheets);
 
@@ -3254,7 +3270,12 @@
       assert(rows[0].classList.contains('is-current'), 'текущий ход не выделен');
       assert(rows[1].classList.contains('is-current') === false, 'выделено несколько строк');
       assert(rows[0].textContent.includes('Артём') && rows[0].textContent.includes('18'), `строка: ${rows[0].textContent}`);
+      assert(rows[0].textContent.includes('18/24'), `нет здоровья игрока: ${rows[0].textContent}`);
+      assert(rows[0].textContent.includes('КД 16'), `нет КД игрока: ${rows[0].textContent}`);
       assert(rows[1].textContent.includes('+2'), `модификатор: ${rows[1].textContent}`);
+      assert(rows[1].textContent.includes('5/12'), `нет здоровья фишки: ${rows[1].textContent}`);
+      assert(rows[1].textContent.includes('КД 13'), `нет КД фишки: ${rows[1].textContent}`);
+      assert(rows[1].textContent.includes('Отрав'), `нет состояния: ${rows[1].textContent}`);
       assert(rows[2].textContent.includes('—'), 'неброшенному участнику показан итог');
       assert(initiativeHost.textContent.includes('Раунд 2'), 'раунд не показан');
       assert(initiativeHost.textContent.includes('Ходит: Артём'), 'чей ход не показан');
@@ -3328,6 +3349,7 @@
     const hpChanges = [];
     const sizeChanges = [];
     const acChanges = [];
+    const damageCalls = [];
     const tokenPanel = new window.TableUI.TokenPanel(tokensHost, {
       onCreate: (name, maxHp, size, side) => {
         createdTokenName = name;
@@ -3337,6 +3359,7 @@
       },
       onDeleteToken: () => {},
       onSetTokenHp: (tokenId, hp) => hpChanges.push({ tokenId, hp }),
+      onTokenDamage: (tokenId) => damageCalls.push(tokenId),
       onSetTokenSize: (tokenId, size) => sizeChanges.push({ tokenId, size }),
       onSetTokenArmorClass: (tokenId, armorClass) => acChanges.push({ tokenId, armorClass }),
       onSpawnFromSheet: (playerId) => { spawnedFrom = playerId; }
@@ -3417,7 +3440,7 @@
       assert(box.classList.contains('is-low'), 'половина прочности не отмечена как ранение');
       const fillWidth = box.querySelector('.token-hp__fill').style.width;
       assert(fillWidth === '42%' || fillWidth === '41%', `полоса заполнена на ${fillWidth} вместо 42%`);
-      assert.strictEqual(box.querySelectorAll('.token-hp__btn').length, 4, 'кнопок урона не четыре');
+      assert.strictEqual(box.querySelectorAll('.token-hp__btn').length, 5, 'кнопок урона не пять');
     });
 
     check('фишка без прочности остаётся меткой без полосы', () => {
@@ -3437,6 +3460,16 @@
       assert.strictEqual(hpChanges[0].hp, 0);
       assert.strictEqual(hpChanges[1].tokenId, 't4');
       assert.strictEqual(hpChanges[1].hp, 10);
+    });
+
+    check('кнопка «Урон…» открывает точный ввод, а не меняет число сразу', () => {
+      const precise = [...tokensHost.querySelectorAll('.token-hp__btn')]
+        .find((button) => button.textContent.includes('Урон'));
+      assert(precise, 'нет кнопки точного урона');
+      const before = hpChanges.length;
+      precise.click();
+      assert.strictEqual(damageCalls.at(-1), 't4', 'обработчик точного урона не вызван');
+      assert.strictEqual(hpChanges.length, before, 'кнопка сразу изменила здоровье');
     });
 
     check('точное значение прочности вводится руками', () => {
@@ -4512,6 +4545,7 @@
       const form = document.querySelector('#roll-request-form');
       assert(form && !form.hidden, 'нет формы проверки');
       assert(document.querySelector('#roll-request-label'), 'нет поля названия проверки');
+      assert(document.querySelector('#roll-request-to'), 'нет выбора адресата проверки');
       assert(document.querySelector('#roll-request-dc'), 'нет поля сложности');
       const undo = document.querySelector('#btn-undo');
       assert(undo && !undo.hidden, 'нет кнопки отмены у мастера');

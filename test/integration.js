@@ -1696,6 +1696,79 @@ async function main() {
     assert.strictEqual(room.sheets.get('p-test-0001').hp, restoredSheet.hp);
   });
 
+  // Урон с временными хитами и проверкой концентрации.
+  const damageSheet = room.sheets.get('p-test-0001');
+  damageSheet.hp = 10;
+  damageSheet.tempHp = 5;
+  damageSheet.concentration = 'Щит веры';
+  damageSheet.deathSavesSuccesses = 0;
+  damageSheet.deathSavesFailures = 0;
+  room.syncSheetTokens('p-test-0001');
+  p1.log.characterSheetData.length = 0;
+  p1.log.chatMessage.length = 0;
+  dm.log.chatMessage.length = 0;
+  p2.log.rollRequestUpdated.length = 0;
+  emit(dm, 'applyTokenDamage', { tokenId: heroToken.id, amount: 12, type: 'огонь' });
+  await waitFor(
+    () => p1.log.characterSheetData.find((item) => item.sheet.hp === 3),
+    'урон с временными хитами'
+  );
+  const damageNotice = await waitFor(
+    () => p1.log.chatMessage.find((message) => message.system && /огонь/.test(message.text)),
+    'объявление об уроне с типом'
+  );
+  check('урон сначала съедает временные хиты, остаток пишет в лист', () => {
+    assert.strictEqual(damageSheet.tempHp, 0);
+    assert.strictEqual(damageSheet.hp, 3);
+    assert.strictEqual(room.tokens.find((item) => item.id === heroToken.id).hp, 3);
+    assert.match(damageNotice.text, /урон 7, огонь/, damageNotice.text);
+  });
+  const concentration = room.rollRequests.find((item) => /Концентрация/.test(item.label));
+  check('урон по концентрирующемуся персонажу просит спасбросок с готовой СЛ', () => {
+    assert.ok(concentration, 'заявки на концентрацию нет');
+    assert.strictEqual(concentration.dc, 10);
+    assert.strictEqual(concentration.to, 'p-test-0001');
+    assert.match(concentration.formula, /^1d20[+-]\d+$/);
+    const owner = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER });
+    assert.ok(owner.rollRequests.some((item) => item.id === concentration.id));
+    const other = room.snapshotFor({ playerId: 'p-test-0002', role: ROLE_PLAYER });
+    assert.ok(!other.rollRequests.some((item) => item.id === concentration.id), 'проверка утекла');
+  });
+  await new Promise((resolve) => dm.emit('rollRequestClear', { id: concentration.id }, resolve));
+  await waitFor(() => room.rollRequests.length === 0, 'снятие проверки концентрации');
+
+  damageSheet.hp = 0;
+  damageSheet.deathSavesFailures = 2;
+  damageSheet.concentration = '';
+  room.syncSheetTokens('p-test-0001');
+  p1.log.characterSheetData.length = 0;
+  emit(dm, 'applyTokenDamage', { tokenId: heroToken.id, amount: 5, healing: true });
+  await waitFor(
+    () => p1.log.characterSheetData.find((item) => item.sheet.hp === 5),
+    'лечение с нуля'
+  );
+  check('лечение с нуля сбрасывает спасброски смерти', () => {
+    assert.strictEqual(damageSheet.hp, 5);
+    assert.strictEqual(damageSheet.deathSavesFailures, 0);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'applyTokenDamage', { tokenId: heroToken.id, amount: 1 });
+  const deniedDamage = await waitFor(
+    () => p1.log.errorMessage.find((item) => /только ДМ/.test(item.message)),
+    'игрок пробовал нанести урон'
+  );
+  check('урон по фишке наносит только мастер', () => {
+    assert.match(deniedDamage.message, /только ДМ/);
+  });
+
+  // Возвращаем лист к полному здоровью: дальше идут проверки, которые
+  // рассчитывают на целого персонажа.
+  damageSheet.hp = require('../renderer/dnd5e.js').effectiveMaxHp(damageSheet);
+  damageSheet.tempHp = 0;
+  damageSheet.concentration = '';
+  room.syncSheetTokens('p-test-0001');
+
   emit(dm, 'deleteToken', { tokenId: heroToken.id });
   await waitFor(() => !room.tokens.some((item) => item.id === heroToken.id), 'уборка фишки игрока');
 
@@ -3556,6 +3629,28 @@ async function main() {
     assert.ok(dmHandout);
   });
 
+  p1.log.chatMessage.length = 0;
+  p2.log.chatMessage.length = 0;
+  dm.log.chatMessage.length = 0;
+  emit(dm, 'chatImage', { image: PNG_1PX, text: 'Только тебе', to: P2 });
+  const privateHandout = await waitFor(
+    () => p2.log.chatMessage.find((message) => message.image && message.whisper),
+    'картинка одному игроку'
+  );
+  await wait(100);
+  check('картинку можно отдать одному игроку', () => {
+    assert.strictEqual(privateHandout.to, P2);
+    assert.strictEqual(privateHandout.toName, room.players.get(P2).name);
+    assert.strictEqual(p1.log.chatMessage.filter((message) => message.image).length, 0,
+      'картинка утекла второму игроку');
+    assert.ok(dm.log.chatMessage.some((message) => message.image === privateHandout.image),
+      'мастер не увидел свою картинку');
+    const first = room.snapshotFor({ playerId: P1, role: ROLE_PLAYER });
+    const second = room.snapshotFor({ playerId: P2, role: ROLE_PLAYER });
+    assert.ok(!first.chatHistory.some((message) => message.id === privateHandout.id));
+    assert.ok(second.chatHistory.some((message) => message.id === privateHandout.id));
+  });
+
   const { ack: longJoin } = await open({ name: 'Я'.repeat(120), playerId: 'p-long' });
   check('слишком длинное имя обрезается до 40 символов', () => {
     assert.strictEqual(longJoin.you.name.length, 40);
@@ -3802,6 +3897,52 @@ async function main() {
       { cp: 5, sp: 7, ep: 1, gp: 42, pp: 2 });
   });
 
+  const coinOwners = [...room.players.values()]
+    .filter((player) => player.role === ROLE_PLAYER && room.sheets.has(player.playerId));
+  const splitExpected = Math.floor(42 / coinOwners.length);
+  const splitRemainder = 42 - splitExpected * coinOwners.length;
+  for (const owner of coinOwners) room.sheets.get(owner.playerId).coins = { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 };
+  p1.log.characterSheetData.length = 0;
+  p2.log.characterSheetData.length = 0;
+  p1.log.errorMessage.length = 0;
+  const deniedSplit = await new Promise((resolve) => {
+    p1.emit('splitInventoryCoins', {}, resolve);
+  });
+  check('делить монеты склада может только мастер', () => {
+    assert.strictEqual(deniedSplit.ok, false);
+    assert.match(deniedSplit.error, /только ДМ/);
+    assert.strictEqual(room.inventoryCoins.gp, 42, 'игрок всё-таки разделил монеты');
+  });
+
+  const splitAck = await new Promise((resolve) => {
+    dm.emit('splitInventoryCoins', {}, resolve);
+  });
+  await waitFor(
+    () => p1.log.characterSheetData.some((item) => item.sheet.coins.gp === splitExpected)
+      && p2.log.characterSheetData.some((item) => item.sheet.coins.gp === splitExpected),
+    'листы после дележа монет'
+  );
+  check('монеты склада делятся поровну, а остаток остаётся в складе', () => {
+    assert.strictEqual(splitAck.ok, true);
+    assert.strictEqual(splitAck.shares.gp, splitExpected);
+    assert.strictEqual(room.inventoryCoins.gp, splitRemainder);
+    for (const owner of coinOwners) {
+      assert.strictEqual(room.sheets.get(owner.playerId).coins.gp, splitExpected,
+        `игрок ${owner.name} не получил долю`);
+    }
+    assert.ok(
+      p1.log.characterSheetData.some((item) => item.playerId === 'p-test-0001'
+        && item.sheet.coins.gp === splitExpected),
+      `лист первого игрока не обновился: ожидали ${splitExpected}, события ${JSON.stringify(
+        p1.log.characterSheetData.map((item) => [item.playerId, item.sheet.coins.gp]))}`
+    );
+    assert.ok(
+      p2.log.characterSheetData.some((item) => item.playerId === 'p-test-0002'
+        && item.sheet.coins.gp === splitExpected),
+      'лист второго игрока не обновился'
+    );
+  });
+
   p1.log.errorMessage.length = 0;
   const deniedRequest = await new Promise((resolve) => {
     p1.emit('rollRequest', { label: 'Игроку нельзя' }, resolve);
@@ -3840,6 +3981,41 @@ async function main() {
     assert.strictEqual(clearAck.ok, true);
     assert.strictEqual(room.rollRequests.length, 0);
   });
+
+  const badTarget = await new Promise((resolve) => {
+    dm.emit('rollRequest', { label: 'Кому-то', to: 'p-no-such' }, resolve);
+  });
+  check('проверку нельзя адресовать несуществующему игроку', () => {
+    assert.strictEqual(badTarget.ok, false);
+    assert.match(badTarget.error, /не найден/);
+    assert.strictEqual(room.rollRequests.length, 0);
+  });
+
+  p1.log.rollRequestUpdated.length = 0;
+  p2.log.rollRequestUpdated.length = 0;
+  const targetedAck = await new Promise((resolve) => {
+    dm.emit('rollRequest', { label: 'Тайная Воля', dc: 13, formula: '1d20+2', to: P1 }, resolve);
+  });
+  await waitFor(
+    () => p1.log.rollRequestUpdated.find((list) => list.some((item) => item.label === 'Тайная Воля')),
+    'скрытая проверка у адресата'
+  );
+  await wait(100);
+  check('скрытую проверку видит только мастер и адресат', () => {
+    assert.strictEqual(targetedAck.ok, true);
+    assert.strictEqual(targetedAck.request.to, P1);
+    assert.strictEqual(targetedAck.request.toName, room.players.get(P1).name);
+    assert.ok(
+      !p2.log.rollRequestUpdated.some((list) => list.some((item) => item.label === 'Тайная Воля')),
+      'заявка утекла второму игроку'
+    );
+    const first = room.snapshotFor({ playerId: P1, role: ROLE_PLAYER });
+    const second = room.snapshotFor({ playerId: P2, role: ROLE_PLAYER });
+    assert.ok(first.rollRequests.some((item) => item.label === 'Тайная Воля'), 'адресат не увидел заявку');
+    assert.ok(!second.rollRequests.some((item) => item.label === 'Тайная Воля'), 'заявка утекла в снимок');
+  });
+  await new Promise((resolve) => dm.emit('rollRequestClear', { id: targetedAck.request.id }, resolve));
+  await waitFor(() => room.rollRequests.length === 0, 'снятие скрытой проверки');
 
   // Отмена: двигаем фишку и возвращаем её на прежнее место.
   emit(dm, 'createToken', { name: 'Отменяемая', mapType: 'battle' });

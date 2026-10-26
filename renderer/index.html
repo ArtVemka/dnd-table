@@ -213,7 +213,7 @@
           </div>
         </div>
         <div class="topbar__right">
-          <span id="game-time" class="badge badge--muted" title="Время в игре">День 1, 08:00</span>
+          <span id="game-time" class="badge badge--muted" title="Время в игре">1 января 1 г., 08:00</span>
           <button id="btn-game-rest" class="btn btn--ghost btn--tiny" type="button"
                   title="Долгий отдых всей партии: лечение и +8 часов" hidden>Отдых</button>
           <span id="conn-badge" class="badge badge--muted">—</span>
@@ -266,6 +266,7 @@
             <form id="roll-request-form" class="roll-request-form" hidden>
               <input id="roll-request-label" class="input" type="text" maxlength="120"
                      placeholder="Например, Скрытность" aria-label="Название проверки" />
+              <select id="roll-request-to" class="select" aria-label="Кому адресована проверка"></select>
               <input id="roll-request-dc" class="input" type="number" min="1" max="40"
                      placeholder="СЛ" aria-label="Сложность, необязательно" />
               <input id="roll-request-formula" class="input" type="text" maxlength="40"

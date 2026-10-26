@@ -133,8 +133,12 @@ const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
  */
 const INITIATIVE_KINDS = ['player', 'token', 'other'];
 const INITIATIVE = { minModifier: -20, maxModifier: 20 };
-/** Время в игре: день и час, без минут. Минуты настольной игре не нужны. */
-const TIME_LIMITS = { minDay: 1, maxDay: 9999, minHour: 0, maxHour: 23 };
+/**
+ * Время в игре: номер дня и час, без минут. Месяц и год выводятся из номера
+ * дня в календаре по 30 дней и 12 месяцев: так старые кампании с «днём 37»
+ * открываются без миграции.
+ */
+const TIME_LIMITS = { minDay: 1, maxDay: 360 * 9999, minHour: 0, maxHour: 23 };
 const DEFAULT_GAME_TIME = { day: 1, hour: 8 };
 
 function emptyTime() {
@@ -1564,6 +1568,64 @@ fogMask: normalizeFog(source.fogMask),
   }
 
   /**
+   * Урон или лечение с временными хитами.
+   *
+   * Временные хиты съедаются первыми, остаток уходит в здоровье. Для фишки без
+   * листа правило то же, но временных хитов у неё нет. Сопротивления не
+   * учитываются: в листе нет полей урона, угадывать их нельзя.
+   * @param {object} token
+   * @param {number} rawAmount
+   * @param {unknown} rawType
+   * @param {boolean} healing
+   * @returns {{token: object, sheet: object|null, absorbed: number, concentration: object|null, beforeHp: number}|null}
+   */
+  applyTokenDamage(token, rawAmount, rawType, healing) {
+    const amount = clampInt(rawAmount, 0, 9999, 0);
+    if (!amount) return null;
+    const type = healing ? '' : sanitizeText(rawType, 40).trim();
+    const sheet = token.assignedPlayerId ? this.sheets.get(token.assignedPlayerId) : null;
+    const max = sheet ? effectiveMaxHp(sheet) : (token.maxHp === null || token.maxHp === undefined
+      ? null
+      : clampInt(token.maxHp, 1, 9999, 1));
+    if (max === null) return null;
+    const beforeHp = sheet ? sheet.hp : clampInt(token.hp, 0, max, 0);
+    let absorbed = 0;
+    if (sheet) {
+      if (healing) {
+        const wasDown = sheet.hp <= 0;
+        sheet.hp = clampInt(sheet.hp + amount, 0, max, 0);
+        if (wasDown && sheet.hp > 0) {
+          sheet.deathSavesSuccesses = 0;
+          sheet.deathSavesFailures = 0;
+        }
+      } else {
+        const temp = clampInt(sheet.tempHp, 0, 9999, 0);
+        absorbed = Math.min(temp, amount);
+        sheet.tempHp = temp - absorbed;
+        sheet.hp = clampInt(sheet.hp - (amount - absorbed), 0, max, 0);
+      }
+      token.maxHp = max;
+      token.hp = sheet.hp;
+    } else if (healing) {
+      token.hp = clampInt(beforeHp + amount, 0, max, max);
+    } else {
+      token.hp = clampInt(beforeHp - amount, 0, max, 0);
+    }
+    return {
+      token,
+      sheet: sheet || null,
+      absorbed,
+      type,
+      healing: Boolean(healing),
+      beforeHp,
+      // Проверку концентрации бросает игрок: сервер только готовит СЛ.
+      concentration: sheet && !healing && sheet.concentration
+        ? { spell: sheet.concentration, dc: Math.max(10, Math.floor(amount / 2)) }
+        : null
+    };
+  }
+
+  /**
    * Подтягивает прочность фишки игрока к его листу.
    *
    * Единственный источник здоровья персонажа — лист. Фишка хранит копию для
@@ -1933,7 +1995,11 @@ fogMask: normalizeFog(source.fogMask),
         : this.journalEntries.filter((entry) => entry.visible),
       inventory: this.inventory,
       inventoryCoins: this.inventoryCoins,
-      rollRequests: this.rollRequests,
+      // Скрытая проверка видна мастеру и тому, кого она просит. Остальным
+      // заявка не нужна: даже её название выдало бы тайну.
+      rollRequests: isDm
+        ? this.rollRequests
+        : this.rollRequests.filter((request) => !request.to || request.to === viewer.playerId),
       // Реакции: мастер видит все, игрок только свои. Иначе чужой повод
       // раскрыл бы ему статы и положение чужой фишки.
       reactions: isDm
@@ -1998,6 +2064,40 @@ fogMask: normalizeFog(source.fogMask),
     this.pushUndo();
     this.inventoryCoins = coins;
     return coins;
+  }
+
+  /**
+   * Делит монеты общего склада поровну между игроками с листами.
+   *
+   * Остаток от деления остаётся в общем складе: округлять в чью-то пользу
+   * молча нельзя. В стек отмены не кладём: он не хранит листы, и Ctrl+Z
+   * вернул бы монеты складу, оставив их же в кошельках.
+   * @returns {{players: string[], shares: object, coins: object}|null}
+   */
+  splitInventoryCoins() {
+    const players = [...this.players.values()]
+      .filter((player) => player.role === ROLE_PLAYER && this.sheets.has(player.playerId));
+    if (!players.length) return null;
+    const shares = emptyCoins();
+    const remainder = emptyCoins();
+    for (const key of COIN_KEYS) {
+      const share = Math.floor(this.inventoryCoins[key] / players.length);
+      shares[key] = share;
+      remainder[key] = this.inventoryCoins[key] - share * players.length;
+    }
+    for (const player of players) {
+      const sheet = this.sheets.get(player.playerId);
+      if (!sheet) continue;
+      for (const key of COIN_KEYS) {
+        sheet.coins[key] = clampInt(sheet.coins[key] + shares[key], 0, LIMITS.maxCoins, 0);
+      }
+    }
+    this.inventoryCoins = remainder;
+    return {
+      players: players.map((player) => player.playerId),
+      shares,
+      coins: remainder
+    };
   }
 
   /**
@@ -2175,6 +2275,9 @@ function normalizeRollRequest(item) {
     label,
     dc: rawDc === null || !Number.isFinite(rawDc) ? null : Math.max(1, Math.min(40, Math.round(rawDc))),
     formula: sanitizeText(item.formula, 120).trim(),
+    // Адресат скрытой проверки. Пусто — заявка видна всему столу.
+    to: sanitizeText(item.to, 64).trim() || undefined,
+    toName: sanitizeText(item.toName, 40).trim() || undefined,
     createdAt: new Date().toISOString(),
     by: sanitizeText(item.by, 40).trim()
   };

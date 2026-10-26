@@ -785,6 +785,7 @@
 .token-hp {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   flex: none;
 }
@@ -1372,8 +1373,38 @@
   font-weight: 700;
 }
 
-.initiative__name {
+.initiative__who {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.initiative__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.initiative__info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.initiative__hp.is-low {
+  color: var(--gold);
+}
+
+.initiative__hp.is-down {
+  color: var(--danger);
+}
+
+.initiative__conditions {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1608,6 +1639,10 @@
   min-width: 0;
 }
 
+.inventory-coins__split {
+  grid-column: 1 / -1;
+}
+
 .inventory-row {
   display: flex;
   flex-direction: column;
@@ -1683,7 +1718,8 @@ button.inventory-row:hover {
   gap: 6px;
 }
 
-.roll-request-form .input {
+.roll-request-form .input,
+.roll-request-form .select {
   font-size: 12.5px;
   padding: 5px 8px;
 }

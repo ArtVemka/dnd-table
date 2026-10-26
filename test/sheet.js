@@ -148,6 +148,57 @@ check('ячейки заклинаний считаются только у по
   assert.strictEqual(pool.map((item) => `${item.die}×${item.count}`).join(','), 'd10×3,d6×2');
 });
 
+check('состояния покрывают PHB, а не только старый набор', () => {
+  const ids = DnD.CONDITIONS.map((item) => item.id);
+  for (const id of ['charmed', 'exhaustion', 'unconscious']) {
+    assert(ids.includes(id), `нет состояния ${id}`);
+  }
+  assert.strictEqual(new Set(ids).size, ids.length, 'состояния повторяются');
+  assert.strictEqual(DnD.LIMITS.maxTokenConditions, DnD.CONDITIONS.length,
+    'лимит состояний на фишке разошёлся со списком');
+});
+
+check('лист хранит вдохновение, истощение, концентрацию и монеты', () => {
+  const sheet = DnD.createEmptySheet();
+  assert.strictEqual(sheet.inspiration, false);
+  assert.strictEqual(sheet.exhaustion, 0);
+  assert.strictEqual(sheet.concentration, '');
+  assert.deepStrictEqual(sheet.coins, { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 });
+  assert.strictEqual(DnD.LIMITS.maxExhaustion, 6);
+});
+
+check('опыт встречи считается по DMG с множителем за число монстров', () => {
+  // Четыре гоблина (CR 1/4): 50 × 4 = 200, множитель за четырёх — 2.
+  const goblins = DnD.encounterXp([{ cr: '1/4', count: 4 }]);
+  assert.strictEqual(goblins.baseXp, 200);
+  assert.strictEqual(goblins.multiplier, 2);
+  assert.strictEqual(goblins.adjustedXp, 400);
+  // Один дракон CR 5: 1800 без множителя.
+  const dragon = DnD.encounterXp([{ cr: 5, count: 1 }]);
+  assert.strictEqual(dragon.adjustedXp, 1800);
+  assert.strictEqual(DnD.encounterMultiplier(2), 1.5);
+  assert.strictEqual(DnD.encounterMultiplier(7), 2.5);
+  assert.strictEqual(DnD.encounterMultiplier(16), 4);
+  // CR без таблицы не выдумывает опыт.
+  assert.strictEqual(DnD.encounterXp([{ cr: 'нет', count: 3 }]).ignored, 3);
+});
+
+check('пороги партии складываются по уровням, сложность не врёт', () => {
+  // Четыре персонажа 3 уровня: 75/150/225/400 на каждого.
+  const thresholds = DnD.partyThresholds([3, 3, 3, 3]);
+  assert.strictEqual(thresholds.easy, 300);
+  assert.strictEqual(thresholds.medium, 600);
+  assert.strictEqual(thresholds.hard, 900);
+  assert.strictEqual(thresholds.deadly, 1600);
+  assert.strictEqual(DnD.encounterDifficulty(400, thresholds), 'easy');
+  assert.strictEqual(DnD.encounterDifficulty(600, thresholds), 'medium');
+  assert.strictEqual(DnD.encounterDifficulty(900, thresholds), 'hard');
+  assert.strictEqual(DnD.encounterDifficulty(1600, thresholds), 'deadly');
+  assert.strictEqual(DnD.encounterDifficulty(100, thresholds), 'trivial');
+  assert.strictEqual(DnD.partyThresholds([]), null);
+  assert.strictEqual(DnD.encounterDifficulty(100, null), null);
+});
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -155,6 +206,14 @@ function assert(condition, message) {
 assert.strictEqual = (actual, expected, message) => {
   if (actual !== expected) {
     throw new Error(`${message || 'значения не совпали'}: получено ${actual}, ждали ${expected}`);
+  }
+};
+
+assert.deepStrictEqual = (actual, expected, message) => {
+  const left = JSON.stringify(actual);
+  const right = JSON.stringify(expected);
+  if (left !== right) {
+    throw new Error(`${message || 'значения не совпали'}: получено ${left}, ждали ${right}`);
   }
 };
 

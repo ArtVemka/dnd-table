@@ -64,6 +64,10 @@ const normalizeSurface = fogModel.normalizeSurface;
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 /** Длина имени карты — та же, что при загрузке в состояние стола. */
 const MAP_NAME_MAX = 120;
+/** Радиус автотумана вокруг фишки игрока, доля ширины карты.
+ *  shortcut: радиус фиксированный, без учёта стен; вынести в настройку карты,
+ *  если мастеру понадобится другой размер или зрение через стены. */
+const FOG_FOLLOW_RADIUS = 0.08;
 
 /**
  * Менялась ли сетка по-настоящему.
@@ -1053,6 +1057,18 @@ socket.on('setGrid', (payload) => {
       broadcastMapUpdate(type);
     });
 
+    /** Тумблер «открывать туман за фишками игроков» у конкретной карты. */
+    socket.on('setMapFogFollow', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const follow = Boolean(payload && payload.follow);
+      if (item.fogFollow === follow) return;
+      item.fogFollow = follow;
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
     /**
      * Поверхность по клеткам: кислота, огонь, вода и прочее.
      *
@@ -1729,14 +1745,33 @@ socket.on('setGrid', (payload) => {
      * переносится только если она уже лежит файлом кампании: data-URL в
      * состоянии фишки раздувал бы каждую рассылку.
      */
-    socket.on('createTokenFromAdventureActor', (payload) => {
-      if (!requireDm(socket)) return;
+    socket.on('createTokenFromAdventureActor', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
       const name = sanitizeText(payload && payload.name, LIMITS.maxAdventureTitle).trim();
-      if (!name) return emitError(socket, 'Не указано название персонажа');
-      if (!room.adventure) return emitError(socket, 'В кампании нет приключения');
-      if (room.tokens.length >= LIMITS.maxTokens) return emitError(socket, 'Слишком много фишек на столе');
+      if (!name) {
+        emitError(socket, 'Не указано название персонажа');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Не указано название персонажа' });
+        return;
+      }
+      if (!room.adventure) {
+        emitError(socket, 'В кампании нет приключения');
+        if (typeof ack === 'function') ack({ ok: false, error: 'В кампании нет приключения' });
+        return;
+      }
+      if (room.tokens.length >= LIMITS.maxTokens) {
+        emitError(socket, 'Слишком много фишек на столе');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Слишком много фишек на столе' });
+        return;
+      }
       const actor = room.adventure.actors.find((entry) => groupKey(entry.name) === groupKey(name));
-      if (!actor) return emitError(socket, 'В приключении нет такого персонажа');
+      if (!actor) {
+        emitError(socket, 'В приключении нет такого персонажа');
+        if (typeof ack === 'function') ack({ ok: false, error: 'В приключении нет такого персонажа' });
+        return;
+      }
       const block = actor.statblock || {};
       const requestedMap = payload && payload.mapType;
       const mapType = MAP_TYPES.includes(requestedMap) ? requestedMap : (room.activeMap || 'battle');
@@ -1747,12 +1782,17 @@ socket.on('setGrid', (payload) => {
         : null;
       const requested = clampInt(payload && payload.count, 1, 20, 1);
       const free = LIMITS.maxTokens - room.tokens.length;
-      if (free <= 0) return emitError(socket, 'Лимит фишек на столе уже достигнут');
+      if (free <= 0) {
+        emitError(socket, 'Лимит фишек на столе уже достигнут');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Лимит фишек на столе уже достигнут' });
+        return;
+      }
       const count = Math.min(requested, free);
       const baseX = clampNumber(payload && payload.x, 0, 1, 0.5);
       const baseY = clampNumber(payload && payload.y, 0, 1, 0.5);
       const rows = Math.ceil(count / 3);
       const mapId = sanitizeText(payload && payload.mapId, 80);
+      const created = [];
       for (let index = 0; index < count; index += 1) {
         const token = {
           id: newTokenId(),
@@ -1786,12 +1826,14 @@ socket.on('setGrid', (payload) => {
           conditions: []
         };
         room.tokens.push(token);
+        created.push(token);
         emitToken('tokenCreated', token);
       }
       markDirty();
       onLog(count > 1
         ? `Фишки <${actor.name}> созданы из статблока: ${count} шт.`
         : `Фишка <${actor.name}> создана из статблока`);
+      if (typeof ack === 'function') ack({ ok: true, tokens: created });
     });
 
     socket.on('moveToken', (payload) => {
@@ -1847,6 +1889,20 @@ socket.on('setGrid', (payload) => {
         token.movedCells = Math.min(1000, (Number(token.movedCells) || 0) + steps);
         meta.spent = steps;
         meta.movedCells = token.movedCells;
+      }
+      // Автотуман: мастер один раз включает тумблер у карты, дальше фишка
+      // игрока сама открывает вокруг себя участок. Скрытые заготовки не
+      // трогаем, иначе туман открылся бы до показа сцены.
+      if (meta.final && token.assignedPlayerId && room.isTokenVisibleToPlayers(token)) {
+        const slot = room.maps[token.mapType];
+        const mapItem = slot
+          ? (slot.items.find((item) => item.id === token.mapId)
+            || slot.items.find((item) => item.id === slot.activeId))
+          : null;
+        if (mapItem && mapItem.fogFollow) {
+          room.openMapFog(mapItem, x, y, FOG_FOLLOW_RADIUS);
+          broadcastMapUpdate(token.mapType);
+        }
       }
       emitToken('tokenMoved', token, meta);
     });
@@ -2252,6 +2308,15 @@ socket.on('rollDice', (payload) => {
       onLog(`Мастер отправил изображение в чат`);
     });
 
+    // Журнал: мастеру все записи, игрокам только отмеченные «показать».
+    // Фильтр на сервере, а не в интерфейсе: иначе тайная запись утекла бы
+    // в снимок состояния, который игрок получает целиком.
+    const broadcastJournal = () => {
+      io.to('dm-sockets').emit('journalUpdated', room.journalEntries);
+      io.to('table').except('dm-sockets').emit('journalUpdated',
+        room.journalEntries.filter((entry) => entry.visible));
+    };
+
     /**
      * Журнал кампании: свободные заметки мастера. Хранится в кампании и
      * приходит только мастеру, игрокам он не нужен.
@@ -2278,7 +2343,7 @@ socket.on('rollDice', (payload) => {
         if (typeof ack === 'function') ack({ ok: false, error: 'Нужен заголовок записи' });
         return;
       }
-      io.to('dm-sockets').emit('journalUpdated', room.journalEntries);
+      broadcastJournal();
       markDirty();
       if (typeof ack === 'function') ack({ ok: true, entry });
     });
@@ -2293,14 +2358,18 @@ socket.on('rollDice', (payload) => {
         if (typeof ack === 'function') ack({ ok: false, error: 'Запись не найдена' });
         return;
       }
-      io.to('dm-sockets').emit('journalUpdated', room.journalEntries);
+      broadcastJournal();
       markDirty();
       if (typeof ack === 'function') ack({ ok: true });
     });
 
     socket.on('journalRequest', () => {
-      if (!requireDm(socket)) return;
-      socket.emit('journalUpdated', room.journalEntries);
+      if (!requireJoined(socket)) return;
+      if (socket.data.role === ROLE_DM) {
+        socket.emit('journalUpdated', room.journalEntries);
+        return;
+      }
+      socket.emit('journalUpdated', room.journalEntries.filter((entry) => entry.visible));
     });
 
     socket.on('saveInventoryItem', (payload, ack) => {
@@ -2332,6 +2401,17 @@ socket.on('rollDice', (payload) => {
       io.to('table').emit('inventoryUpdated', room.inventory);
       markDirty();
       if (typeof ack === 'function') ack({ ok: true });
+    });
+
+    socket.on('setInventoryCoins', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const coins = room.setInventoryCoins(payload && payload.coins);
+      io.to('table').emit('inventoryCoinsUpdated', coins);
+      markDirty();
+      if (typeof ack === 'function') ack({ ok: true, coins });
     });
 
     socket.on('rollRequest', (payload, ack) => {

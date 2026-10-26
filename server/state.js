@@ -57,7 +57,13 @@ const LIMITS = {
   /** Счётчик спасбросков смерти: дальше трёх он не идёт по правилам. */
   maxDeathSaves: 3,
   /** Состояний на одной фишке: столько их есть в правилах 5e. */
-  maxTokenConditions: 13,
+  maxTokenConditions: 16,
+  /** Истощение по PHB: шесть уровней, дальше смерть. */
+  maxExhaustion: 6,
+  /** Название заклинания концентрации: одна строка. */
+  maxConcentrationLength: 120,
+  /** Монеты в листе и общем складе. */
+  maxCoins: 999999,
   /** Ячейки заклинаний на одной ступени: в правилах больше не бывает. */
   maxSpellSlotsPerLevel: 9,
   /** Заметка мастера: столько же, сколько заметки в листе. */
@@ -409,6 +415,23 @@ function emptyProficiencyMap(keys) {
   return map;
 }
 
+const COIN_KEYS = ['cp', 'sp', 'ep', 'gp', 'pp'];
+
+/** Пустой кошелёк: одна форма для листа и общего склада. */
+function emptyCoins() {
+  const coins = {};
+  for (const key of COIN_KEYS) coins[key] = 0;
+  return coins;
+}
+
+/** @param {unknown} input @returns {{cp: number, sp: number, ep: number, gp: number, pp: number}} */
+function normalizeCoins(input) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const coins = emptyCoins();
+  for (const key of COIN_KEYS) coins[key] = clampInt(raw[key], 0, LIMITS.maxCoins, 0);
+  return coins;
+}
+
 /**
  * Пустой лист персонажа по D&D 5e 2014.
  * @param {string} [playerName]
@@ -439,6 +462,11 @@ function createEmptySheet(playerName = '') {
     hitDice: '1d8',
     // Потраченные кости хитов: короткий отдых увеличивает, долгий уменьшает.
     hitDiceSpent: 0,
+    // Вдохновение, истощение и концентрация — ресурсы листа, а не производные.
+    inspiration: false,
+    exhaustion: 0,
+    concentration: '',
+    coins: emptyCoins(),
     armorClass: 10,
     /** Прочие бонусы к инициативе поверх модификатора Ловкости */
     initiativeMisc: 0,
@@ -670,6 +698,10 @@ function normalizeSheet(input, fallbackPlayerName = '') {
     sheet.spellSlotsMax = clampSlotArray(raw.spellSlotsMax);
   sheet.hitDice = sanitizeText(raw.hitDice, 20);
   sheet.hitDiceSpent = clampInt(raw.hitDiceSpent, 0, LIMITS.maxLevel, 0);
+  sheet.inspiration = Boolean(raw.inspiration);
+  sheet.exhaustion = clampInt(raw.exhaustion, 0, LIMITS.maxExhaustion, 0);
+  sheet.concentration = sanitizeText(raw.concentration, LIMITS.maxConcentrationLength).trim();
+  sheet.coins = normalizeCoins(raw.coins);
   sheet.armorClass = clampInt(raw.armorClass, 0, 99, 10);
   sheet.initiativeMisc = clampInt(raw.initiativeMisc, -20, 20, 0);
   sheet.speed = clampInt(raw.speed, 0, 999, 30);
@@ -739,6 +771,8 @@ class RoomState {
     this.journalEntries = [];
     /** @type {object[]} общий склад партии. */
     this.inventory = [];
+    /** Кошелёк партии: те же пять монет, что и в листе. */
+    this.inventoryCoins = emptyCoins();
     /** @type {object[]} просьбы мастера бросить проверку. */
     this.rollRequests = [];
     /**
@@ -842,6 +876,7 @@ class RoomState {
     this.adventure = normalizeAdventure(data.adventure);
     this.journalEntries = normalizeJournalEntries(data.journalEntries);
     this.inventory = normalizeInventory(data.inventory);
+    this.inventoryCoins = normalizeCoins(data.inventoryCoins);
     this.rollRequests = normalizeRollRequests(data.rollRequests);
   }
 
@@ -1151,6 +1186,9 @@ fogMask: normalizeFog(source.fogMask),
           lights: normalizeLights(source.lights),
           templates: normalizeTemplates(source.templates),
           darkness: normalizeDarkness(source.darkness),
+          // Тумблер «открывать туман за фишками игроков». Старые карты
+          // открывались только кистью, поэтому по умолчанию выключен.
+          fogFollow: source.fogFollow === true,
           uploadedAt: source.uploadedAt || new Date().toISOString()
         });
     } else if (Array.isArray(source.items)) {
@@ -1171,6 +1209,7 @@ fogMask: normalizeFog(source.fogMask),
           lights: normalizeLights(item.lights),
           templates: normalizeTemplates(item.templates),
           darkness: normalizeDarkness(item.darkness),
+          fogFollow: item.fogFollow === true,
           uploadedAt: item.uploadedAt || new Date().toISOString()
         });
       }
@@ -1411,6 +1450,7 @@ fogMask: normalizeFog(source.fogMask),
       journal: this.journal,
       journalEntries: this.journalEntries,
       inventory: this.inventory,
+      inventoryCoins: this.inventoryCoins,
       rollRequests: this.rollRequests,
       adventure: this.adventure,
       savedAt: new Date().toISOString()
@@ -1679,11 +1719,14 @@ fogMask: normalizeFog(source.fogMask),
       // его не видно ни в ленте, ни после переподключения.
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory)
         .filter((message) => isDm || !message.whisper || message.playerId === viewer.playerId),
-      // Журнал кампании — заготовки мастера. Игроку он не нужен и не должен
-      // утекать в снимок состояния.
+      // Журнал кампании — заготовки мастера. Игроку уходят только записи,
+      // которые мастер явно показал: иначе тайна утечёт в снимок целиком.
       journal: isDm ? this.journal : '',
-      journalEntries: isDm ? this.journalEntries : [],
+      journalEntries: isDm
+        ? this.journalEntries
+        : this.journalEntries.filter((entry) => entry.visible),
       inventory: this.inventory,
+      inventoryCoins: this.inventoryCoins,
       rollRequests: this.rollRequests,
       // Реакции: мастер видит все, игрок только свои. Иначе чужой повод
       // раскрыл бы ему статы и положение чужой фишки.
@@ -1737,6 +1780,20 @@ fogMask: normalizeFog(source.fogMask),
     return true;
   }
 
+  /**
+   * Монеты общего склада. Мастер меняет их как и предметы; игроки читают.
+   * @param {unknown} input
+   * @returns {object}
+   */
+  setInventoryCoins(input) {
+    const coins = normalizeCoins(input);
+    const changed = COIN_KEYS.some((key) => this.inventoryCoins[key] !== coins[key]);
+    if (!changed) return this.inventoryCoins;
+    this.pushUndo();
+    this.inventoryCoins = coins;
+    return coins;
+  }
+
   addRollRequest(input) {
     const request = normalizeRollRequest(input);
     if (!request) return null;
@@ -1765,7 +1822,8 @@ fogMask: normalizeFog(source.fogMask),
       // сдвинутую фишку: удаление записи отменяется тем же Ctrl+Z.
       journal: this.journal,
       journalEntries: this.journalEntries,
-      inventory: this.inventory
+      inventory: this.inventory,
+      inventoryCoins: this.inventoryCoins
     }));
     if (this.undoStack.length > 20) this.undoStack.shift();
   }
@@ -1780,6 +1838,7 @@ fogMask: normalizeFog(source.fogMask),
     this.journal = data.journal;
     this.journalEntries = data.journalEntries;
     this.inventory = data.inventory;
+    this.inventoryCoins = normalizeCoins(data.inventoryCoins);
     if ('activeMap' in data) this.activeMap = data.activeMap;
     if ('activeMapId' in data) this.activeMapId = data.activeMapId;
     return true;
@@ -1835,6 +1894,8 @@ function normalizeJournalEntry(entry) {
     title,
     text: sanitizeText(entry.text, LIMITS.maxJournalText),
     tags: normalizeJournalTags(entry.tags),
+    // По умолчанию запись мастера. Игроку уходят только отмеченные.
+    visible: Boolean(entry.visible),
     updatedAt: new Date().toISOString()
   };
 }

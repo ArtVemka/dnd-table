@@ -74,6 +74,14 @@ html.is-android #btn-scan-ticket {
     flex: 1 1 100%;
   }
 
+  /* Вторая строка шапки — значки и инструменты. На планшете она занимает
+     всю ширину, и кнопки, прижатые к правому краю, оставляли слева пустоту.
+     Центрируем весь ряд: так шапка читается как одна строка, а не как
+     обрезанная справа. */
+  html.is-android .topbar__right {
+    justify-content: center;
+  }
+
   html.is-android .topbar__titles {
     flex: 1 1 120px;
     min-width: 0;
@@ -151,6 +159,13 @@ html.is-android #btn-scan-ticket {
     container-type: normal;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* Вкладок меньше, чем ширина панели: ряд не заполнял её и прижимался
+     влево. safe center центрирует его, когда место есть, и оставляет
+     прокрутку с начала, когда вкладки не влезают. */
+  html.is-android .tabs {
+    justify-content: safe center;
   }
 
   html.is-android .tabs::-webkit-scrollbar {

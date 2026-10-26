@@ -67,7 +67,7 @@ const TRACKED = [
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
   'tokensUpdated', 'mapPing', 'reactionPrompt',
   'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
-  'journalUpdated', 'inventoryUpdated', 'rollRequestUpdated', 'stateReload'
+  'journalUpdated', 'inventoryUpdated', 'inventoryCoinsUpdated', 'rollRequestUpdated', 'stateReload'
 ];
 
 /**
@@ -288,6 +288,8 @@ async function main() {
     skillProficiencies: { athletics: true, perception: false },
     skillExpertise: { athletics: true, stealth: true },
     hp: 44, maxHp: 44, tempHp: 0, hitDice: '1d10', hitDiceSpent: 2,
+    inspiration: true, exhaustion: 2, concentration: 'Благословение',
+    coins: { cp: 1, sp: 2, ep: 3, gp: 4, pp: 5 },
     armorClass: 18, initiativeMisc: 0, speed: 25,
     attacks: 'Боевой топор +7, 1d8+3',
     attackList: [
@@ -310,6 +312,10 @@ async function main() {
     assert.strictEqual(saved.sheet.hitDiceSpent, 2);
     assert.strictEqual(saved.sheet.subclass, 'Мастер войны');
     assert.strictEqual(saved.sheet.armorClass, 18);
+    assert.strictEqual(saved.sheet.inspiration, true);
+    assert.strictEqual(saved.sheet.exhaustion, 2);
+    assert.strictEqual(saved.sheet.concentration, 'Благословение');
+    assert.deepStrictEqual(saved.sheet.coins, { cp: 1, sp: 2, ep: 3, gp: 4, pp: 5 });
     assert.strictEqual(saved.sheet.proficiencyBonusManual, null);
     assert.strictEqual(saved.sheet.classes.length, 2, 'мультикласс должен сохраниться списком');
     assert.strictEqual(saved.sheet.classes[1].name, 'Волшебник');
@@ -1206,14 +1212,18 @@ async function main() {
   emit(dm, 'deleteToken', { tokenId: actorToken.id });
   await waitFor(() => !room.tokens.some((item) => item.id === actorToken.id), 'удаление фишки из статблока');
   dm.log.tokenCreated.length = 0;
-  emit(dm, 'createTokenFromAdventureActor', {
-    name: 'Гоблин-вожак', mapType: 'world', x: 0.3, y: 0.4, count: 3
+  const spawnAck = await new Promise((resolve) => {
+    dm.emit('createTokenFromAdventureActor', {
+      name: 'Гоблин-вожак', mapType: 'world', x: 0.3, y: 0.4, count: 3
+    }, resolve);
   });
   await waitFor(
     () => dm.log.tokenCreated.filter((item) => item.name === 'Гоблин-вожак').length >= 3,
     'три фишки из статблока'
   );
   check('из статблока можно поставить несколько фишек сразу', () => {
+    assert.strictEqual(spawnAck.ok, true);
+    assert.strictEqual(spawnAck.tokens.length, 3, 'ответ не вернул созданные фишки');
     const copies = room.tokens.filter((item) => item.name === 'Гоблин-вожак');
     assert.strictEqual(copies.length, 3, `создано фишек: ${copies.length}`);
     assert.strictEqual(new Set(copies.map((item) => item.id)).size, 3, 'id повторились');
@@ -2368,6 +2378,56 @@ async function main() {
     assert.strictEqual(mask.length, FOG_COLUMNS * FOG_ROWS);
   });
 
+  // Автотуман: фишка игрока сама открывает участок, но только когда мастер
+  // включил тумблер у карты.
+  const followName = 'Разведчик автотумана';
+  emit(dm, 'createToken', { name: followName, mapType: fogType, mapId: fogMap.id, x: 0.5, y: 0.5 });
+  await waitFor(
+    () => room.tokens.some((token) => token.name === followName),
+    'фишка для автотумана'
+  );
+  const followToken = room.tokens.find((token) => token.name === followName);
+  emit(dm, 'assignTokenToPlayer', { tokenId: followToken.id, playerId: 'p-test-0001' });
+  await waitFor(() => followToken.assignedPlayerId === 'p-test-0001', 'фишка назначена игроку');
+  emit(dm, 'setTokenHidden', { tokenId: followToken.id, hidden: false });
+  await waitFor(() => followToken.hidden === false, 'фишка показана игрокам');
+  emit(dm, 'setActiveMap', { type: fogType, mapId: fogMap.id });
+  await waitFor(() => room.activeMapId === fogMap.id, 'карта показана игрокам');
+  emit(dm, 'setMapFogFollow', { type: fogType, mapId: fogMap.id, follow: true });
+  await waitFor(
+    () => room.maps[fogType].items.find((item) => item.id === fogMap.id).fogFollow === true,
+    'тумблер автотумана'
+  );
+  check('мастер включает автотуман у карты', () => {
+    assert.strictEqual(
+      room.maps[fogType].items.find((item) => item.id === fogMap.id).fogFollow, true);
+  });
+
+  emit(p1, 'moveToken', { tokenId: followToken.id, x: 0.3, y: 0.3, final: true });
+  await waitFor(
+    () => room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask.indexOf('1') >= 0,
+    'автотуман открыл участок'
+  );
+  check('фишка игрока открывает туман вокруг себя', () => {
+    assert.ok(
+      room.maps[fogType].items.find((item) => item.id === fogMap.id).fogMask.indexOf('1') >= 0,
+      'автотуман не открылся'
+    );
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setMapFogFollow', { type: fogType, mapId: fogMap.id, follow: false });
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пробовал выключить автотуман');
+  check('автотуман переключает только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.strictEqual(
+      room.maps[fogType].items.find((item) => item.id === fogMap.id).fogFollow, true);
+  });
+
+  // Фишка была только для проверки: дальше в тесте свои подсчёты фишек.
+  emit(dm, 'deleteToken', { tokenId: followToken.id });
+  await waitFor(() => !room.tokens.some((token) => token.id === followToken.id), 'удаление фишки автотумана');
+
   dm.log.errorMessage.length = 0;
   emit(dm, 'openMapFog', { type: fogType, mapId: 'no-such-map', x: 0.5, y: 0.5, radius: 0.1 });
   await waitFor(() => dm.log.errorMessage.length > 0, 'несуществующая карта');
@@ -2386,6 +2446,7 @@ async function main() {
       .items.find((item) => item.id === fogMap.id);
     assert(saved.fogMask.indexOf('1') >= 0, 'маска тумана пропала из кампании');
     assert.strictEqual(saved.fogMask.length, FOG_COLUMNS * FOG_ROWS);
+    assert.strictEqual(saved.fogFollow, true, 'тумблер автотумана пропал из кампании');
   });
 
   /* ------------------------------------------------------ поверхность */
@@ -3294,15 +3355,40 @@ async function main() {
   const playerJournalBefore = p1.log.journalUpdated.length;
   emit(p1, 'journalRequest');
   await wait(120);
-  check('journalRequest игроку записей не отдаёт', () => {
-    assert.strictEqual(p1.log.journalUpdated.length, playerJournalBefore);
+  check('journalRequest игроку не отдаёт скрытую запись', () => {
+    assert.strictEqual(p1.log.journalUpdated.length, playerJournalBefore + 1);
+    assert.strictEqual(p1.log.journalUpdated[p1.log.journalUpdated.length - 1].length, 0);
   });
 
-  check('записи журнала не попадают в снимок игрока', () => {
+  check('скрытая запись не попадает в снимок игрока', () => {
     assert.strictEqual(
       room.snapshotFor({ playerId: 'dm', role: ROLE_DM }).journalEntries.length, 1);
     assert.strictEqual(
       room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).journalEntries.length, 0);
+  });
+
+  // Мастер отмечает запись «показать игрокам»: она уходит и в запрос, и в
+  // снимок, а скрытые записи по-прежнему не утекают.
+  await new Promise((resolve) => dm.emit('saveJournalEntry', {
+    id: journalEntry.entry.id,
+    kind: 'location',
+    title: 'Старый мост',
+    text: 'Под мостом тайник.',
+    tags: ['мост'],
+    visible: true
+  }, resolve));
+  await waitFor(() => room.journalEntries[0].visible === true, 'запись показана игрокам');
+  const visibleJournal = await new Promise((resolve) => {
+    p1.once('journalUpdated', resolve);
+    p1.emit('journalRequest');
+  });
+  check('journalRequest игроку отдаёт показанную запись', () => {
+    assert.strictEqual(visibleJournal.length, 1);
+    assert.strictEqual(visibleJournal[0].title, 'Старый мост');
+    assert.strictEqual(
+      room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).journalEntries.length, 1);
+    assert.strictEqual(
+      room.snapshotFor({ playerId: 'dm', role: ROLE_DM }).journalEntries.length, 1);
   });
 
   await new Promise((resolve) => {
@@ -3406,6 +3492,32 @@ async function main() {
   check('удаление предмета склада отменяется', () => {
     assert.strictEqual(room.inventory[0].name, 'Верёвка');
     assert.strictEqual(room.inventory[0].qty, 1);
+  });
+
+  const deniedCoins = await new Promise((resolve) => {
+    p1.emit('setInventoryCoins', { coins: { gp: 100 } }, resolve);
+  });
+  check('монеты склада меняет только мастер', () => {
+    assert.strictEqual(deniedCoins.ok, false);
+    assert.match(deniedCoins.error, /только ДМ/);
+    assert.strictEqual(room.inventoryCoins.gp, 0);
+  });
+
+  p2.log.inventoryCoinsUpdated.length = 0;
+  const coinsAck = await new Promise((resolve) => {
+    dm.emit('setInventoryCoins', { coins: { cp: 5, sp: 7, ep: 1, gp: 42, pp: 2, лишнее: 9 } }, resolve);
+  });
+  const coinsBroadcast = await waitFor(
+    () => p2.log.inventoryCoinsUpdated[0],
+    'рассылка монет склада'
+  );
+  check('мастер задаёт монеты склада, и их видят все', () => {
+    assert.strictEqual(coinsAck.ok, true);
+    assert.deepStrictEqual(room.inventoryCoins, { cp: 5, sp: 7, ep: 1, gp: 42, pp: 2 });
+    assert.deepStrictEqual(coinsBroadcast, { cp: 5, sp: 7, ep: 1, gp: 42, pp: 2 });
+    assert.deepStrictEqual(
+      room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).inventoryCoins,
+      { cp: 5, sp: 7, ep: 1, gp: 42, pp: 2 });
   });
 
   p1.log.errorMessage.length = 0;

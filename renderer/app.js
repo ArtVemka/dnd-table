@@ -78,6 +78,7 @@ grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetP
       journal: '',
       journalEntries: [],
       inventory: [],
+      inventoryCoins: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
       rollRequests: []
     },
     viewedSheetPlayerId: null,
@@ -540,6 +541,25 @@ let chosenSheetId = null;
     return true;
   }
 
+  /** То же, но ждёт ответ сервера: нужно там, где важен созданный объект. */
+  function emitAck(event, payload) {
+    return new Promise((resolve) => {
+      if (!app.socket || !app.connected) {
+        toast('Нет соединения со столом', 'error');
+        resolve(null);
+        return;
+      }
+      let settled = false;
+      const done = (result) => {
+        if (settled) return;
+        settled = true;
+        resolve(result || null);
+      };
+      setTimeout(() => done(null), 8000);
+      app.socket.emit(event, payload, done);
+    });
+  }
+
   /**
    * Хендаут в чат: картинка сохраняется в папку кампании, в ленте остаётся URL.
    * Текст из поля ввода идёт подписью, поэтому его не нужно вводить заново.
@@ -587,6 +607,7 @@ let chosenSheetId = null;
       journal: state.journal || '',
       journalEntries: state.journalEntries || [],
       inventory: state.inventory || [],
+      inventoryCoins: state.inventoryCoins || { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
       rollRequests: state.rollRequests || [],
       // Поводы для реакций приходят снимком: после переподключения карточка
       // должна быть на месте, а не жить только в памяти старого окна.
@@ -924,6 +945,11 @@ let chosenSheetId = null;
     // Склад и просьбы о бросках приходят всем: игроки их только читают.
     socket.on('inventoryUpdated', (items) => {
       app.room.inventory = Array.isArray(items) ? items : [];
+      renderInventoryPanel();
+    });
+
+    socket.on('inventoryCoinsUpdated', (coins) => {
+      app.room.inventoryCoins = coins || { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 };
       renderInventoryPanel();
     });
 
@@ -1395,6 +1421,7 @@ let chosenSheetId = null;
         // Туман войны: карта уезжает на сервер целиком, маской на месте.
         onOpenMapFog: (type, mapId, x, y, radius) => emit('openMapFog', { type, mapId, x, y, radius }),
         onSetMapFog: (type, mapId, open) => emit('setMapFog', { type, mapId, open }),
+        onSetMapFogFollow: (type, mapId, follow) => emit('setMapFogFollow', { type, mapId, follow }),
         // Освещение: правка только мастерская, сервер проверяет это сам.
         onSetMapDarkness: (type, mapId, darkness) => emit('setMapDarkness', { type, mapId, darkness }),
         onAddMapWall: (type, mapId, wall) => emit('addMapWall', {
@@ -1928,6 +1955,7 @@ let chosenSheetId = null;
     const bestiary = makeBestiaryButton();
     if (bestiary) actions.appendChild(bestiary);
     panel.appendChild(actions);
+    panel.appendChild(buildEncounterBlock(adventure));
 
     fillAdventureSections(panel, adventure, '');
   }
@@ -2636,6 +2664,217 @@ let chosenSheetId = null;
 
   const searchTextCache = new WeakMap();
 
+  /**
+   * Уровни партии для расчёта сложности. Берём только листы игроков: у ДМ
+   * листа нет, а игрок без листа не должен считаться первым уровнем.
+   * @returns {number[]}
+   */
+  function encounterPartyLevels() {
+    const sheets = app.room && app.room.sheets ? app.room.sheets : {};
+    const levels = [];
+    for (const player of (app.room && app.room.players) || []) {
+      if (player.role === 'dm') continue;
+      const sheet = sheets[player.playerId];
+      if (!sheet) continue;
+      levels.push(window.DnD5e.totalCharacterLevel(sheet));
+    }
+    return levels;
+  }
+
+  /**
+   * Блок «Встреча»: выбрать монстров, посчитать опыт и сразу вывести их на
+   * стол. Опыт считается по DMG, а не по CR напрямую: множитель за число
+   * монстров сильно меняет сложность.
+   * @param {object} adventure
+   * @returns {HTMLElement}
+   */
+  function buildEncounterBlock(adventure) {
+    const section = el('details', 'encounter');
+    section.open = encounterOpen;
+    const actors = groupByName(adventure.actors || [])
+      .filter((group) => group.members.length)
+      .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+    const byName = new Map(actors.map((group) => [group.name, group]));
+    for (const name of [...encounterSelection.keys()]) {
+      if (!byName.has(name)) encounterSelection.delete(name);
+    }
+    const total = [...encounterSelection.values()].reduce((sum, count) => sum + count, 0);
+    const summary = el('summary', 'encounter__summary',
+      `⚔ Встреча${total ? ` · ${total} ${plural(total, 'монстр', 'монстра', 'монстров')}` : ''}`);
+    summary.addEventListener('click', () => {
+      // Следующий кадр: details.open ещё не переключён в момент click.
+      setTimeout(() => { encounterOpen = section.open; }, 0);
+    });
+    section.appendChild(summary);
+
+    const levels = encounterPartyLevels();
+    const thresholds = window.DnD5e.partyThresholds(levels);
+    section.appendChild(el('div', 'encounter__party',
+      thresholds
+        ? `Партия: ${thresholds.size} ${plural(thresholds.size, 'лист', 'листа', 'листов')} · `
+          + `лёгкая ${thresholds.easy}, средняя ${thresholds.medium}, `
+          + `тяжёлая ${thresholds.hard}, смертельная ${thresholds.deadly}`
+        : 'Партия: нет листов игроков, сложность посчитать нельзя'));
+
+    if (!actors.length) {
+      section.appendChild(el('div', 'encounter__empty muted',
+        'В справочнике нет персонажей. Импортируйте приключение или создайте NPC.'));
+      return section;
+    }
+
+    // Выбор: один список и количество. Так мастер не ищет плюсик у каждой
+    // карточки и может собрать встречу из нескольких видов монстров.
+    const form = el('form', 'encounter__add');
+    const select = el('select', 'select');
+    select.setAttribute('aria-label', 'Монстр для встречи');
+    for (const group of actors) {
+      const option = el('option', null, group.name);
+      option.value = group.name;
+      select.appendChild(option);
+    }
+    if (!byName.has(encounterActorName)) encounterActorName = actors[0].name;
+    select.value = encounterActorName;
+    select.addEventListener('change', () => { encounterActorName = select.value; });
+    form.appendChild(select);
+
+    const count = el('input', 'input encounter__count');
+    count.type = 'number';
+    count.min = '1';
+    count.max = '20';
+    count.value = '1';
+    count.setAttribute('aria-label', 'Сколько монстров');
+    form.appendChild(count);
+
+    const add = el('button', 'btn btn--accent btn--tiny', 'Добавить');
+    add.type = 'submit';
+    form.appendChild(add);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const name = select.value;
+      const n = Math.max(1, Math.min(20, Math.round(Number(count.value) || 1)));
+      encounterSelection.set(name, Math.min(20, (encounterSelection.get(name) || 0) + n));
+      renderAdventurePanel({ force: true });
+    });
+    section.appendChild(form);
+
+    if (!encounterSelection.size) {
+      section.appendChild(el('div', 'encounter__empty muted',
+        'Добавьте монстров: опыт и сложность посчитаются сами.'));
+      return section;
+    }
+
+    const list = el('div', 'encounter__list');
+    for (const [name, n] of encounterSelection) {
+      const group = byName.get(name);
+      const cr = group && group.members[0] && group.members[0].statblock
+        ? group.members[0].statblock.cr
+        : '';
+      const row = el('div', 'encounter__row');
+      row.appendChild(el('span', 'encounter__name', name));
+      row.appendChild(el('span', 'encounter__cr', cr ? `CR ${cr}` : 'CR —'));
+
+      const input = el('input', 'input encounter__count');
+      input.type = 'number';
+      input.min = '1';
+      input.max = '20';
+      input.value = String(n);
+      input.title = 'Количество монстров этого вида';
+      input.addEventListener('change', () => {
+        const value = Math.max(1, Math.min(20, Math.round(Number(input.value) || 1)));
+        encounterSelection.set(name, value);
+        renderAdventurePanel({ force: true });
+      });
+      row.appendChild(input);
+
+      const remove = el('button', 'btn btn--ghost btn--tiny encounter__remove', '×');
+      remove.type = 'button';
+      remove.title = `Убрать «${name}» из встречи`;
+      remove.addEventListener('click', () => {
+        encounterSelection.delete(name);
+        renderAdventurePanel({ force: true });
+      });
+      row.appendChild(remove);
+      list.appendChild(row);
+    }
+    section.appendChild(list);
+
+    const xp = window.DnD5e.encounterXp([...encounterSelection].map(([name, n]) => ({
+      cr: byName.get(name) && byName.get(name).members[0]
+        ? byName.get(name).members[0].statblock?.cr
+        : null,
+      count: n
+    })));
+    const difficulty = window.DnD5e.encounterDifficulty(xp.adjustedXp, thresholds);
+    const difficultyLabels = {
+      trivial: 'ниже лёгкой',
+      easy: 'лёгкая',
+      medium: 'средняя',
+      hard: 'тяжёлая',
+      deadly: 'смертельная'
+    };
+    const xpLine = el('div', 'encounter__result');
+    xpLine.appendChild(el('strong', null,
+      `${xp.adjustedXp} XP`));
+    xpLine.appendChild(el('span', 'muted',
+      xp.multiplier > 1
+        ? ` · ${xp.baseXp} × ${xp.multiplier} за число монстров`
+        : ` · ${xp.baseXp} базовых`));
+    if (difficulty) {
+      xpLine.appendChild(el('span', `encounter__diff encounter__diff--${difficulty}`,
+        ` · ${difficultyLabels[difficulty]}`));
+    }
+    if (xp.ignored) {
+      xpLine.appendChild(el('span', 'muted', ` · ${xp.ignored} без CR не учтены`));
+    }
+    section.appendChild(xpLine);
+
+    const go = el('button', 'btn btn--accent encounter__go', 'В бой');
+    go.type = 'button';
+    go.title = 'Создать фишки, добавить их в порядок боя и бросить инициативу';
+    go.addEventListener('click', () => startEncounter(go));
+    section.appendChild(go);
+    section.appendChild(el('div', 'encounter__empty muted',
+      'Фишки появятся на текущей карте и сразу вступят в бой.'));
+    return section;
+  }
+
+  /** Создаёт фишки встречи и запускает порядок боя. */
+  async function startEncounter(button) {
+    const chosen = [...encounterSelection].filter(([, count]) => count > 0);
+    if (!chosen.length) return;
+    if (button) button.disabled = true;
+    const mapType = (mapView && mapView.viewedMap) || app.room.activeMap || 'battle';
+    const mapId = (mapView && mapView.currentMapId) || activeMapId();
+    const created = [];
+    for (let index = 0; index < chosen.length; index += 1) {
+      const [name, count] = chosen[index];
+      const result = await emitAck('createTokenFromAdventureActor', {
+        name,
+        mapType,
+        mapId,
+        count,
+        x: 0.3 + (index % 3) * 0.2,
+        y: 0.35 + Math.floor(index / 3) * 0.2
+      });
+      if (result && result.ok && Array.isArray(result.tokens)) created.push(...result.tokens);
+    }
+    if (!created.length) {
+      toast('Не удалось создать фишки встречи', 'error');
+      if (button) button.disabled = false;
+      return;
+    }
+    for (const token of created) {
+      // Встреча начинается сразу: фишки показываем, иначе игроки увидели бы
+      // монстров в порядке боя, но не на карте.
+      emit('setTokenHidden', { tokenId: token.id, hidden: false });
+      emit('initiativeAdd', { kind: 'token', refId: token.id, name: token.name, modifier: 0 });
+    }
+    emit('initiativeRoll', {});
+    encounterSelection.clear();
+    renderAdventurePanel({ force: true });
+    toast(`Встреча: ${created.length} фишек. Инициатива брошена.`, 'ok');
+  }
+
   function fillAdventureSections(panel, adventure, query) {
     for (const old of panel.querySelectorAll('.adv-section')) old.remove();
     const needle = query.toLowerCase();
@@ -3228,12 +3467,18 @@ let chosenSheetId = null;
 
   /**
    * Рисует панель журнала: поиск, список записей и открытый редактор.
-   * Игроку панель не нужна: записи мастеру сервер и не присылает.
+   * Мастер видит и правит всё, игрок — только записи с флагом «показать».
    */
   function renderJournalPanel() {
     const panel = $('#journal-panel');
     if (!panel) return;
-    panel.hidden = !(app.role === 'dm' && app.room && !app.training);
+    const isDm = app.role === 'dm';
+    const hasEntries = journalEntries().length > 0;
+    panel.hidden = !(app.room && !app.training && (isDm || hasEntries));
+    const add = $('#btn-journal-add');
+    if (add) add.hidden = !isDm;
+    const detach = $('#btn-journal-detach');
+    if (detach) detach.hidden = !isDm;
     const list = $('#journal-list');
     if (!list) return;
     list.innerHTML = '';
@@ -3245,7 +3490,7 @@ let chosenSheetId = null;
       .slice()
       .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
 
-    const editor = journalEditingId ? journalEditorNode(journalEditingId) : null;
+    const editor = journalEditingId ? journalEditorNode(journalEditingId, { readOnly: !isDm }) : null;
     if (editor) list.appendChild(editor);
 
     if (!entries.length) {
@@ -3260,6 +3505,9 @@ let chosenSheetId = null;
       row.appendChild(el('span', 'journal-row__kind', journalKindLabel(entry.kind)));
       const main = el('span', 'journal-row__main');
       main.appendChild(el('span', 'journal-row__title', entry.title));
+      if (entry.visible && isDm) {
+        main.appendChild(el('span', 'journal-row__tags', 'видна игрокам'));
+      }
       if (entry.tags && entry.tags.length) {
         main.appendChild(el('span', 'journal-row__tags', entry.tags.join(' · ')));
       }
@@ -3273,7 +3521,8 @@ let chosenSheetId = null;
   }
 
   /** Редактор записи: та же форма и для новой, и для правки существующей. */
-  function journalEditorNode(id) {
+  function journalEditorNode(id, options = {}) {
+    const readOnly = Boolean(options.readOnly);
     const isNew = id === 'new';
     const entry = isNew ? null : journalEntry(id);
     if (!isNew && !entry) {
@@ -3313,10 +3562,37 @@ let chosenSheetId = null;
     text.value = (entry && entry.text) || '';
     text.setAttribute('aria-label', 'Текст записи');
 
+    const visibleLabel = el('label', 'journal-editor__visible');
+    const visible = el('input');
+    visible.type = 'checkbox';
+    visible.checked = Boolean(entry && entry.visible);
+    visible.title = 'Запись увидят игроки в своей панели журнала';
+    visibleLabel.appendChild(visible);
+    visibleLabel.appendChild(el('span', null, 'Показать игрокам'));
+
     form.appendChild(title);
     form.appendChild(kind);
     form.appendChild(tags);
     form.appendChild(text);
+    form.appendChild(visibleLabel);
+
+    if (readOnly) {
+      title.readOnly = true;
+      kind.disabled = true;
+      tags.readOnly = true;
+      text.readOnly = true;
+      visible.disabled = true;
+      const close = el('button', 'btn btn--ghost btn--tiny', 'Закрыть');
+      close.type = 'button';
+      close.addEventListener('click', () => {
+        journalEditingId = null;
+        renderJournalPanel();
+      });
+      const actions = el('div', 'journal-editor__actions');
+      actions.appendChild(close);
+      form.appendChild(actions);
+      return form;
+    }
 
     const actions = el('div', 'journal-editor__actions');
     const save = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
@@ -3345,7 +3621,8 @@ let chosenSheetId = null;
         kind: kind.value,
         title: title.value.trim(),
         text: text.value,
-        tags: tags.value.split(',').map((tag) => tag.trim()).filter(Boolean)
+        tags: tags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
+        visible: visible.checked
       });
     });
 
@@ -3399,6 +3676,45 @@ let chosenSheetId = null;
     return app.room && Array.isArray(app.room.inventory) ? app.room.inventory : [];
   }
 
+  /** Кошелёк партии: пять монет, как в листе. */
+  function inventoryCoins() {
+    const raw = app.room && app.room.inventoryCoins;
+    const coins = { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 };
+    if (raw && typeof raw === 'object') {
+      for (const key of Object.keys(coins)) coins[key] = DnD.clampNumber(raw[key], 0, DnD.LIMITS.maxCoins, 0);
+    }
+    return coins;
+  }
+
+  /** Строка монет общего склада. Мастер правит, игрок только читает. */
+  function inventoryCoinsNode(isDm) {
+    const coins = inventoryCoins();
+    const row = el('div', 'inventory-coins');
+    const inputs = {};
+    for (const [key, label] of [['cp', 'мм'], ['sp', 'см'], ['ep', 'эл.'], ['gp', 'зм'], ['pp', 'пл']]) {
+      const field = el('label', 'inventory-coins__field');
+      field.appendChild(el('span', 'inventory-coins__label', label));
+      const input = el('input', 'input inventory-coins__input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = String(DnD.LIMITS.maxCoins);
+      input.value = String(coins[key] || 0);
+      input.disabled = !isDm;
+      input.title = 'Монеты общего склада';
+      input.addEventListener('change', () => {
+        const next = {};
+        for (const coin of Object.keys(inputs)) {
+          next[coin] = DnD.clampNumber(inputs[coin].value, 0, DnD.LIMITS.maxCoins, 0);
+        }
+        emit('setInventoryCoins', { coins: next });
+      });
+      inputs[key] = input;
+      field.appendChild(input);
+      row.appendChild(field);
+    }
+    return row;
+  }
+
   /** Имя владельца предмета: пустой ownerId — общий склад. */
   function inventoryOwnerLabel(ownerId) {
     if (!ownerId) return 'Общий склад';
@@ -3430,6 +3746,8 @@ let chosenSheetId = null;
     if (!list) return;
     list.innerHTML = '';
     if (panel.hidden) return;
+
+    list.appendChild(inventoryCoinsNode(isDm));
 
     if (isDm && inventoryEditingId) {
       const editor = inventoryEditorNode(inventoryEditingId);
@@ -6013,6 +6331,10 @@ const gridRow = el('div', 'settings__row');
   let adventureFilePath = '';
   /** Содержимое справочника устарело, пока вкладка была закрыта. */
   let adventurePanelStale = false;
+  /** Выбранные для встречи монстры: имя → количество. */
+  const encounterSelection = new Map();
+  let encounterActorName = '';
+  let encounterOpen = false;
   /** Отложенный пересбор разделов при поиске. */
   let adventureSearchTimer = null;
 

@@ -924,8 +924,12 @@ const GRID = {
    */
   const CONDITIONS = [
     { id: 'blinded', label: 'Слепой', short: 'Слепой', effect: 'blindfold' },
+    // «Очарован» и «истощён» есть в PHB, но раньше их нельзя было поставить
+    // за столом. Оставляем и dazzled: он приходит из старых кампаний.
+    { id: 'charmed', label: 'Очарован', short: 'Очар.', effect: 'charmed' },
     { id: 'deafened', label: 'Глухой', short: 'Глухой', effect: 'deafened' },
     { id: 'dazzled', label: 'Ослеплён', short: 'Ослеп', effect: 'dazzled' },
+    { id: 'exhaustion', label: 'Истощение', short: 'Истощ.', effect: 'exhaustion' },
     { id: 'frightened', label: 'Испуган', short: 'Испуг', effect: 'frightened' },
     { id: 'grappled', label: 'Схвачен', short: 'Схват', effect: 'grappled' },
     { id: 'incapacitated', label: 'Недееспособен', short: 'Недеесп.', effect: 'chained', noMove: true },
@@ -935,7 +939,8 @@ const GRID = {
     { id: 'poisoned', label: 'Отравлен', short: 'Отравл.', effect: 'poison' },
     { id: 'prone', label: 'Сбит с ног', short: 'Лежит', effect: 'prone' },
     { id: 'restrained', label: 'Опутан', short: 'Опут.', effect: 'vines', noMove: true },
-    { id: 'stunned', label: 'Оглушён', short: 'Оглуш.', effect: 'dizzy', noMove: true }
+    { id: 'stunned', label: 'Оглушён', short: 'Оглуш.', effect: 'dizzy', noMove: true },
+    { id: 'unconscious', label: 'Без сознания', short: 'Без созн.', effect: 'unconscious', noMove: true }
   ];
 
   /** Состояния, из-за которых фишкой нельзя пошевелить. */
@@ -982,7 +987,7 @@ const GRID = {
     // ввода показывает этот предел, и сервер обязан соглашаться.
     maxTokenHp: 9999,
     // Состояний на одной фишке не бывает больше, чем есть в правилах.
-    maxTokenConditions: 13,
+    maxTokenConditions: 16,
     /** Заметка мастера об игроке: столько же, сколько заметки в листе. */
     maxDmNote: 4000,
     // Аватар ездит вместе с игроком и рисуется в кружке 30px, поэтому его
@@ -1016,7 +1021,13 @@ const GRID = {
     /** Строк атак в листе: больше двадцати за бой всё равно не пригодится. */
     maxSheetAttacks: 20,
     maxAttackName: 60,
-    maxAttackDamage: 80
+    maxAttackDamage: 80,
+    /** Истощение по PHB: шесть уровней, дальше смерть. */
+    maxExhaustion: 6,
+    /** Название заклинания концентрации: одна строка, а не описание. */
+    maxConcentrationLength: 120,
+    /** Монеты в листе и общем складе: больше миллиона штук не носят. */
+    maxCoins: 999999
   };
 
   /**
@@ -1107,6 +1118,13 @@ const GRID = {
       // Сколько костей хитов уже потрачено. Пул общий: у мультикласса
       // конкретную кость выбирают в листе, а счётчик один.
       hitDiceSpent: 0,
+      // Вдохновение и истощение — ресурсы мастера, а не производные числа.
+      inspiration: false,
+      exhaustion: 0,
+      // Название заклинания, на котором держится концентрация. Пусто — нет.
+      concentration: '',
+      // Монеты персонажа. Медь, серебро, электрум, золото, платина.
+      coins: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
       armorClass: 10,
       initiativeMisc: 0,
       speed: 30,
@@ -1230,6 +1248,139 @@ const GRID = {
     return { level, profBonus, modifiers, saves, skills, initiative, passivePerception };
   }
 
+  /*
+   * Сложность встречи по DMG (5e 2014).
+   *
+   * Таблицы небольшие и неизменные, поэтому живут в правилах, а не в
+   * приключении: мастеру нужен только итог, а не ещё один импорт.
+   */
+  const CR_XP = [
+    [0, 10], [0.125, 25], [0.25, 50], [0.5, 100],
+    [1, 200], [2, 450], [3, 700], [4, 1100], [5, 1800], [6, 2300],
+    [7, 2900], [8, 3900], [9, 5000], [10, 5900], [11, 7200], [12, 8400],
+    [13, 10000], [14, 11500], [15, 13000], [16, 15000], [17, 18000],
+    [18, 20000], [19, 22000], [20, 25000], [21, 33000], [22, 41000],
+    [23, 50000], [24, 62000], [25, 75000], [26, 90000], [27, 105000],
+    [28, 120000], [29, 135000], [30, 155000]
+  ];
+
+  /** Пороги опыта на одного персонажа: легко, средне, тяжело, смертельно. */
+  const XP_THRESHOLDS = [
+    null,
+    [25, 50, 75, 100],
+    [50, 100, 150, 200],
+    [75, 150, 225, 400],
+    [125, 250, 375, 500],
+    [250, 500, 750, 1100],
+    [300, 600, 900, 1400],
+    [350, 750, 1100, 1700],
+    [450, 900, 1400, 2100],
+    [550, 1100, 1600, 2400],
+    [600, 1200, 1900, 2800],
+    [800, 1600, 2400, 3600],
+    [1000, 2000, 3000, 4500],
+    [1100, 2200, 3400, 5100],
+    [1250, 2500, 3800, 5700],
+    [1400, 2800, 4300, 6400],
+    [1600, 3200, 4800, 7200],
+    [2000, 3900, 5900, 8800],
+    [2100, 4200, 6300, 9500],
+    [2400, 4900, 7300, 10900],
+    [2800, 5700, 8500, 12700]
+  ];
+
+  /** @param {unknown} cr @returns {number|null} */
+  function crValue(cr) {
+    if (cr === null || cr === undefined || cr === '') return null;
+    if (typeof cr === 'number') return Number.isFinite(cr) && cr >= 0 && cr <= 30 ? cr : null;
+    const text = String(cr).trim().replace(',', '.');
+    if (!text) return null;
+    const fraction = /^(\d+)\s*\/\s*(\d+)$/.exec(text);
+    if (fraction) {
+      const value = Number(fraction[1]) / Number(fraction[2]);
+      return Number.isFinite(value) && value >= 0 && value <= 30 ? value : null;
+    }
+    const value = Number(text);
+    return Number.isFinite(value) && value >= 0 && value <= 30 ? value : null;
+  }
+
+  /** @param {unknown} cr @returns {number} */
+  function monsterXp(cr) {
+    const value = crValue(cr);
+    if (value === null) return 0;
+    const found = CR_XP.find(([rating]) => Math.abs(rating - value) < 1e-9);
+    return found ? found[1] : 0;
+  }
+
+  /** @param {number} count @returns {number} */
+  function encounterMultiplier(count) {
+    const n = Math.max(0, Math.round(Number(count) || 0));
+    if (n <= 0) return 0;
+    if (n === 1) return 1;
+    if (n === 2) return 1.5;
+    if (n <= 6) return 2;
+    if (n <= 10) return 2.5;
+    if (n <= 14) return 3;
+    return 4;
+  }
+
+  /**
+   * Опыт встречи по списку `{cr, count}`.
+   * @param {{cr?: unknown, count?: unknown}[]} actors
+   * @returns {{count: number, baseXp: number, multiplier: number, adjustedXp: number, ignored: number}}
+   */
+  function encounterXp(actors) {
+    let count = 0;
+    let baseXp = 0;
+    let ignored = 0;
+    for (const actor of Array.isArray(actors) ? actors : []) {
+      const n = Math.max(0, Math.min(20, Math.round(Number(actor && actor.count) || 0)));
+      if (!n) continue;
+      const xp = monsterXp(actor && actor.cr);
+      if (!xp) {
+        ignored += n;
+        continue;
+      }
+      count += n;
+      baseXp += xp * n;
+    }
+    const multiplier = encounterMultiplier(count);
+    return { count, baseXp, multiplier, adjustedXp: Math.round(baseXp * multiplier), ignored };
+  }
+
+  /**
+   * Пороги сложности для партии. Без листов считать нечего, поэтому null.
+   * @param {number[]} levels
+   * @returns {{size: number, easy: number, medium: number, hard: number, deadly: number}|null}
+   */
+  function partyThresholds(levels) {
+    const list = (Array.isArray(levels) ? levels : [])
+      .map((value) => Math.round(Number(value) || 0))
+      .filter((value) => value >= 1 && value <= 20);
+    if (!list.length) return null;
+    const totals = [0, 0, 0, 0];
+    for (const level of list) {
+      const row = XP_THRESHOLDS[level];
+      for (let index = 0; index < 4; index += 1) totals[index] += row[index];
+    }
+    return { size: list.length, easy: totals[0], medium: totals[1], hard: totals[2], deadly: totals[3] };
+  }
+
+  /**
+   * @param {number} adjustedXp
+   * @param {{easy: number, medium: number, hard: number, deadly: number}|null} thresholds
+   * @returns {'trivial'|'easy'|'medium'|'hard'|'deadly'|null}
+   */
+  function encounterDifficulty(adjustedXp, thresholds) {
+    if (!thresholds) return null;
+    const xp = Number(adjustedXp) || 0;
+    if (xp >= thresholds.deadly) return 'deadly';
+    if (xp >= thresholds.hard) return 'hard';
+    if (xp >= thresholds.medium) return 'medium';
+    if (xp >= thresholds.easy) return 'easy';
+    return 'trivial';
+  }
+
   global.DnD5e = {
     ABILITY_KEYS,
     ABILITIES,
@@ -1271,6 +1422,12 @@ abilityModifier,
       computeVitalState,
       conditionBlocksMove,
       conditionEffects,
+      crValue,
+      encounterDifficulty,
+      encounterMultiplier,
+      encounterXp,
+      monsterXp,
+      partyThresholds,
     createEmptySheet,
     darknessAlpha,
     distanceToSegment,

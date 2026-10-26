@@ -99,6 +99,9 @@
       row.appendChild(el('span', 'journal-row__kind', kindLabel(entry.kind)));
       const main = el('span', 'journal-row__main');
       main.appendChild(el('span', 'journal-row__title', entry.title));
+      if (entry.visible) {
+        main.appendChild(el('span', 'journal-row__tags', 'видна игрокам'));
+      }
       if (entry.tags && entry.tags.length) {
         main.appendChild(el('span', 'journal-row__tags', entry.tags.join(' · ')));
       }
@@ -146,10 +149,19 @@
     text.value = (entry && entry.text) || '';
     text.setAttribute('aria-label', 'Текст записи');
 
+    const visibleLabel = el('label', 'journal-editor__visible');
+    const visible = el('input');
+    visible.type = 'checkbox';
+    visible.checked = Boolean(entry && entry.visible);
+    visible.title = 'Запись увидят игроки в своей панели журнала';
+    visibleLabel.appendChild(visible);
+    visibleLabel.appendChild(el('span', null, 'Показать игрокам'));
+
     form.appendChild(title);
     form.appendChild(kind);
     form.appendChild(tags);
     form.appendChild(text);
+    form.appendChild(visibleLabel);
 
     const actions = el('div', 'journal-editor__actions');
     const save = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
@@ -181,7 +193,8 @@
         kind: kind.value,
         title: value,
         text: text.value,
-        tags: tags.value.split(',').map((tag) => tag.trim()).filter(Boolean)
+        tags: tags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
+        visible: visible.checked
       }, (result) => {
         if (!result || !result.ok) {
           return toast((result && result.error) || 'Не удалось сохранить запись', 'error');

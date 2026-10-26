@@ -2213,6 +2213,21 @@ body::after {
   cursor: pointer;
 }
 
+.fog-bar__follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fog-bar__follow input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* ==========================================================================
  * Живой стол: знаки, рамки и мелочи, из которых складывается настольная игра.
  *

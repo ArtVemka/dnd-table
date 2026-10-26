@@ -2200,6 +2200,25 @@
       size.addEventListener('click', (event) => event.stopPropagation());
       box.appendChild(size);
 
+      // Автотуман: фишка игрока сама открывает участок вокруг себя. Тумблер
+      // у карты, потому что на одной локации это удобно, а на другой мастер
+      // хочет открывать вручную.
+      const followLabel = el('label', 'fog-bar__follow');
+      const follow = el('input');
+      follow.type = 'checkbox';
+      follow.checked = Boolean(map.fogFollow);
+      follow.title = 'Открывать туман вокруг фишек игроков, когда они ходят';
+      follow.addEventListener('change', () => {
+        map.fogFollow = follow.checked;
+        if (this.handlers.onSetMapFogFollow) {
+          this.handlers.onSetMapFogFollow(type, map.id, follow.checked);
+        }
+      });
+      follow.addEventListener('click', (event) => event.stopPropagation());
+      followLabel.appendChild(follow);
+      followLabel.appendChild(el('span', null, 'за игроками'));
+      box.appendChild(followLabel);
+
       const openAll = mapTool('Открыть всё', 'Убрать туман с карты целиком', [
         'M1.8 8s2.3-3.8 6.2-3.8S14.2 8 14.2 8s-2.3 3.8-6.2 3.8S1.8 8 1.8 8z',
         'M8 6.4a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z'

@@ -465,6 +465,7 @@
       combat.appendChild(slots);
 
       col1.appendChild(combat);
+      col1.appendChild(this.buildStateBlock());
       grid.appendChild(col1);
 
       // --- Колонка 2: навыки ---
@@ -522,6 +523,90 @@
       this.updateRollAvailability();
       this.syncHitDie();
       this.updateClassSummary();
+    }
+
+    /**
+     * Состояние: вдохновение, истощение, концентрация и монеты.
+     *
+     * Это не производные числа, а ресурсы, которые игрок отмечает сам.
+     * Истощение показываем уровнем и подсказкой, но скорость и броски
+     * автоматически не правим: за столом мастер всё равно объявляет эффект.
+     * @returns {HTMLElement}
+     */
+    buildStateBlock() {
+      const box = el('div', 'box');
+      box.appendChild(el('div', 'box__title', 'Состояние'));
+
+      const inspRow = el('label', 'prof-row prof-row--manual');
+      const insp = el('input');
+      insp.type = 'checkbox';
+      insp.title = 'Вдохновение: можно перебросить проверку или бросок атаки';
+      insp.addEventListener('change', () => this.refresh());
+      inspRow.appendChild(insp);
+      inspRow.appendChild(el('span', 'prof-row__label', 'Вдохновение'));
+      box.appendChild(inspRow);
+
+      const exhRow = el('label', 'field');
+      exhRow.appendChild(el('span', 'field__label', 'Истощение, уровень'));
+      const exh = el('select', 'select');
+      exh.title = 'Уровень истощения 0–6';
+      exh.addEventListener('change', () => this.refresh());
+      const exhaustionLabels = [
+        'нет',
+        '1: помеха проверкам',
+        '2: скорость −10 футов',
+        '3: помеха атакам и спасброскам',
+        '4: максимум хитов вдвое меньше',
+        '5: скорость 0',
+        '6: смерть'
+      ];
+      for (let level = 0; level <= DnD.LIMITS.maxExhaustion; level += 1) {
+        const option = el('option', null, exhaustionLabels[level]);
+        option.value = String(level);
+        exh.appendChild(option);
+      }
+      exhRow.appendChild(exh);
+      box.appendChild(exhRow);
+
+      const concRow = el('label', 'field');
+      concRow.appendChild(el('span', 'field__label', 'Концентрация на'));
+      const conc = el('input', 'field__input');
+      conc.type = 'text';
+      conc.maxLength = DnD.LIMITS.maxConcentrationLength;
+      conc.placeholder = 'Название заклинания';
+      conc.title = 'Заклинание, на котором держится концентрация';
+      conc.addEventListener('input', () => this.refresh());
+      concRow.appendChild(conc);
+      box.appendChild(concRow);
+
+      const concActions = el('div', 'inline-row');
+      const concRoll = this.rollButton('Проверка КОН при уроне', () => {
+        const name = conc.value.trim();
+        this.rollCheck(name ? `Концентрация: ${name}` : 'Концентрация',
+          DnD.formatModifier(this.derived.saves.con.total));
+      });
+      concRoll.title = 'Спасбросок Телосложения: СЛ 10 или половина полученного урона';
+      concActions.appendChild(concRoll);
+      box.appendChild(concActions);
+
+      const coins = el('div', 'mini-grid sheet__coins');
+      const coinNodes = {};
+      for (const [key, label] of [['cp', 'мм'], ['sp', 'см'], ['ep', 'эл.'], ['gp', 'зм'], ['pp', 'пл']]) {
+        const row = el('label', 'field');
+        row.appendChild(el('span', 'field__label', label));
+        const input = numberInput(null, { min: 0, max: DnD.LIMITS.maxCoins });
+        input.title = 'Монеты персонажа';
+        input.addEventListener('input', () => this.refresh());
+        coinNodes[key] = input;
+        row.appendChild(input);
+        coins.appendChild(row);
+      }
+      box.appendChild(coins);
+      box.appendChild(el('div', 'box__note',
+        'Истощение: помеха проверкам, затем скорость, броски и максимум хитов. Уровень ведёт мастер.'));
+
+      this.stateNodes = { insp, exh, conc, concRoll, coins: coinNodes };
+      return box;
     }
 
     field(name, label, options = {}) {
@@ -933,6 +1018,19 @@ sheet.spellSlotsUsed = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
   current.spellSlotsMax ? current.spellSlotsMax[index] : 0, 0
 ));
 sheet.hitDiceSpent = DnD.clampNumber(current.hitDiceSpent, 0, DnD.LIMITS.maxLevel, 0);
+if (this.stateNodes) {
+  sheet.inspiration = Boolean(this.stateNodes.insp.checked);
+  sheet.exhaustion = DnD.clampNumber(
+    this.stateNodes.exh.value, 0, DnD.LIMITS.maxExhaustion, 0
+  );
+  sheet.concentration = String(this.stateNodes.conc.value || '')
+    .slice(0, DnD.LIMITS.maxConcentrationLength)
+    .trim();
+  sheet.coins = {};
+  for (const [key, input] of Object.entries(this.stateNodes.coins)) {
+    sheet.coins[key] = DnD.clampNumber(input.value, 0, DnD.LIMITS.maxCoins, 0);
+  }
+}
 
       for (const input of this.inputs) {
         const name = input.dataset.field;
@@ -1132,6 +1230,9 @@ sheet.hitDiceSpent = DnD.clampNumber(current.hitDiceSpent, 0, DnD.LIMITS.maxLeve
       sheet.deathSavesFailures = 0;
       sheet.spellSlotsUsed = DnD.SPELL_SLOT_LEVELS.map(() => 0);
       sheet.hitDiceSpent = Math.max(0, spent - restore);
+      // Долгий отдых снимает концентрацию и один уровень истощения.
+      sheet.concentration = '';
+      sheet.exhaustion = Math.max(0, (Number(sheet.exhaustion) || 0) - 1);
       this.setSheet(sheet);
       this.refresh();
       this.hitDieOut.hidden = true;
@@ -1312,6 +1413,17 @@ node.max.disabled = this.readOnly;
         const value = data[name];
         input.value = value === null || value === undefined ? '' : String(value);
       }
+      if (this.stateNodes) {
+        this.stateNodes.insp.checked = Boolean(data.inspiration);
+        this.stateNodes.exh.value = String(DnD.clampNumber(
+          data.exhaustion, 0, DnD.LIMITS.maxExhaustion, 0
+        ));
+        this.stateNodes.conc.value = data.concentration || '';
+        const coins = data.coins && typeof data.coins === 'object' ? data.coins : {};
+        for (const [key, input] of Object.entries(this.stateNodes.coins)) {
+          input.value = String(DnD.clampNumber(coins[key], 0, DnD.LIMITS.maxCoins, 0));
+        }
+      }
       for (const ability of DnD.ABILITY_KEYS) {
         this.saveNodes[ability].check.checked = Boolean(data.saveProficiencies && data.saveProficiencies[ability]);
       }
@@ -1362,6 +1474,13 @@ if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
     }
     if (this.deathRollButton) this.deathRollButton.disabled = this.readOnly;
     if (this.deathResetButton) this.deathResetButton.disabled = this.readOnly;
+    if (this.stateNodes) {
+      this.stateNodes.insp.disabled = this.readOnly;
+      this.stateNodes.exh.disabled = this.readOnly;
+      this.stateNodes.conc.readOnly = this.readOnly;
+      this.stateNodes.concRoll.disabled = this.readOnly;
+      for (const input of Object.values(this.stateNodes.coins)) input.disabled = this.readOnly;
+    }
     // Замороженный лист бросать нельзя: мастер смотрит чужой лист и не должен
     // в неё вносить боевые броски от лица игрока.
     this.updateRollAvailability();

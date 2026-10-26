@@ -317,6 +317,46 @@
   animation: fx-spin 7s linear infinite;
 }
 
+/* Очарован: сердечко над головой, чтобы состояние читалось с первого взгляда. */
+.token__fx--charmed::before {
+  content: '\2665';
+  position: absolute;
+  left: 50%;
+  top: -24%;
+  transform: translateX(-50%);
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+  text-shadow: 0 1px 2px var(--bg-deep);
+}
+
+/* Истощение: три убывающие полоски, как шкала усталости. */
+.token__fx--exhaustion::before {
+  content: '';
+  position: absolute;
+  right: 4%;
+  top: 8%;
+  width: 12px;
+  height: 10px;
+  background:
+    linear-gradient(var(--gold), var(--gold)) 0 0 / 100% 2px no-repeat,
+    linear-gradient(var(--gold), var(--gold)) 0 4px / 75% 2px no-repeat,
+    linear-gradient(var(--gold), var(--gold)) 0 8px / 50% 2px no-repeat;
+  opacity: 0.9;
+}
+
+/* Без сознания: сонные «z» над фишкой. */
+.token__fx--unconscious::before {
+  content: 'z z';
+  position: absolute;
+  right: 2%;
+  top: -26%;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-shadow: 0 1px 2px var(--bg-deep);
+}
+
 /* Испуган: фишка дрожит, а вокруг неё бледный холодок. */
 .token__fx--frightened::before {
   content: '';
@@ -1450,6 +1490,20 @@
   min-height: 72px;
 }
 
+.journal-editor__visible {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.journal-editor__visible input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .journal-editor__actions {
   display: flex;
   gap: 6px;
@@ -1486,6 +1540,37 @@
 .inventory-total {
   font-size: 11px;
   padding: 0 2px;
+}
+
+/* Монеты склада: пять узких полей в строку, как в листе. */
+.inventory-coins {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.inventory-coins__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.inventory-coins__label {
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.inventory-coins__input {
+  padding: 3px 4px;
+  font-size: 11px;
+  text-align: center;
+  min-width: 0;
 }
 
 .inventory-row {

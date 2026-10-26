@@ -979,6 +979,30 @@ const GRID = {
     return [...effects];
   }
 
+  /**
+   * Помеха от состояний на бросках, которые делает сам персонаж.
+   *
+   * Контекст боя приложению неизвестен: оно не знает, кто на кого нападает и
+   * видит ли испуганный источник страха. Поэтому здесь только те состояния,
+   * чей эффект не зависит от цели: отравление, слепота и опутанность.
+   * @param {unknown} list состояния фишки
+   * @param {'check'|'save'|'attack'} kind
+   * @param {string} [ability] характеристика спасброска
+   * @returns {boolean}
+   */
+  function conditionRollDisadvantage(list, kind, ability) {
+    if (!Array.isArray(list)) return false;
+    const active = new Set(list.map((id) => String(id || '')));
+    if (active.has('poisoned') && (kind === 'check' || kind === 'attack')) return true;
+    if (active.has('blinded') && kind === 'attack') return true;
+    if (active.has('restrained')
+      && (kind === 'attack' || (kind === 'save' && ability === 'dex'))) return true;
+    return false;
+  }
+
+  /** Дальности аур: круг вокруг фишки в футах. */
+  const AURA_PRESETS = [10, 15, 20, 30];
+
   const LIMITS = {
     maxNameLength: 40,
     maxChatLength: 1000,
@@ -1464,6 +1488,8 @@ abilityModifier,
       computeVitalState,
       conditionBlocksMove,
       conditionEffects,
+      conditionRollDisadvantage,
+      AURA_PRESETS,
       crValue,
       effectiveMaxHp,
       effectiveSpeed,

@@ -4660,7 +4660,9 @@
           token.assignedPlayerId || '',
           token.hidden ? 1 : 0,
           (token.conditions || []).join(','),
-          token.conditionDurations ? JSON.stringify(token.conditionDurations) : ''
+          token.conditionDurations ? JSON.stringify(token.conditionDurations) : '',
+          token.conditionDurationUnits ? JSON.stringify(token.conditionDurationUnits) : '',
+          token.aura ? `${token.aura.feet}:${token.aura.color}` : ''
         );
       }
       for (const player of this.players) parts.push(player.playerId, player.name || '');
@@ -4788,6 +4790,17 @@
         node.appendChild(hpNode);
       }
 
+      // Аура идёт под кружком и не мешает кликам: круг в футах, привязанный
+      // к фишке. Размер считаем в клетках, чтобы он совпадал с сеткой.
+      if (token.aura && Number(token.aura.feet) > 0) {
+        const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+        const aura = el('div', 'token__aura');
+        aura.style.setProperty('--aura-cells', String(Number(token.aura.feet) / feetPerCell));
+        aura.style.borderColor = token.aura.color || '#6aa9ff';
+        aura.style.background = `${token.aura.color || '#6aa9ff'}22`;
+        node.appendChild(aura);
+      }
+
       // Кружок лежит в своей обёртке: рисунки состояний должны сидеть ровно по его
       // краям, а фишка растёт вниз подписями и прочностью, и «низ фишки» от
       // кружка каждый раз был бы разным.
@@ -4845,16 +4858,18 @@
       const conditionText = (id) => {
         const item = DnD.CONDITIONS.find((entry) => entry.id === id);
         const label = (item && item.label) || id;
-        const rounds = Number(durations[id]) || 0;
-        return rounds > 0 ? `${label}, ${rounds} р.` : label;
+        const value = Number(durations[id]) || 0;
+        const unit = token.conditionDurationUnits && token.conditionDurationUnits[id] === 'hour' ? 'ч.' : 'р.';
+        return value > 0 ? `${label}, ${value} ${unit}` : label;
       };
       if (conditions.length && !token.hideLabels) {
         const badges = el('div', 'token__conditions');
         for (const id of conditions) {
           const item = DnD.CONDITIONS.find((entry) => entry.id === id);
           if (!item) continue;
-          const rounds = Number(durations[id]) || 0;
-          badges.appendChild(el('span', 'token__condition', rounds > 0 ? `${item.short} ${rounds}` : item.short));
+          const value = Number(durations[id]) || 0;
+          const unit = token.conditionDurationUnits && token.conditionDurationUnits[id] === 'hour' ? 'ч' : 'р';
+          badges.appendChild(el('span', 'token__condition', value > 0 ? `${item.short} ${value} ${unit}`.trim() : item.short));
         }
         badges.title = conditions.map(conditionText).join(', ');
         info.appendChild(badges);
@@ -5473,6 +5488,18 @@
       clear.addEventListener('click', () => this.setQuery(''));
       this.searchClear = clear;
       search.appendChild(clear);
+
+      // Очистка ленты: только мастер. Рядом с поиском, чтобы не занимать
+      // строку ввода, где идёт разговор.
+      const wipe = el('button', 'btn btn--ghost btn--tiny chat__clear', 'Очистить');
+      wipe.type = 'button';
+      wipe.title = 'Удалить все сообщения из ленты';
+      wipe.hidden = true;
+      wipe.addEventListener('click', () => {
+        if (this.handlers.onClear) this.handlers.onClear();
+      });
+      this.clearButton = wipe;
+      search.appendChild(wipe);
       this.root.appendChild(search);
 
       const log = el('div', 'chat__log');
@@ -5526,6 +5553,14 @@
       this.whisper = false;
       form.appendChild(whisper);
 
+      // Адресат шёпота мастера. У игрока адресат один — ведущий, поэтому
+      // список ему не показываем вовсе.
+      const to = el('select', 'select select--tiny chat__to');
+      to.title = 'Кому отправить шёпот';
+      to.hidden = true;
+      this.toSelect = to;
+      form.appendChild(to);
+
       const send = el('button', 'btn btn--accent', 'Отправить');
       send.type = 'submit';
       form.appendChild(send);
@@ -5533,9 +5568,14 @@
         event.preventDefault();
         const text = input.value.trim();
         if (!text) return;
-        if (this.handlers.onSend) this.handlers.onSend(text, this.whisper);
+        // У мастера адресат выбирается списком, у игрока шёпот включается
+        // кнопкой и всегда идёт ведущему.
+        const to = this.toSelect && !this.toSelect.hidden ? this.toSelect.value : '';
+        if (this.handlers.onSend) this.handlers.onSend(text, this.whisper, to || undefined);
         input.value = '';
         this.setWhisper(false);
+        // Шёпот одноразовый: следующая реплика снова идёт всему столу.
+        if (this.toSelect) this.toSelect.value = '';
       });
       this.root.appendChild(form);
 
@@ -5598,6 +5638,41 @@
     }
 
     /**
+     * Заполняет список адресатов шёпота.
+     *
+     * null означает «у этого стола адресатов нет»: игрок пишет только мастеру
+     * кнопкой, а в тренировке ведущего вовсе нет.
+     */
+    syncWhisperTargets() {
+      if (!this.toSelect) return;
+      const players = this.handlers.whisperTargets
+        ? this.handlers.whisperTargets()
+        : null;
+      if (!Array.isArray(players)) {
+        this.toSelect.hidden = true;
+        return;
+      }
+      const current = this.toSelect.value;
+      const all = el('option', null, 'Всем');
+      all.value = '';
+      const fragment = document.createDocumentFragment();
+      fragment.appendChild(all);
+      for (const player of players) {
+        const option = el('option', null, player.name || 'Игрок');
+        option.value = player.playerId;
+        fragment.appendChild(option);
+      }
+      this.toSelect.replaceChildren(fragment);
+      if (current && players.some((player) => player.playerId === current)) {
+        this.toSelect.value = current;
+      }
+      this.toSelect.hidden = false;
+      // У мастера адресат выбирается списком, отдельная кнопка «Шёпот» ему
+      // не нужна и только путала бы.
+      if (this.whisperButton) this.whisperButton.hidden = true;
+    }
+
+    /**
      * @param {object[]} history
      * @param {string} [query] Запрос поиска: снимок стола приходит вместе с
      *   историей, и иначе подсветка молча пропала бы после переподключения.
@@ -5608,8 +5683,12 @@
         this.whisperButton.hidden = !allowed;
         if (!allowed) this.setWhisper(false);
       }
+      this.syncWhisperTargets();
       if (this.attachButton) {
         this.attachButton.hidden = !(this.handlers.canAttach && this.handlers.canAttach());
+      }
+      if (this.clearButton) {
+        this.clearButton.hidden = !(this.handlers.canManage && this.handlers.canManage());
       }
       // Собираем ленту в фрагмент и вставляем один раз: appendChild в цикле
       // заставляет браузер пересчитывать раскладку на каждую строку. Заодно
@@ -5631,6 +5710,7 @@
      */
     append(message, scroll = true, parent = this.log) {
       const row = el('div', 'chat__msg');
+      if (message.id) row.dataset.messageId = message.id;
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
       if (message.isRoll) row.classList.add('chat__msg--roll');
       if (message.whisper) row.classList.add('chat__msg--whisper');
@@ -5655,8 +5735,26 @@
       head.appendChild(el('span', 'chat__author', message.from));
       if (message.role === 'dm') head.appendChild(el('span', 'badge badge--dm', 'ДМ'));
       if (message.isRoll) head.appendChild(el('span', 'badge badge--roll', 'бросок'));
-      if (message.whisper) head.appendChild(el('span', 'badge badge--whisper', 'мастеру'));
+      if (message.whisper) {
+        // Игрок шепчет мастеру, мастер — выбранному игроку: подпись говорит,
+        // кому именно адресована тайна.
+        head.appendChild(el('span', 'badge badge--whisper',
+          message.role === 'player' ? 'мастеру' : 'шёпот'));
+      }
       head.appendChild(el('span', 'chat__time', formatTime(message.time)));
+      // Удаление одного сообщения: только мастер. Крестик живёт в шапке
+      // строки, чтобы не отнимать место у текста.
+      if (this.handlers.canManage && this.handlers.canManage() && message.id) {
+        const remove = el('button', 'chat__delete', '×');
+        remove.type = 'button';
+        remove.title = 'Удалить сообщение';
+        remove.setAttribute('aria-label', 'Удалить сообщение');
+        remove.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (this.handlers.onDeleteMessage) this.handlers.onDeleteMessage(message.id);
+        });
+        head.appendChild(remove);
+      }
       row.appendChild(head);
       if (message.image) {
         const src = resolve(message.image);
@@ -5681,6 +5779,13 @@
       // поиска, и иначе находка молча переставала бы совпадать с лентой.
       if (this.query) this.setQuery(this.query);
       if (scroll) this.scrollToEnd();
+    }
+
+    /** Убирает строку после того, как сервер подтвердил удаление. */
+    removeMessage(id) {
+      if (!this.log || !id) return;
+      const row = this.log.querySelector(`[data-message-id="${CSS.escape(String(id))}"]`);
+      if (row) row.remove();
     }
 
     /** Показывает хендаут целиком, не уводя со стола. */
@@ -6951,6 +7056,33 @@
       });
       row.appendChild(lightSelect);
 
+      // Аура: круг вокруг фишки в футах. Едет вместе с ней, поэтому мастеру
+      // не нужно перетаскивать шаблон вслед за паладином.
+      const auraSelect = el('select', 'select select--tiny token-row__aura');
+      const auraOff = el('option', null, 'Без ауры');
+      auraOff.value = '0';
+      auraSelect.appendChild(auraOff);
+      for (const feet of DnD.AURA_PRESETS) {
+        const option = el('option', null, `Аура ${feet} фт`);
+        option.value = String(feet);
+        auraSelect.appendChild(option);
+      }
+      const auraFeet = token.aura ? Number(token.aura.feet) || 0 : 0;
+      auraSelect.value = String(auraFeet);
+      if (auraFeet > 0 && !auraSelect.querySelector(`option[value="${auraFeet}"]`)) {
+        const custom = el('option', null, `Аура ${auraFeet} фт`);
+        custom.value = String(auraFeet);
+        auraSelect.appendChild(custom);
+      }
+      auraSelect.title = 'Аура вокруг фишки: видна всем и двигается вместе с ней';
+      auraSelect.addEventListener('change', () => {
+        const feet = Number(auraSelect.value) || 0;
+        if (this.handlers.onSetTokenAura) {
+          this.handlers.onSetTokenAura(token.id, feet, (token.aura && token.aura.color) || '#6aa9ff');
+        }
+      });
+      row.appendChild(auraSelect);
+
       const eye = el('button',
         `btn btn--tiny ${token.hidden ? 'btn--ghost' : ''}`,
         token.hidden ? 'Скрыта' : 'Видна');
@@ -7069,10 +7201,16 @@
       // ответил и панель не перерисовалась, второй клик обязан видеть первый.
       const selected = new Set(active);
       const durations = {};
+      const units = {};
       if (token.conditionDurations && typeof token.conditionDurations === 'object') {
         for (const id of active) {
           const rounds = DnD.clampNumber(token.conditionDurations[id], 0, 99, 0);
-          if (rounds > 0) durations[id] = rounds;
+          if (rounds > 0) {
+            durations[id] = rounds;
+            units[id] = token.conditionDurationUnits && token.conditionDurationUnits[id] === 'hour'
+              ? 'hour'
+              : 'round';
+          }
         }
       }
       const box = el('div', 'token-conditions');
@@ -7088,7 +7226,8 @@
           .filter(Boolean)
           .map((item) => {
             const rounds = Number(durations[item.id]) || 0;
-            return rounds > 0 ? `${item.label} · ${rounds} р.` : item.label;
+            const unit = units[item.id] === 'hour' ? 'ч.' : 'р.';
+            return rounds > 0 ? `${item.label} · ${rounds} ${unit}` : item.label;
           })
           .join(', ');
         head.classList.toggle('is-empty', !names);
@@ -7102,7 +7241,7 @@
       const grid = el('div', 'token-conditions__grid');
       const send = () => {
         if (this.handlers.onSetTokenConditions) {
-          this.handlers.onSetTokenConditions(token.id, [...selected], { ...durations });
+          this.handlers.onSetTokenConditions(token.id, [...selected], { ...durations }, { ...units });
         }
       };
 
@@ -7126,13 +7265,32 @@
           input.addEventListener('change', () => {
             const value = DnD.clampNumber(input.value, 0, 99, 0);
             input.value = String(value);
-            if (value > 0) durations[item.id] = value;
-            else delete durations[item.id];
+            if (value > 0) {
+              durations[item.id] = value;
+              if (!units[item.id]) units[item.id] = 'round';
+            } else {
+              delete durations[item.id];
+              delete units[item.id];
+            }
             syncHead();
             send();
           });
           row.appendChild(input);
-          row.appendChild(el('span', 'token-conditions__rounds-unit', 'раунд.'));
+          const unitSelect = el('select', 'select select--tiny token-conditions__unit');
+          unitSelect.title = 'Раунды идут в бою, часы — вместе с часами стола';
+          const roundsOption = el('option', null, 'раунд.');
+          roundsOption.value = 'round';
+          const hoursOption = el('option', null, 'час.');
+          hoursOption.value = 'hour';
+          unitSelect.appendChild(roundsOption);
+          unitSelect.appendChild(hoursOption);
+          unitSelect.value = units[item.id] === 'hour' ? 'hour' : 'round';
+          unitSelect.addEventListener('change', () => {
+            units[item.id] = unitSelect.value === 'hour' ? 'hour' : 'round';
+            syncHead();
+            send();
+          });
+          row.appendChild(unitSelect);
           durationBox.appendChild(row);
         }
       };
@@ -7151,6 +7309,7 @@
           if (selected.has(item.id)) {
             selected.delete(item.id);
             delete durations[item.id];
+            delete units[item.id];
           } else {
             selected.add(item.id);
           }
@@ -7165,7 +7324,7 @@
       body.appendChild(grid);
       body.appendChild(durationBox);
       body.appendChild(el('div', 'token-conditions__note',
-        'Раунды уменьшаются в начале хода фишки. 0: до снятия вручную.'));
+        'Раунды уменьшаются в начале хода фишки, часы — при переводе времени. 0: до снятия вручную.'));
       box.appendChild(body);
       renderDurations();
       return box;

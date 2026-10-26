@@ -96,6 +96,20 @@ function isLoopbackAddress(address) {
   );
 }
 
+/** Сколько часов прошло между двумя отметками времени стола. */
+function hoursBetween(before, after) {
+  return (after.day - before.day) * 24 + (after.hour - before.hour);
+}
+
+/** Сдвигает время стола вперёд с переносом на следующие сутки. */
+function addHours(time, hours) {
+  const total = (time.day - 1) * 24 + time.hour + hours;
+  return {
+    day: Math.floor(total / 24) + 1,
+    hour: ((total % 24) + 24) % 24
+  };
+}
+
 /** @param {string} a @param {string} b */
 function safeEqual(a, b) {
   const bufA = Buffer.from(String(a || ''));
@@ -288,7 +302,9 @@ async function createTableServer(options) {
    * @param {object} [payload]
    */
   const emitToken = (event, token, payload) => {
-    const data = payload || token;
+    // Мастеру тоже отдаём производные поля: здоровье фишки игрока берётся из
+    // листа, и полоска на карте должна совпадать с листом без перезагрузки.
+    const data = payload || (token ? room.tokenForViewer(token, true) : token);
     // Скрытая фишка и фишка на непоказанной карте — заготовки мастера. Их
     // положение, картинка и назначение игрокам не уходят: иначе карту они не
     // увидят, а стоящего на ней монстра увидят.
@@ -329,6 +345,24 @@ async function createTableServer(options) {
   };
 
   /**
+   * Кладёт сообщение в историю чата и выдаёт ему id.
+   *
+   * id нужен, чтобы мастер мог удалить одно сообщение: у старых кампаний его
+   * не было, и поиск по тексту или времени удалил бы не ту строку.
+   * @param {object} message
+   * @returns {object}
+   */
+  const pushChat = (message) => {
+    message.id = `msg-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+    room.chatHistory.push(message);
+    if (room.chatHistory.length > LIMITS.maxChatHistory) {
+      room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
+    }
+    markDirty();
+    return message;
+  };
+
+  /**
    * Объявление об изменении прочности в чате.
    *
    * Монстрам прочность в чат не пишем: сервер намеренно прячет её от игроков,
@@ -361,11 +395,7 @@ async function createTableServer(options) {
       system: true,
       time: new Date().toISOString()
     };
-    room.chatHistory.push(notice);
-    if (room.chatHistory.length > LIMITS.maxChatHistory) {
-      room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
-    }
-    markDirty();
+    pushChat(notice);
     io.emit('chatMessage', notice);
   };
 
@@ -542,9 +572,13 @@ async function createTableServer(options) {
       const player = room.players.get(playerId);
       const sheet = normalizeSheet(payload && payload.sheet, player ? player.name : '');
       room.sheets.set(playerId, sheet);
+      // Фишка игрока показывает здоровье из листа: без этого полоска на карте
+      // осталась бы на старом числе до следующей правки фишки.
+      const tokens = room.syncSheetTokens(playerId);
       markDirty();
       io.to(playerId).emit('characterSheetData', { playerId, sheet });
       io.to('dm-sockets').emit('characterSheetUpdated', { playerId, sheet });
+      for (const token of tokens) emitToken('tokenUpdated', token);
       broadcastPlayers();
     });
 
@@ -597,6 +631,8 @@ async function createTableServer(options) {
       // увидит устаревшее состояние.
       io.to(playerId).emit('characterSheetData', { playerId, sheet });
       io.to('dm-sockets').emit('characterSheetUpdated', { playerId, sheet });
+      const tokens = room.syncSheetTokens(playerId);
+      for (const token of tokens) emitToken('tokenUpdated', token);
 
       const roll = {
         playerId,
@@ -633,10 +669,7 @@ async function createTableServer(options) {
         isRoll: true,
         time: roll.time
       };
-      room.chatHistory.push(announcement);
-      if (room.chatHistory.length > LIMITS.maxChatHistory) {
-        room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
-      }
+      pushChat(announcement);
       io.emit('chatMessage', announcement);
     });
 
@@ -761,6 +794,9 @@ async function createTableServer(options) {
         // Фишка из листа — всегда союзник: за столом это персонаж игрока.
         side: 'ally',
         avatarFromSheet: true,
+        // Здоровье фишки игрока — из листа: одно число на карте и в листе.
+        maxHp: sheet ? fogModel.effectiveMaxHp(sheet) : null,
+        hp: sheet ? sheet.hp : null,
         // Как и любая новая фишка, сначала скрыта: мастер выводит партию и
         // проверяет расстановку, потом открывает.
         hidden: true,
@@ -949,10 +985,55 @@ socket.on('setGrid', (payload) => {
      */
     socket.on('setGameTime', (payload) => {
       if (!requireDm(socket)) return;
+      const before = { ...room.gameTime };
       if (!room.setGameTime(payload)) return;
+      const elapsed = hoursBetween(before, room.gameTime);
+      // Часы двигаются вперёд — состояния «на час» истекают вместе с ними.
+      const changed = room.tickConditionsForHours(elapsed);
       markDirty();
       io.emit('gameTimeUpdated', room.gameTime);
+      for (const token of changed) emitToken('tokenUpdated', token);
       onLog(`Время в игре: день ${room.gameTime.day}, ${String(room.gameTime.hour).padStart(2, '0')}:00`);
+    });
+
+    /**
+     * Долгий отдых всей партии.
+     *
+     * Одна кнопка вместо восьми листов: мастер объявляет отдых, и все получают
+     * полное здоровье, ячейки и половину костей хитов. Часы при этом идут на
+     * восемь часов вперёд, поэтому состояния с длительностью в часах истекают.
+     */
+    socket.on('partyLongRest', () => {
+      if (!requireDm(socket)) return;
+      // Отдых не кладём в стек отмены: он меняет листы, а снимок отмены их не
+      // хранит. Кнопка спрашивает подтверждение, этого достаточно.
+      const rested = room.longRestParty();
+      const next = addHours(room.gameTime, 8);
+      const before = { ...room.gameTime };
+      room.gameTime = next;
+      const expired = room.tickConditionsForHours(hoursBetween(before, next));
+      markDirty();
+      for (const playerId of rested) {
+        const sheet = room.sheets.get(playerId);
+        if (!sheet) continue;
+        io.to(playerId).emit('characterSheetData', { playerId, sheet });
+        io.to('dm-sockets').emit('characterSheetUpdated', { playerId, sheet });
+        const tokens = room.syncSheetTokens(playerId);
+        for (const token of tokens) emitToken('tokenUpdated', token);
+      }
+      io.emit('gameTimeUpdated', room.gameTime);
+      for (const token of expired) emitToken('tokenUpdated', token);
+      const notice = {
+        from: socket.data.name,
+        playerId: socket.data.playerId,
+        role: socket.data.role,
+        text: 'Партия отдыхает 8 часов: здоровье, ячейки и кости хитов восстановлены',
+        system: true,
+        time: new Date().toISOString()
+      };
+      pushChat(notice);
+      io.emit('chatMessage', notice);
+      onLog('Долгий отдых всей партии');
     });
 
     socket.on('setActiveMap', (payload) => {
@@ -1384,7 +1465,22 @@ socket.on('setGrid', (payload) => {
       const token = findToken(payload && payload.tokenId);
       if (!token) return emitError(socket, 'Фишка не найдена');
       room.pushUndo();
-      room.setTokenConditions(token, payload && payload.conditions, payload && payload.conditionDurations);
+      room.setTokenConditions(
+        token,
+        payload && payload.conditions,
+        payload && payload.conditionDurations,
+        payload && payload.conditionDurationUnits
+      );
+      markDirty();
+      emitToken('tokenUpdated', token);
+    });
+
+    socket.on('setTokenAura', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      room.pushUndo();
+      room.setTokenAura(token, { feet: payload && payload.feet, color: payload && payload.color });
       markDirty();
       emitToken('tokenUpdated', token);
     });
@@ -1393,14 +1489,27 @@ socket.on('setGrid', (payload) => {
       if (!requireDm(socket)) return;
       const token = findToken(payload && payload.tokenId);
       if (!token) return emitError(socket, 'Фишка не найдена');
+      const sheet = token.assignedPlayerId ? room.sheets.get(token.assignedPlayerId) : null;
       if (token.maxHp === null || token.maxHp === undefined) {
-        return emitError(socket, `У фишки «${token.name}» нет прочности`);
+        if (!sheet) return emitError(socket, `У фишки «${token.name}» нет прочности`);
       }
-      const before = token.hp;
+      const before = sheet ? sheet.hp : token.hp;
       if (Number(payload && payload.hp) !== before) room.pushUndo();
       room.setTokenHp(token, payload && payload.hp);
       markDirty();
       emitToken('tokenUpdated', token);
+      if (sheet) {
+        // Урон по фишке игрока — это урон по листу: игрок должен увидеть то же
+        // число у себя, а не узнать о нём из чужой полоски.
+        io.to(token.assignedPlayerId).emit('characterSheetData', {
+          playerId: token.assignedPlayerId,
+          sheet
+        });
+        io.to('dm-sockets').emit('characterSheetUpdated', {
+          playerId: token.assignedPlayerId,
+          sheet
+        });
+      }
       if (token.hp !== before) {
         announceTokenHp(token, before, {
           playerId: socket.data.playerId,
@@ -1568,6 +1677,7 @@ socket.on('setGrid', (payload) => {
         // иначе остались бы в снимке и путали реакцию.
         token.armorClass = null;
         token.attackBonus = 0;
+        room.syncSheetTokens(playerId);
       }
       markDirty();
       emitToken('tokenUpdated', token);
@@ -2134,10 +2244,7 @@ socket.on('setGrid', (payload) => {
         system: true,
         time: new Date().toISOString()
       };
-      room.chatHistory.push(notice);
-      if (room.chatHistory.length > LIMITS.maxChatHistory) {
-        room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
-      }
+      pushChat(notice);
       io.emit('chatMessage', notice);
     });
 
@@ -2261,12 +2368,7 @@ socket.on('rollDice', (payload) => {
         hidden,
         time: roll.time
       };
-      room.chatHistory.push(announcement);
-      if (room.chatHistory.length > LIMITS.maxChatHistory) {
-        room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
-      }
-
-      markDirty();
+      pushChat(announcement);
       // Число тайного броска уходит только мастерам, игрокам достаётся тот же
       // бросок без результата: рассылать всем одно и то же нельзя.
       const forPlayers = dice.hideRollResult(roll);
@@ -2283,28 +2385,64 @@ socket.on('rollDice', (payload) => {
       if (!requireJoined(socket)) return;
       const text = sanitizeText(payload && payload.text, LIMITS.maxChatLength).trim();
       if (!text) return;
-      // Шёпот мастеру: игрок может сказать что-то только ведущему. Мастер
-      // шёпота не пишет, иначе пришлось бы выбирать адресата из игроков.
-      const whisper = socket.data.role === ROLE_PLAYER && Boolean(payload && payload.whisper);
+      // Шёпот: игрок пишет мастеру, мастер — выбранному игроку. Адресата
+      // проверяем по списку игроков, чтобы нельзя было отправить шёпот
+      // несуществующему или самому себе.
+      let to = null;
+      if (socket.data.role === ROLE_PLAYER && payload && payload.whisper) {
+        to = DM_PLAYER_ID;
+      } else if (socket.data.role === ROLE_DM && payload && payload.to) {
+        const target = room.players.get(String(payload.to));
+        if (target && target.role === ROLE_PLAYER) to = target.playerId;
+      }
+      const target = to ? room.players.get(to) : null;
       const message = {
         from: socket.data.name,
         playerId: socket.data.playerId,
         role: socket.data.role,
         text,
-        whisper: whisper || undefined,
+        whisper: to ? true : undefined,
+        to: to || undefined,
+        toName: target ? target.name : undefined,
         time: new Date().toISOString()
       };
-      room.chatHistory.push(message);
-      if (room.chatHistory.length > LIMITS.maxChatHistory) {
-        room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
-      }
-      markDirty();
-      if (whisper) {
+      pushChat(message);
+      if (to) {
+        // Шёпот мастеру видят все мастера и сам отправитель; шёпот игроку —
+        // только этот игрок и мастера. Автор-игрок не сидит в комнате мастеров,
+        // поэтому ему копия нужна отдельно.
         io.to('dm-sockets').emit('chatMessage', message);
-        io.to(socket.data.playerId).emit('chatMessage', message);
+        io.to(to).emit('chatMessage', message);
+        if (socket.data.role === ROLE_PLAYER) {
+          io.to(socket.data.playerId).emit('chatMessage', message);
+        }
       } else {
         io.emit('chatMessage', message);
       }
+    });
+
+    /**
+     * Удаление одного сообщения. Мастер чистит ленту от опечаток и от того,
+     * что случайно раскрыло тайну. Удаляем по id, а не по тексту: одинаковые
+     * реплики иначе убирали бы не ту строку.
+     */
+    socket.on('deleteChatMessage', (payload) => {
+      if (!requireDm(socket)) return;
+      const id = String((payload && payload.id) || '');
+      const index = room.chatHistory.findIndex((message) => message.id === id);
+      if (index < 0) return;
+      room.chatHistory.splice(index, 1);
+      markDirty();
+      io.emit('chatDeleted', { id });
+    });
+
+    /** Полная очистка ленты. Тоже только мастер. */
+    socket.on('clearChat', () => {
+      if (!requireDm(socket)) return;
+      if (!room.chatHistory.length) return;
+      room.chatHistory = [];
+      markDirty();
+      io.emit('chatCleared');
     });
 
     /**
@@ -2334,11 +2472,7 @@ socket.on('rollDice', (payload) => {
         image: `/files/${fileName}`,
         time: new Date().toISOString()
       };
-      room.chatHistory.push(message);
-      if (room.chatHistory.length > LIMITS.maxChatHistory) {
-        room.chatHistory = room.chatHistory.slice(-LIMITS.maxChatHistory);
-      }
-      markDirty();
+      pushChat(message);
       io.emit('chatMessage', message);
       onLog(`Мастер отправил изображение в чат`);
     });

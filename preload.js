@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('desktop', {
   currentCampaign: () => ipcRenderer.invoke('campaign:current'),
   saveCampaign: () => ipcRenderer.invoke('campaign:save'),
   backupCampaign: () => ipcRenderer.invoke('campaign:backup'),
+  exportCampaign: () => ipcRenderer.invoke('campaign:export'),
+  importCampaign: () => ipcRenderer.invoke('campaign:import'),
   backupInfo: () => ipcRenderer.invoke('campaign:backupInfo'),
   restoreBackup: (id, name) => ipcRenderer.invoke('campaign:restoreBackup', id, name),
   deleteCampaign: (id) => ipcRenderer.invoke('campaign:delete', id),

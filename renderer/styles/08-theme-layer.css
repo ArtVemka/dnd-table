@@ -1720,6 +1720,12 @@ body::after {
   color: var(--dim);
 }
 
+.token-conditions__unit {
+  width: 66px;
+  padding: 1px 4px;
+  font-size: 10.5px;
+}
+
 .token-conditions__note {
   max-width: 230px;
   font-size: 9.5px;

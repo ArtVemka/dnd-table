@@ -221,7 +221,7 @@
         row.appendChild(value);
         row.appendChild(el('span', 'prof-row__label', ability.label));
         const rollButton = this.rollButton('Спасбросок ' + ability.label, () => {
-          this.rollCheck('Спасбросок ' + ability.label, DnD.formatModifier(this.derived.saves[ability.key].total), 'save');
+          this.rollCheck('Спасбросок ' + ability.label, DnD.formatModifier(this.derived.saves[ability.key].total), 'save', ability.key);
         });
         row.appendChild(rollButton);
         this.saveNodes[ability.key] = { check, value, rollButton };
@@ -590,7 +590,7 @@
       const concRoll = this.rollButton('Проверка КОН при уроне', () => {
         const name = conc.value.trim();
         this.rollCheck(name ? `Концентрация: ${name}` : 'Концентрация',
-          DnD.formatModifier(this.derived.saves.con.total), 'save');
+          DnD.formatModifier(this.derived.saves.con.total), 'save', 'con');
       });
       concRoll.title = 'Спасбросок Телосложения: СЛ 10 или половина полученного урона';
       concActions.appendChild(concRoll);
@@ -1663,13 +1663,16 @@ if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
      * @param {string} label
      * @param {string} modifier
      * @param {'check'|'save'|'attack'} [kind]
+     * @param {string} [ability] характеристика спасброска
      */
-    rollCheck(label, modifier, kind = 'check') {
+    rollCheck(label, modifier, kind = 'check', ability) {
       if (!this.handlers.onRollCheck || this.readOnly) return;
       const effects = DnD.exhaustionEffects(this.sheet && this.sheet.exhaustion);
-      const forced = kind === 'attack'
+      const conditions = this.handlers.getConditions ? this.handlers.getConditions() : [];
+      const forced = (kind === 'attack'
         ? effects.attackDisadvantage
-        : (kind === 'save' ? effects.saveDisadvantage : effects.checkDisadvantage);
+        : (kind === 'save' ? effects.saveDisadvantage : effects.checkDisadvantage))
+        || DnD.conditionRollDisadvantage(conditions, kind, ability);
       let mode = this.rollMode;
       if (forced && mode === 'advantage') mode = 'normal';
       else if (forced) mode = 'disadvantage';

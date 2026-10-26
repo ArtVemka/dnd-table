@@ -36,6 +36,8 @@ const normalizeLights = fogModel.normalizeLights;
 const LIGHT_LIMITS = fogModel.LIGHT_LIMITS || { maxRadius: 200 };
 /** Максимум хитов с поправкой на истощение: правило читают лист, карта и сервер. */
 const effectiveMaxHp = fogModel.effectiveMaxHp;
+/** Пул костей хитов нужен долгому отдыху всей партии: правило одно с листом. */
+const hitDicePool = fogModel.hitDicePool;
 /** Цвет света по умолчанию: тёплый, как факел. */
 const DEFAULT_LIGHT_COLOR = '#ffb347';
 
@@ -211,6 +213,44 @@ function normalizeConditionDurations(raw, conditions) {
     if (rounds > 0) durations[id] = rounds;
   }
   return durations;
+}
+
+/**
+ * Единицы длительности состояний.
+ *
+ * Старые кампании хранят только число и не знают поля: там это раунды.
+ * Часы нужны, чтобы «до утра» и «на час» тикали вместе с часами стола.
+ * @param {unknown} raw
+ * @param {string[]} conditions
+ * @param {Record<string, number>} durations
+ * @returns {Record<string, 'round'|'hour'>}
+ */
+function normalizeConditionUnits(raw, conditions, durations) {
+  const units = {};
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  for (const id of conditions) {
+    if (!durations[id]) continue;
+    units[id] = source[id] === 'hour' ? 'hour' : 'round';
+  }
+  return units;
+}
+
+/**
+ * Аура вокруг фишки: круг в футах, который едет вместе с ней.
+ * null — ауры нет. Цвет проверяем, чтобы в стиль не попала произвольная строка.
+ * @param {unknown} raw
+ * @returns {{feet: number, color: string}|null}
+ */
+function normalizeAura(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const requested = Number(raw.feet);
+  if (!Number.isFinite(requested) || requested <= 0) return null;
+  const feet = clampInt(requested, 5, 120, 0);
+  if (!feet) return null;
+  const color = typeof raw.color === 'string' && /^#[0-9a-f]{6}$/i.test(raw.color)
+    ? raw.color
+    : '#6aa9ff';
+  return { feet, color };
 }
 
 /**
@@ -903,7 +943,12 @@ class RoomState {
       ? data.diceHistory.slice(-LIMITS.maxDiceHistory)
       : [];
     this.chatHistory = Array.isArray(data.chatHistory)
-      ? data.chatHistory.slice(-LIMITS.maxChatHistory)
+      ? data.chatHistory.slice(-LIMITS.maxChatHistory).map((message, index) => ({
+        ...message,
+        // У старых сообщений id не было, а мастеру нужно удалять и их.
+        // Индекс и время дают устойчивый ключ до первого сохранения.
+        id: message && message.id ? String(message.id) : `old-${index}-${(message && message.time) || ''}`
+      }))
       : [];
     this.journal = sanitizeText(data.journal, LIMITS.maxJournal);
     this.initiative = normalizeInitiative(data.initiative);
@@ -1126,8 +1171,10 @@ class RoomState {
       if (!tokenIds.has(token.id)) continue;
       const conditions = normalizeConditions(token.conditions);
       const durations = normalizeConditionDurations(token.conditionDurations, conditions);
+      const units = normalizeConditionUnits(token.conditionDurationUnits, conditions, durations);
       let touched = false;
       for (const [id, rounds] of Object.entries(durations)) {
+        if (units[id] === 'hour') continue;
         const next = rounds - 1;
         if (next <= 0) delete durations[id];
         else durations[id] = next;
@@ -1138,6 +1185,40 @@ class RoomState {
       // второе состояние вернуло бы первое обратно.
       token.conditions = conditions.filter((condition) => durations[condition] > 0);
       token.conditionDurations = durations;
+      token.conditionDurationUnits = normalizeConditionUnits(units, token.conditions, durations);
+      changed.push(token);
+    }
+    return changed;
+  }
+
+  /**
+   * Тикает состояния, которые измеряются часами.
+   *
+   * Часы стола двигает мастер, поэтому длительность в часах не связана с
+   * раундами боя: «на час» должно слететь после того, как время ушло вперёд.
+   * @param {number} hours сколько часов прошло
+   * @returns {object[]} изменённые фишки
+   */
+  tickConditionsForHours(hours) {
+    const elapsed = Math.floor(Number(hours) || 0);
+    if (elapsed <= 0) return [];
+    const changed = [];
+    for (const token of this.tokens) {
+      const conditions = normalizeConditions(token.conditions);
+      const durations = normalizeConditionDurations(token.conditionDurations, conditions);
+      const units = normalizeConditionUnits(token.conditionDurationUnits, conditions, durations);
+      let touched = false;
+      for (const [id, value] of Object.entries(durations)) {
+        if (units[id] !== 'hour') continue;
+        const next = value - elapsed;
+        if (next <= 0) delete durations[id];
+        else durations[id] = next;
+        touched = true;
+      }
+      if (!touched) continue;
+      token.conditions = conditions.filter((condition) => durations[condition] > 0);
+      token.conditionDurations = durations;
+      token.conditionDurationUnits = normalizeConditionUnits(units, token.conditions, durations);
       changed.push(token);
     }
     return changed;
@@ -1331,6 +1412,7 @@ fogMask: normalizeFog(source.fogMask),
    */
   normalizeToken(token) {
     const conditions = normalizeConditions(token.conditions);
+    const durations = normalizeConditionDurations(token.conditionDurations, conditions);
     const result = {
       id: String(token.id),
       name: sanitizeText(token.name, LIMITS.maxNameLength) || 'Фишка',
@@ -1392,9 +1474,12 @@ fogMask: normalizeFog(source.fogMask),
       hp: null,
       /** Состояния фишки. Видны всем: «сбит с ног» и «парализован» знают все. */
       conditions: conditions,
-      // Счётчик раундов для тех состояний, у которых он задан. Он виден всем:
+      // Счётчик для тех состояний, у которых он задан. Он виден всем:
       // игроки по нему понимают, когда опутывание спадёт.
-      conditionDurations: normalizeConditionDurations(token.conditionDurations, conditions)
+      conditionDurations: durations,
+      conditionDurationUnits: normalizeConditionUnits(token.conditionDurationUnits, conditions, durations),
+      // Аура едет вместе с фишкой: «Духовные стражи», аура паладина, свет костра.
+      aura: normalizeAura(token.aura)
     };
     if (Number.isFinite(Number(token.maxHp)) && Number(token.maxHp) > 0) {
       result.maxHp = clampInt(token.maxHp, 1, LIMITS.maxTokenHp, 1);
@@ -1415,9 +1500,21 @@ fogMask: normalizeFog(source.fogMask),
    * @param {unknown} list
    * @returns {object} Обновлённая фишка.
    */
-  setTokenConditions(token, list, durations) {
+  setTokenConditions(token, list, durations, units) {
     token.conditions = normalizeConditions(list);
     token.conditionDurations = normalizeConditionDurations(durations, token.conditions);
+    token.conditionDurationUnits = normalizeConditionUnits(units, token.conditions, token.conditionDurations);
+    return token;
+  }
+
+  /**
+   * Аура фишки: круг в футах, который рисуется под ней и едет вместе с ней.
+   * @param {object} token
+   * @param {unknown} raw
+   * @returns {object}
+   */
+  setTokenAura(token, raw) {
+    token.aura = normalizeAura(raw);
     return token;
   }
 
@@ -1437,20 +1534,80 @@ fogMask: normalizeFog(source.fogMask),
   /**
    * Меняет прочность фишки.
    *
-   * Ноль означает павшего: такую фишку видно, но водить её незачем. Прочность
-   * ведёт мастер, а игрок правит своё здоровье в листе персонажа: две правки
-   * одного и того же числа разошлись бы, и в бою никто не понял бы, где
-   * правда.
+   * У фишки игрока здоровье одно — в листе персонажа. Две правки одного числа
+   * разошлись бы, и в бою никто не понял бы, где правда, поэтому урон по такой
+   * фишке пишется в лист, а фишка только показывает его.
    * @param {object} token
    * @param {number} value Новое здоровье.
    * @returns {object} Обновлённая фишка.
    */
   setTokenHp(token, value) {
+    const sheet = token.assignedPlayerId ? this.sheets.get(token.assignedPlayerId) : null;
+    if (sheet) {
+      const max = effectiveMaxHp(sheet);
+      const wasDown = sheet.hp <= 0;
+      token.maxHp = max;
+      token.hp = clampInt(value, 0, max, 0);
+      sheet.hp = token.hp;
+      // Лечение с нуля поднимает героя: старые отметки смерти больше не нужны.
+      if (wasDown && sheet.hp > 0) {
+        sheet.deathSavesSuccesses = 0;
+        sheet.deathSavesFailures = 0;
+      }
+      return token;
+    }
     if (token.maxHp === null || token.maxHp === undefined) return token;
     const next = Math.round(Number(value));
     if (!Number.isFinite(next)) return token;
     token.hp = clampInt(next, 0, token.maxHp, 0);
     return token;
+  }
+
+  /**
+   * Подтягивает прочность фишки игрока к его листу.
+   *
+   * Единственный источник здоровья персонажа — лист. Фишка хранит копию для
+   * старых кампаний и для полоски на карте, но при любом изменении листа её
+   * нужно обновить, иначе после перезагрузки осталась бы старая цифра.
+   * @param {string} playerId
+   * @returns {object|null}
+   */
+  syncSheetTokens(playerId) {
+    const tokens = this.tokens.filter((item) => item.assignedPlayerId === String(playerId || ''));
+    const sheet = tokens.length ? this.sheets.get(tokens[0].assignedPlayerId) : null;
+    if (!sheet) return [];
+    for (const token of tokens) {
+      token.maxHp = effectiveMaxHp(sheet);
+      token.hp = clampInt(sheet.hp, 0, token.maxHp, 0);
+    }
+    return tokens;
+  }
+
+  /**
+   * Долгий отдых всей партии: здоровье, ячейки, кости хитов и истощение.
+   *
+   * Правила те же, что в листе: полное здоровье, половина потраченных костей
+   * хитов (минимум одна), снятая концентрация и минус один уровень истощения.
+   * @returns {string[]} кому обновили лист
+   */
+  longRestParty() {
+    const rested = [];
+    for (const [playerId, sheet] of this.sheets.entries()) {
+      const pool = hitDicePool(sheet);
+      const total = pool.reduce((sum, item) => sum + item.count, 0);
+      const spent = clampInt(sheet.hitDiceSpent, 0, total, 0);
+      const restore = Math.min(spent, Math.max(1, Math.floor(total / 2)));
+      sheet.hp = effectiveMaxHp(sheet);
+      sheet.tempHp = 0;
+      sheet.deathSavesSuccesses = 0;
+      sheet.deathSavesFailures = 0;
+      sheet.spellSlotsUsed = SPELL_SLOT_LEVELS.map(() => 0);
+      sheet.hitDiceSpent = Math.max(0, spent - restore);
+      sheet.concentration = '';
+      sheet.exhaustion = Math.max(0, (Number(sheet.exhaustion) || 0) - 1);
+      rested.push(playerId);
+    }
+    return rested;
   }
 
   /** @returns {object} сериализуемое состояние для сохранения в кампанию */
@@ -1550,13 +1707,22 @@ fogMask: normalizeFog(source.fogMask),
    * @returns {object}
    */
   tokenForViewer(token, isDm) {
-    if (isDm || !token) return token;
+    if (!token) return token;
+    // Здоровье персонажа живёт в листе, а не в фишке: полоска на карте должна
+    // показывать то же число, что игрок видит у себя, и мастеру тоже.
+    let result = token;
+    if (token.assignedPlayerId && this.sheets.has(token.assignedPlayerId)) {
+      const sheet = this.sheets.get(token.assignedPlayerId);
+      const maxHp = effectiveMaxHp(sheet);
+      result = { ...token, maxHp, hp: clampInt(sheet.hp, 0, maxHp, 0) };
+    }
+    if (isDm) return result;
     const patch = {};
     // Прочность и КД прячем у врагов: не только у монстров без владельца, но
     // и у фишки, которой мастер вручную поставил сторону «враг» и назначил
     // игрока. Своя фишка игрока остаётся с прочностью.
     const enemy = token.side === 'enemy' || (!token.side && !token.assignedPlayerId);
-    if (token.maxHp && enemy) {
+    if (result.maxHp && enemy) {
       patch.maxHp = null;
       patch.hp = null;
       patch.armorClass = null;
@@ -1568,7 +1734,7 @@ fogMask: normalizeFog(source.fogMask),
       patch.name = '';
       patch.nameHidden = true;
     }
-    return Object.keys(patch).length ? { ...token, ...patch } : token;
+    return Object.keys(patch).length ? { ...result, ...patch } : result;
   }
 
    /**
@@ -1740,13 +1906,10 @@ fogMask: normalizeFog(source.fogMask),
       // Скрытые фишки — заготовки мастера, и игрокам их видеть нельзя.
       // Фильтруем здесь, а не в интерфейсе: иначе фишка утекает в снимок
       // состояния, который игрок получает целиком.
-      tokens: isDm
+      tokens: (isDm
         ? this.tokens
-        : this.tokens
-          // Заготовка карты и фишки на ней игроку не достаются: иначе сама
-          // карта была бы скрыта, а монстр на ней выдал бы будущую сцену.
-          .filter((token) => this.isTokenVisibleToPlayers(token))
-          .map((token) => this.tokenForViewer(token, isDm)),
+        : this.tokens.filter((token) => this.isTokenVisibleToPlayers(token)))
+        .map((token) => this.tokenForViewer(token, isDm)),
       // Порядок боя общий: мастер его объявляет, и игроки видят, кто ходит.
       initiative: this.initiative,
       // Режим боя тоже общий: иначе один участник ходил бы по клеткам, а
@@ -1757,10 +1920,11 @@ fogMask: normalizeFog(source.fogMask),
       // иначе «слепой» бросок утечёт в состояние, которое игрок получает целиком.
       diceHistory: this.diceHistory.slice(-LIMITS.maxDiceHistory)
         .map((roll) => (isDm ? roll : diceModule.hideRollResult(roll))),
-      // Шёпот игрока мастеру отдаём только мастеру и самому игроку: остальным
-      // его не видно ни в ленте, ни после переподключения.
+      // Шёпот отдаём только мастеру, отправителю и адресату: остальным его
+      // не видно ни в ленте, ни после переподключения.
       chatHistory: this.chatHistory.slice(-LIMITS.maxChatHistory)
-        .filter((message) => isDm || !message.whisper || message.playerId === viewer.playerId),
+        .filter((message) => isDm || !message.whisper
+          || message.playerId === viewer.playerId || message.to === viewer.playerId),
       // Журнал кампании — заготовки мастера. Игроку уходят только записи,
       // которые мастер явно показал: иначе тайна утечёт в снимок целиком.
       journal: isDm ? this.journal : '',

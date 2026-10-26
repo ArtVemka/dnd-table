@@ -31,6 +31,20 @@
   touch-action: none;
 }
 
+/* Аура вокруг фишки: круг в футах, привязанный к её центру. */
+.token__aura {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--cell, 46px) * var(--aura-cells, 1));
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border: 2px solid;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+}
+
 /* Прочность на самой фишке: полоса над кружком и число вида «7/12». */
 .token__hp {
   position: absolute;
@@ -44,6 +58,7 @@
   background: var(--hp-plate);
   border-radius: 6px;
   white-space: nowrap;
+  z-index: 2;
 }
 
 /* Подписи под фишкой: имя, состояния и владелец. Лежат вне разметки фишки,
@@ -57,6 +72,7 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
+  z-index: 2;
 }
 
 .token__hp-track {
@@ -187,6 +203,7 @@
   width: calc(var(--cell, 46px) * var(--token-size, 1));
   height: calc(var(--cell, 46px) * var(--token-size, 1));
   display: flex;
+  z-index: 1;
 }
 
 /* Рисунок лежит поверх кружка и ничего не принимает на себя: клик по фишке
@@ -943,6 +960,24 @@
 
 .chat__whisper {
   white-space: nowrap;
+}
+
+.chat__to {
+  max-width: 110px;
+}
+
+.chat__delete {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat__delete:hover {
+  color: var(--danger, #d9534f);
 }
 
 .badge--roll {

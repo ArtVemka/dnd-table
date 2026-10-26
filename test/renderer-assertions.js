@@ -1723,6 +1723,32 @@
       assert(dmHost.querySelector('.chat__whisper').hidden, 'у мастера осталась кнопка шёпота');
     });
 
+    check('мастер выбирает адресата шёпота и удаляет сообщение', () => {
+      const host = document.createElement('div');
+      let sent = null;
+      let deleted = null;
+      const chat = new window.TableUI.ChatPanel(host, {
+        canWhisper: () => true,
+        whisperTargets: () => [{ playerId: 'p2', name: 'Игрок' }],
+        canManage: () => true,
+        onSend: (text, whisper, to) => { sent = { text, whisper, to }; },
+        onDeleteMessage: (id) => { deleted = id; }
+      });
+      chat.renderAll([{ id: 'm1', from: 'Мастер', role: 'dm', text: 'Тайна' }]);
+      const to = host.querySelector('.chat__to');
+      assert(to && !to.hidden, 'у мастера нет выбора адресата');
+      to.value = 'p2';
+      const input = host.querySelector('.chat__form input');
+      input.value = 'Только тебе';
+      host.querySelector('.chat__form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      assert.deepStrictEqual(sent, { text: 'Только тебе', whisper: false, to: 'p2' },
+        'шёпот мастера ушёл не тому');
+      const remove = host.querySelector('.chat__delete');
+      assert(remove, 'у мастера нет кнопки удаления сообщения');
+      remove.click();
+      assert.strictEqual(deleted, 'm1');
+    });
+
     check('наведение показывает клетку назначения и расстояние', () => {
       withRealMapSize(() => {
         mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
@@ -3459,14 +3485,16 @@
     /* ------------------------------------------------------- состояния */
 
     const conditionChanges = [];
+    const auraChanges = [];
     const condTokens = TOKENS.concat([
       { id: 't6', name: 'Огр', mapType: 'world', x: 0.5, y: 0.5, imageUrl: null, assignedPlayerId: null, color: '#8fb04a', conditions: ['prone', 'poisoned'] },
       { id: 't7', name: 'Монета', mapType: 'world', x: 0.3, y: 0.3, imageUrl: null, assignedPlayerId: null, color: '#c9a34a', conditions: [] }
     ]);
     const condPanel = new window.TableUI.TokenPanel(document.createElement('div'), {
-      onSetTokenConditions: (tokenId, conditions, conditionDurations) => (
-        conditionChanges.push({ tokenId, conditions, conditionDurations })
-      )
+      onSetTokenConditions: (tokenId, conditions, conditionDurations, conditionDurationUnits) => (
+        conditionChanges.push({ tokenId, conditions, conditionDurations, conditionDurationUnits })
+      ),
+      onSetTokenAura: (tokenId, feet, color) => auraChanges.push({ tokenId, feet, color })
     });
     sandbox.appendChild(condPanel.root);
     condPanel.render(condTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
@@ -3520,6 +3548,25 @@
       const sent = conditionChanges[conditionChanges.length - 1];
       assert.strictEqual(sent.conditionDurations.prone, 2,
         `длительность не ушла: ${JSON.stringify(sent.conditionDurations)}`);
+      const unit = proneRow.querySelector('.token-conditions__unit');
+      assert(unit, 'у длительности нет выбора единицы');
+      unit.value = 'hour';
+      unit.dispatchEvent(new Event('change', { bubbles: true }));
+      const timed = conditionChanges[conditionChanges.length - 1];
+      assert.strictEqual(timed.conditionDurationUnits.prone, 'hour',
+        `единица не ушла: ${JSON.stringify(timed.conditionDurationUnits)}`);
+    });
+
+    check('аура фишки задаётся из списка и уходит мастеру', () => {
+      const rows = [...condPanel.root.querySelectorAll('.token-row')];
+      const ogre = rows.find((row) => row.textContent.includes('Огр'));
+      const aura = ogre.querySelector('.token-row__aura');
+      assert(aura, 'у фишки нет выбора ауры');
+      aura.value = '20';
+      aura.dispatchEvent(new Event('change', { bubbles: true }));
+      assert.deepStrictEqual(auraChanges.at(-1),
+        { tokenId: 't6', feet: 20, color: '#6aa9ff' },
+        'аура не ушла на сервер');
     });
 
     check('подсказки состояний видны на карте всем, включая игрока', () => {

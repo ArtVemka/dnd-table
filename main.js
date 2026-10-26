@@ -696,6 +696,47 @@ function registerIpc() {
     }
   });
 
+  /**
+   * Экспорт кампании в выбранную папку.
+   *
+   * Копируется вся папка кампании: campaign.json и files с картами. Папку можно
+   * заархивировать или перенести на другой компьютер, а импорт вернёт её в
+   * список кампаний. Архив не делаем сами: zip потребовал бы зависимость ради
+   * одной кнопки, а папка открывается везде.
+   */
+  ipcMain.handle('campaign:export', async () => {
+    if (!currentCampaign) return { ok: false, error: 'Сначала откройте кампанию' };
+    try {
+      await persistCampaign();
+      const picked = await dialog.showOpenDialog({
+        title: 'Куда сохранить кампанию',
+        buttonLabel: 'Экспортировать',
+        properties: ['openDirectory', 'createDirectory']
+      });
+      if (picked.canceled || !picked.filePaths[0]) return { ok: false, canceled: true };
+      const dir = await store.exportTo(currentCampaign.id, currentCampaign.name, picked.filePaths[0]);
+      return { ok: true, dir };
+    } catch (error) {
+      return { ok: false, error: `Не удалось экспортировать кампанию: ${error.message}` };
+    }
+  });
+
+  /** Импорт папки кампании, созданной кнопкой экспорта или копией вручную. */
+  ipcMain.handle('campaign:import', async () => {
+    try {
+      const picked = await dialog.showOpenDialog({
+        title: 'Выберите папку кампании',
+        buttonLabel: 'Импортировать',
+        properties: ['openDirectory']
+      });
+      if (picked.canceled || !picked.filePaths[0]) return { ok: false, canceled: true };
+      const campaign = await store.importFrom(picked.filePaths[0]);
+      return { ok: true, campaign };
+    } catch (error) {
+      return { ok: false, error: `Не удалось импортировать кампанию: ${error.message}` };
+    }
+  });
+
   /** Сколько копий уже лежит и когда сделана последняя: строка в настройках. */
   ipcMain.handle('campaign:backupInfo', async () => {
     if (!currentCampaign) return { ok: false, error: 'Сначала откройте кампанию' };

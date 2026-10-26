@@ -574,6 +574,18 @@ let chosenSheetId = null;
     return emit('chatImage', { image: read.dataUrl, text: text || '' });
   }
 
+  /** Очистка ленты: спрашиваем подтверждение, история не восстанавливается. */
+  async function confirmClearChat() {
+    if (app.role !== 'dm' || app.training) return;
+    const answer = await modal({
+      title: 'Очистить чат?',
+      message: 'Все сообщения и броски исчезнут из ленты у всех участников. Картинки из чата удалятся вместе с ними при следующем сохранении.',
+      confirmLabel: 'Очистить',
+      danger: true
+    });
+    if (answer) emit('clearChat', {});
+  }
+
   /** Каждая вкладка карт хранит свой список картинок: {items, activeId}. */
   function normalizeMapSlots(source) {
     const slots = {};
@@ -966,6 +978,8 @@ let chosenSheetId = null;
       playersList.render(app.room.players, viewer());
       playersList.renderSelfAvatar({ avatarUrl: ownAvatarOf('dm'), name: dmName() });
       tokenPanel.render(app.room.tokens, app.room.players, viewer());
+      // Новый игрок должен сразу появиться в списке адресатов шёпота.
+      if (chatPanel) chatPanel.syncWhisperTargets();
       // Список выбора в панели боя собран из игроков и фишек: новый участник
       // должен появиться в нём сразу.
       renderInitiativePanel();
@@ -1188,6 +1202,17 @@ let chosenSheetId = null;
         app.room.chatHistory.splice(0, app.room.chatHistory.length - HISTORY_LIMITS.chat);
       }
       chatPanel.append(message);
+    });
+
+    socket.on('chatDeleted', ({ id }) => {
+      const index = app.room.chatHistory.findIndex((message) => message.id === id);
+      if (index >= 0) app.room.chatHistory.splice(index, 1);
+      if (chatPanel) chatPanel.removeMessage(id);
+    });
+
+    socket.on('chatCleared', () => {
+      app.room.chatHistory = [];
+      if (chatPanel) chatPanel.renderAll([], app.chatQuery);
     });
 
     socket.on('errorMessage', ({ message }) => {
@@ -1503,12 +1528,19 @@ let chosenSheetId = null;
     }
     if (!chatPanel) {
       chatPanel = new ChatPanel($('#tab-chat'), {
-        onSend: (text, whisper) => emit('chatMessage', { text, whisper }),
-        // Шёпот есть только у игрока за настоящим столом: у мастера нет
-        // адресата, а в тренировке нет ведущего.
-        canWhisper: () => app.role === 'player' && !app.training,
+        onSend: (text, whisper, to) => emit('chatMessage', { text, whisper, to }),
+        // Шёпот есть и у игрока, и у мастера: игрок пишет ведущему, мастер
+        // выбирает игрока. В тренировке ведущего нет.
+        canWhisper: () => !app.training,
+        // Список адресатов нужен только мастеру.
+        whisperTargets: () => (app.role === 'dm'
+          ? (app.room.players || []).filter((player) => player.role === 'player')
+          : null),
         // Хендауты показывает мастер: у игрока нет ни кнопки, ни права.
         canAttach: () => app.role === 'dm' && !app.training,
+        canManage: () => app.role === 'dm' && !app.training,
+        onDeleteMessage: (id) => emit('deleteChatMessage', { id }),
+        onClear: () => confirmClearChat(),
         onImage: uploadChatImage,
         // Запрос поиска живёт в контроллере, а не в панели: снимок стола
         // приходит по переподключению, и подсветка должна восстановиться.
@@ -1539,6 +1571,7 @@ let chosenSheetId = null;
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
         // Свет фишки: факел в руке. Дальность в футах, как в правилах.
         onSetTokenLight: (tokenId, radius, color) => emit('setTokenLight', { tokenId, radius, color }),
+        onSetTokenAura: (tokenId, feet, color) => emit('setTokenAura', { tokenId, feet, color }),
         // Переименование, назначение игроку и вывод фишки из листа работают и
         // здесь, а не только на карте: правый клик по строке списка ведёт себя
         // так же, как правый клик по фишке. Без этих трёх обработчиков кнопки
@@ -1556,10 +1589,11 @@ let chosenSheetId = null;
         // Меню фишки показывает боевые числа игрока из его листа, а не из токена.
         onSheetStats: sheetCombatStats,
         // Состояния ведёт мастер, но видны они всем.
-        onSetTokenConditions: (tokenId, conditions, conditionDurations) => emit('setTokenConditions', {
+        onSetTokenConditions: (tokenId, conditions, conditionDurations, conditionDurationUnits) => emit('setTokenConditions', {
           tokenId,
           conditions,
-          conditionDurations
+          conditionDurations,
+          conditionDurationUnits
         }),
         // Скрытость решает только мастер, но сервер всё равно проверяет.
         // Обработчики нужны и здесь, и в карте: правый клик по фишке и кнопки
@@ -1589,6 +1623,13 @@ let chosenSheetId = null;
         onRollCheck: (formula, label) => {
           emit('rollDice', { formula });
           toast(`${label}: ${formula}`);
+        },
+        // Состояния своей фишки дают помеху проверкам, атакам и спасброскам.
+        // Источник — токен на карте, а не лист: состояния ставит мастер фишке.
+        getConditions: () => {
+          if (!app.room || !app.playerId) return [];
+          const token = app.room.tokens.find((item) => item.assignedPlayerId === app.playerId);
+          return token && Array.isArray(token.conditions) ? token.conditions : [];
         },
         // Спасбросок смерти считает сервер: клиент не решает, успех это или нет.
         onDeathSave: () => emit('rollDeathSave', {}),
@@ -3461,6 +3502,28 @@ let chosenSheetId = null;
     app.socket.emit('setGameTime', next);
   }
 
+  /**
+   * Долгий отдых всей партии.
+   *
+   * В настоящем столе листы лежат на сервере, и он сам лечит всех: у игроков
+   * нет прав на чужие листы. В тренировке лист один и живёт в этом окне.
+   */
+  async function partyLongRest() {
+    if (app.role !== 'dm') return;
+    const answer = await modal({
+      title: 'Долгий отдых партии?',
+      message: 'Все персонажи восстановят здоровье, ячейки заклинаний и половину костей хитов. Время сдвинется на 8 часов.',
+      confirmLabel: 'Отдыхать'
+    });
+    if (!answer) return;
+    if (app.training) {
+      if (sheetView) sheetView.takeLongRest();
+      sendGameTime(shiftGameTime(gameTime(), 8));
+      return;
+    }
+    emit('partyLongRest', {});
+  }
+
   function updateTableHeader() {
     const campaign = app.campaign || {};
     $('#table-campaign').textContent = campaign.name || 'Кампания';
@@ -4784,6 +4847,21 @@ let chosenSheetId = null;
         refreshBackups();
       });
       campaignPanel.appendChild(backupButton);
+      if (desktop && typeof desktop.exportCampaign === 'function') {
+        const exportButton = el('button', 'btn btn--tiny', 'Экспортировать кампанию в папку');
+        exportButton.type = 'button';
+        exportButton.title = 'Копия кампании для другого компьютера: campaign.json и все картинки';
+        exportButton.addEventListener('click', async () => {
+          const result = await desktop.exportCampaign();
+          if (!result || result.canceled) return;
+          if (!result.ok) {
+            toast((result && result.error) || 'Не удалось экспортировать кампанию', 'error');
+            return;
+          }
+          toast(`Кампания сохранена: ${result.dir}`, 'ok');
+        });
+        campaignPanel.appendChild(exportButton);
+      }
       if (typeof desktop.openBackups === 'function') {
         const openBackups = el('button', 'btn btn--tiny', 'Открыть папку копий');
         openBackups.type = 'button';
@@ -4870,17 +4948,22 @@ let chosenSheetId = null;
       plusHour.addEventListener('click', () => apply(shiftGameTime(read(), 1)));
       const plusRest = el('button', 'btn btn--tiny', '+8 часов');
       plusRest.type = 'button';
-      plusRest.title = 'Долгий отдых';
+      plusRest.title = 'Сдвинуть время на 8 часов';
       plusRest.addEventListener('click', () => apply(shiftGameTime(read(), 8)));
+      const restParty = el('button', 'btn btn--tiny', 'Долгий отдых партии');
+      restParty.type = 'button';
+      restParty.title = 'Вылечить всю партию и сдвинуть время на 8 часов';
+      restParty.addEventListener('click', () => partyLongRest());
       const saveTime = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
       saveTime.type = 'button';
       saveTime.addEventListener('click', () => apply(read()));
       timeActions.appendChild(plusHour);
       timeActions.appendChild(plusRest);
+      timeActions.appendChild(restParty);
       timeActions.appendChild(saveTime);
       timeBox.appendChild(timeActions);
       timeBox.appendChild(el('div', 'box__note',
-        'Видят все участники. Само время не идёт: бой считается раундами, а отдых отмечается в листе.'));
+        'Видят все участники. Само время не идёт: его двигает мастер, а долгий отдых лечит партию и переводит часы на 8 часов вперёд.'));
       campaignPanel.appendChild(timeBox);
 
       const journalBox = el('div', 'box');
@@ -6187,6 +6270,24 @@ const gridRow = el('div', 'settings__row');
 
     $('#btn-start-loaded').addEventListener('click', startTable);
 
+    const importButton = $('#btn-import-campaign');
+    if (importButton) {
+      if (!desktop || typeof desktop.importCampaign !== 'function') {
+        importButton.hidden = true;
+      } else {
+        importButton.addEventListener('click', async () => {
+          const result = await desktop.importCampaign();
+          if (!result || result.canceled) return;
+          if (!result.ok) {
+            setStatus('#load-status', result.error || 'Не удалось импортировать кампанию', 'error');
+            return;
+          }
+          toast(`Кампания «${result.campaign.name}» импортирована`, 'ok');
+          await refreshCampaignList();
+        });
+      }
+    }
+
     $('#join-name').addEventListener('keydown', (event) => {
       if (event.key === 'Enter') doJoinP2p();
     });
@@ -6203,8 +6304,7 @@ const gridRow = el('div', 'settings__row');
     $('#btn-search').addEventListener('click', openSearch);
     $('#btn-undo').addEventListener('click', undoDmAction);
     $('#btn-game-rest').addEventListener('click', () => {
-      sendGameTime(shiftGameTime(gameTime(), 8));
-      toast('Прошло 8 часов', 'ok');
+      partyLongRest();
     });
     $('#btn-inventory-add').addEventListener('click', () => {
       inventoryEditingId = 'new';

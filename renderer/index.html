@@ -122,6 +122,9 @@
         <button class="btn btn--ghost dialog__back" data-back type="button">← Назад</button>
         <h2 class="dialog__title">Сохранённые кампании</h2>
         <div id="campaign-list" class="campaign-list"></div>
+        <div class="inline-row load-actions">
+          <button id="btn-import-campaign" class="btn btn--ghost" type="button">Импортировать папку кампании</button>
+        </div>
         <div id="load-selected" class="load-selected" hidden>
           <div class="load-selected__info">
             <div class="load-selected__name" id="load-selected-name"></div>
@@ -212,7 +215,7 @@
         <div class="topbar__right">
           <span id="game-time" class="badge badge--muted" title="Время в игре">День 1, 08:00</span>
           <button id="btn-game-rest" class="btn btn--ghost btn--tiny" type="button"
-                  title="Долгий отдых: +8 часов" hidden>+8 ч</button>
+                  title="Долгий отдых всей партии: лечение и +8 часов" hidden>Отдых</button>
           <span id="conn-badge" class="badge badge--muted">—</span>
           <span id="role-badge" class="badge">—</span>
           <div class="topbar__tools" role="group" aria-label="Инструменты стола">

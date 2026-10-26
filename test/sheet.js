@@ -159,6 +159,18 @@ check('состояния покрывают PHB, а не только стар�
     'лимит состояний на фишке разошёлся со списком');
 });
 
+check('состояния дают помеху там, где её видно без контекста боя', () => {
+  assert.strictEqual(DnD.conditionRollDisadvantage([], 'check'), false);
+  assert.strictEqual(DnD.conditionRollDisadvantage(['poisoned'], 'check'), true);
+  assert.strictEqual(DnD.conditionRollDisadvantage(['poisoned'], 'attack'), true);
+  assert.strictEqual(DnD.conditionRollDisadvantage(['poisoned'], 'save'), false);
+  assert.strictEqual(DnD.conditionRollDisadvantage(['blinded'], 'attack'), true);
+  assert.strictEqual(DnD.conditionRollDisadvantage(['blinded'], 'check'), false);
+  assert.strictEqual(DnD.conditionRollDisadvantage(['restrained'], 'attack'), true);
+  assert.strictEqual(DnD.conditionRollDisadvantage(['restrained'], 'save', 'dex'), true);
+  assert.strictEqual(DnD.conditionRollDisadvantage(['restrained'], 'save', 'str'), false);
+});
+
 check('лист хранит вдохновение, истощение, концентрацию и монеты', () => {
   const sheet = DnD.createEmptySheet();
   assert.strictEqual(sheet.inspiration, false);

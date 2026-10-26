@@ -66,7 +66,7 @@ const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
   'tokensUpdated', 'mapPing', 'reactionPrompt',
-  'diceRollResult', 'chatMessage', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
+  'diceRollResult', 'chatMessage', 'chatDeleted', 'chatCleared', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
   'journalUpdated', 'inventoryUpdated', 'inventoryCoinsUpdated', 'rollRequestUpdated', 'stateReload',
   'gameTimeUpdated'
 ];
@@ -897,6 +897,49 @@ async function main() {
   emit(dm, 'setGameTime', { day: 1, hour: 8 });
   await waitFor(() => room.gameTime.hour === 8 && room.gameTime.day === 1, 'возврат часов');
 
+  /* ------------------------------------------------ долгий отдых партии */
+
+  console.log('\nДолгий отдых партии');
+  const restBefore = { ...room.gameTime };
+  const restSheet = room.sheets.get('p-test-0001');
+  restSheet.hp = 1;
+  restSheet.tempHp = 4;
+  restSheet.spellSlotsUsed = restSheet.spellSlotsUsed.map((value, index) => (index === 0 ? 1 : value));
+  restSheet.exhaustion = 2;
+  restSheet.hitDiceSpent = 1;
+  const restSheet2 = room.sheets.get('p-test-0002');
+  restSheet2.hp = 2;
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'partyLongRest', {});
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пробовал устроить отдых');
+  check('долгий отдых партии запускает только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.deepStrictEqual(room.gameTime, restBefore, 'часы сдвинулись от игрока');
+  });
+
+  p2.log.characterSheetData.length = 0;
+  emit(dm, 'partyLongRest', {});
+  await waitFor(
+    () => room.gameTime.day === restBefore.day && room.gameTime.hour === (restBefore.hour + 8) % 24,
+    'часы после отдыха'
+  );
+  await waitFor(() => p2.log.characterSheetData.length > 0, 'лист игрока после отдыха');
+  check('долгий отдых лечит всю партию и сдвигает часы на восемь', () => {
+    const healed = room.sheets.get('p-test-0001');
+    assert.strictEqual(healed.hp, require('../renderer/dnd5e.js').effectiveMaxHp(healed));
+    assert.strictEqual(healed.tempHp, 0);
+    assert.strictEqual(healed.exhaustion, 1);
+    assert.strictEqual(healed.spellSlotsUsed[0], 0);
+    assert.strictEqual(healed.hitDiceSpent, 0);
+    const other = room.sheets.get('p-test-0002');
+    assert.strictEqual(other.hp, require('../renderer/dnd5e.js').effectiveMaxHp(other));
+    assert.strictEqual(p2.log.characterSheetData.at(-1).sheet.hp, other.hp);
+  });
+
+  emit(dm, 'setGameTime', { day: 1, hour: 8 });
+  await waitFor(() => room.gameTime.hour === 8 && room.gameTime.day === 1, 'возврат часов после отдыха');
+
   /* --------------------------------------------------------- истощение */
 
   console.log('\nИстощение');
@@ -1623,12 +1666,34 @@ async function main() {
     'объявление об уроне фишке игрока'
   );
   check('изменение прочности фишки игрока объясняется в чате', () => {
-    assert.match(hpNotice.text, /4\/11/, `в объявлении нет прочности: ${hpNotice.text}`);
-    assert.match(hpNotice.text, /урон 7/, `в объявлении нет разницы: ${hpNotice.text}`);
+    const sheet = room.sheets.get('p-test-0001');
+    assert.match(hpNotice.text, new RegExp(`4/${sheet.maxHp}`), `в объявлении нет прочности: ${hpNotice.text}`);
+    assert.match(hpNotice.text, new RegExp(`урон ${sheet.maxHp - 4}`), `в объявлении нет разницы: ${hpNotice.text}`);
     assert(
       dm.log.chatMessage.some((message) => message.text === hpNotice.text),
       'мастер не увидел объявление об уроне'
     );
+  });
+  check('урон по фишке игрока пишется в его лист, а не в отдельное число', () => {
+    const sheet = room.sheets.get('p-test-0001');
+    assert.strictEqual(sheet.hp, 4);
+    const seen = room.tokenForViewer(room.tokens.find((item) => item.id === heroToken.id), false);
+    assert.strictEqual(seen.hp, 4);
+    assert.strictEqual(seen.maxHp, require('../renderer/dnd5e.js').effectiveMaxHp(sheet));
+  });
+
+  const restoredSheet = { ...room.sheets.get('p-test-0001') };
+  restoredSheet.hp = require('../renderer/dnd5e.js').effectiveMaxHp(restoredSheet);
+  p2.log.tokenUpdated.length = 0;
+  emit(p1, 'saveCharacterSheet', { sheet: restoredSheet });
+  await waitFor(
+    () => p2.log.tokenUpdated.find((item) => item.id === heroToken.id && item.hp === restoredSheet.hp),
+    'лечение в листе обновило фишку'
+  );
+  check('лечение в листе сразу видно на фишке', () => {
+    const seen = p2.log.tokenUpdated.find((item) => item.id === heroToken.id && item.hp === restoredSheet.hp);
+    assert(seen, 'фишка осталась со старым здоровьем');
+    assert.strictEqual(room.sheets.get('p-test-0001').hp, restoredSheet.hp);
   });
 
   emit(dm, 'deleteToken', { tokenId: heroToken.id });
@@ -1855,7 +1920,7 @@ async function main() {
     const token = {
       ...room.tokens.find((entry) => entry.id === nameless.id),
       side: 'enemy',
-      assignedPlayerId: P2,
+      assignedPlayerId: 'p-no-sheet-0001',
       maxHp: 30,
       hp: 12
     };
@@ -3066,6 +3131,91 @@ async function main() {
   emit(p2, 'setTokenLabelsHidden', { tokenId: bound.id, hidden: false });
   await waitFor(() => p2.log.errorMessage.some((item) => /только ДМ/.test(item.message)), 'игрок не решает подписи');
 
+  // Длительность в часах: часы стола двигает мастер, и «на час» должно
+  // истечь вместе с ними, не дожидаясь раундов боя. Фишка отдельная: «Огр»
+  // к этому месту уже убран.
+  emit(dm, 'createToken', { name: 'Часовой', mapType: 'world' });
+  const clockToken = await waitFor(
+    () => dm.log.tokenCreated.find((item) => item.name === 'Часовой'),
+    'фишка для часов'
+  );
+  emit(dm, 'setTokenHidden', { tokenId: clockToken.id, hidden: false });
+  await waitFor(() => p2.log.tokenCreated.find((item) => item.id === clockToken.id), 'часовая фишка видна игроку');
+  emit(dm, 'setTokenConditions', {
+    tokenId: clockToken.id,
+    conditions: ['poisoned', 'prone'],
+    conditionDurations: { poisoned: 2, prone: 3 },
+    conditionDurationUnits: { poisoned: 'hour', prone: 'round' }
+  });
+  await waitFor(
+    () => {
+      const item = room.tokens.find((entry) => entry.id === clockToken.id);
+      return item && item.conditionDurationUnits && item.conditionDurationUnits.poisoned === 'hour';
+    },
+    'состояние на час'
+  );
+  const hourStart = { ...room.gameTime };
+  emit(dm, 'setGameTime', { day: hourStart.day, hour: hourStart.hour + 1 });
+  await waitFor(
+    () => {
+      const item = room.tokens.find((entry) => entry.id === clockToken.id);
+      return item && item.conditionDurations && item.conditionDurations.poisoned === 1;
+    },
+    'час прошёл'
+  );
+  check('часы стола уменьшают длительность в часах, а раунды не трогают', () => {
+    const stored = room.tokens.find((item) => item.id === clockToken.id);
+    assert.strictEqual(stored.conditionDurations.poisoned, 1);
+    assert.strictEqual(stored.conditionDurations.prone, 3, 'раунды сдвинулись от часов');
+  });
+  const secondHour = { ...room.gameTime };
+  emit(dm, 'setGameTime', { day: secondHour.day, hour: secondHour.hour + 2 });
+  await waitFor(
+    () => !room.tokens.find((item) => item.id === clockToken.id).conditions.includes('poisoned'),
+    'часовое состояние истекло'
+  );
+  check('состояние на час снимается, когда время ушло вперёд', () => {
+    const stored = room.tokens.find((item) => item.id === clockToken.id);
+    assert.ok(!stored.conditions.includes('poisoned'));
+    assert.ok(stored.conditions.includes('prone'), 'раундовое состояние снялось вместе с часовым');
+    assert.ok(!stored.conditionDurationUnits.poisoned);
+  });
+
+  // Аура: круг в футах, который едет вместе с фишкой.
+  p2.log.errorMessage.length = 0;
+  emit(p2, 'setTokenAura', { tokenId: clockToken.id, feet: 20, color: '#ff0000' });
+  await waitFor(() => p2.log.errorMessage.length > 0, 'игрок пробовал задать ауру');
+  check('ауру фишки задаёт только мастер', () => {
+    assert.ok(p2.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.ok(!room.tokens.find((item) => item.id === clockToken.id).aura);
+  });
+  dm.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenAura', { tokenId: clockToken.id, feet: 20, color: '#ff0000' });
+  await waitFor(
+    () => dm.log.tokenUpdated.find((item) => item.id === clockToken.id && item.aura && item.aura.feet === 20),
+    'аура задана'
+  );
+  check('аура видна всем и переживает сохранение', () => {
+    const forPlayer = room.snapshotFor({ playerId: P2, role: 'player' }).tokens
+      .find((item) => item.id === clockToken.id);
+    assert.strictEqual(forPlayer.aura.feet, 20);
+    assert.strictEqual(forPlayer.aura.color, '#ff0000');
+    const saved = new RoomState({ state: room.serialize() }).tokens
+      .find((item) => item.id === clockToken.id);
+    assert.strictEqual(saved.aura.feet, 20);
+  });
+  emit(dm, 'setTokenAura', { tokenId: clockToken.id, feet: 0 });
+  await waitFor(
+    () => !room.tokens.find((item) => item.id === clockToken.id).aura,
+    'аура снята'
+  );
+  check('нулевая аура снимается совсем, а не остаётся кругом', () => {
+    assert.ok(!room.tokens.find((item) => item.id === clockToken.id).aura);
+  });
+
+  emit(dm, 'deleteToken', { tokenId: clockToken.id });
+  await waitFor(() => !room.tokens.some((item) => item.id === clockToken.id), 'уборка часовой фишки');
+
   emit(dm, 'deleteToken', { tokenId: bound.id });
   await waitFor(() => !room.tokens.some((item) => item.id === bound.id), 'уборка фишки состояний');
 
@@ -3299,6 +3449,78 @@ async function main() {
     assert.ok(mine.chatHistory.some((message) => message.whisper));
     assert.ok(!other.chatHistory.some((message) => message.whisper));
   });
+
+  // Шёпот мастера игроку: раньше мастер не мог выбрать адресата.
+  p1.log.chatMessage.length = 0;
+  p2.log.chatMessage.length = 0;
+  dm.log.chatMessage.length = 0;
+  emit(dm, 'chatMessage', { text: 'Только для тебя', to: P2 });
+  const dmWhisper = await waitFor(() => p2.log.chatMessage[0], 'шёпот мастера игроку');
+  await wait(100);
+  check('мастер шепчет выбранному игроку, а не всему столу', () => {
+    assert.strictEqual(dmWhisper.text, 'Только для тебя');
+    assert.strictEqual(dmWhisper.whisper, true);
+    assert.strictEqual(dmWhisper.to, P2);
+    assert.strictEqual(p1.log.chatMessage.length, 0, 'шёпот ушёл чужому игроку');
+    assert.ok(dm.log.chatMessage.some((message) => message.text === 'Только для тебя'), 'автор не увидел свой шёпот');
+  });
+  check('шёпот мастера видит адресат после переподключения, а не сосед', () => {
+    const mine = room.snapshotFor({ playerId: P2, role: ROLE_PLAYER });
+    const other = room.snapshotFor({ playerId: P1, role: ROLE_PLAYER });
+    assert.ok(mine.chatHistory.some((message) => message.text === 'Только для тебя'));
+    assert.ok(!other.chatHistory.some((message) => message.text === 'Только для тебя'));
+  });
+
+  // Удаление сообщения: мастер чистит ленту, игрок — нет.
+  p1.log.chatMessage.length = 0;
+  emit(dm, 'chatMessage', { text: 'Случайно раскрытая тайна' });
+  const secretMessage = await waitFor(
+    () => p1.log.chatMessage.find((message) => message.text === 'Случайно раскрытая тайна'),
+    'сообщение для удаления'
+  );
+  assert.ok(secretMessage.id, 'у нового сообщения нет id');
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'deleteChatMessage', { id: secretMessage.id });
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пробовал удалить сообщение');
+  check('сообщение чата удаляет только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.ok(room.chatHistory.some((message) => message.id === secretMessage.id));
+  });
+
+  p1.log.chatDeleted.length = 0;
+  emit(dm, 'deleteChatMessage', { id: secretMessage.id });
+  await waitFor(() => p1.log.chatDeleted.some((item) => item.id === secretMessage.id), 'удаление сообщения');
+  check('мастер удаляет одно сообщение, и оно исчезает у всех', () => {
+    assert.ok(!room.chatHistory.some((message) => message.id === secretMessage.id));
+    assert.ok(!room.snapshotFor({ playerId: P1, role: ROLE_PLAYER }).chatHistory
+      .some((message) => message.id === secretMessage.id));
+  });
+
+  p1.log.chatCleared.length = 0;
+  emit(p1, 'clearChat', {});
+  await wait(100);
+  check('очистить чат может только мастер', () => {
+    assert.ok(room.chatHistory.length > 0, 'игрок очистил историю');
+    assert.strictEqual(p1.log.chatCleared.length, 0);
+  });
+
+  emit(dm, 'clearChat', {});
+  await waitFor(() => p1.log.chatCleared.length === 1, 'очистка чата');
+  check('мастер очищает ленту у всех', () => {
+    assert.strictEqual(room.chatHistory.length, 0);
+    assert.strictEqual(room.snapshotFor({ playerId: P1, role: ROLE_PLAYER }).chatHistory.length, 0);
+  });
+  // Оставляем в ленте все три вида сообщений: ниже проверяется, что история
+  // переживает перезапуск, и пустая лента делала бы эту проверку бессмысленной.
+  emit(dm, 'chatMessage', { text: 'Привет, стол!' });
+  emit(dm, 'rollDice', { formula: 'd20' });
+  emit(dm, 'chatImage', { image: PNG_1PX, text: 'Хендаут после очистки' });
+  await waitFor(
+    () => room.chatHistory.some((message) => message.isRoll)
+      && room.chatHistory.some((message) => message.text === 'Привет, стол!')
+      && room.chatHistory.some((message) => message.image),
+    'сообщения после очистки'
+  );
 
   p1.log.errorMessage.length = 0;
   p2.log.chatMessage.length = 0;
@@ -3751,6 +3973,22 @@ async function main() {
     assert.strictEqual(rotated.length, 5, `копий после ротации: ${rotated.length}`);
     assert.ok(fs.existsSync(backupDir), 'копия с другим именем исчезла при ротации');
   });
+
+  const exportRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-export-'));
+  const exportedDir = await store.exportTo(campaign.id, campaign.name, exportRoot);
+  const imported = await store.importFrom(exportedDir);
+  check('экспорт в папку и импорт переносят кампанию с картинками', () => {
+    assert.ok(fs.existsSync(path.join(exportedDir, 'campaign.json')), 'в экспорте нет campaign.json');
+    assert.ok(fs.existsSync(path.join(exportedDir, 'files')), 'в экспорте нет папки files');
+    assert.notStrictEqual(imported.id, campaign.id, 'импорт занял чужой идентификатор');
+    assert.strictEqual(imported.name, campaign.name);
+    const saved = JSON.parse(fs.readFileSync(
+      path.join(root, 'campaigns', imported.id, 'campaign.json'), 'utf8'
+    ));
+    assert.strictEqual(saved.id, imported.id, 'id в файле не совпал с папкой');
+  });
+  fs.rmSync(exportRoot, { recursive: true, force: true });
+  await store.remove(imported.id);
 
   const list = await store.list();
   check('кампания видна в списке сохранённых с метаданными', () => {

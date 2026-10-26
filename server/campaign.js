@@ -239,6 +239,51 @@ class CampaignStore {
   }
 
   /**
+   * Копирует кампанию в выбранную папку для переноса на другой компьютер.
+   *
+   * Копируется вся папка, а не только campaign.json: карты и портреты лежат
+   * рядом, и без files экспорт открылся бы пустым.
+   * @param {string} campaignId
+   * @param {string} label название кампании
+   * @param {string} targetDir куда положить папку
+   * @returns {Promise<string>} путь к копии
+   */
+  async exportTo(campaignId, label, targetDir) {
+    const source = this.dirFor(campaignId);
+    const base = this.backupLabel(campaignId, label);
+    let target = path.join(targetDir, base);
+    if (fs.existsSync(target)) target = path.join(targetDir, `${base}-${Date.now()}`);
+    await fsp.cp(source, target, { recursive: true, errorOnExist: true, force: false });
+    return target;
+  }
+
+  /**
+   * Импортирует папку кампании под новым идентификатором.
+   *
+   * Идентификатор в campaign.json подменяется: папка кампании называется её
+   * id, и копия с чужим id спорила бы с оригиналом за одну папку files.
+   * @param {string} sourceDir
+   * @returns {Promise<{id: string, name: string, createdAt: string, updatedAt: string}>}
+   */
+  async importFrom(sourceDir) {
+    const raw = await fsp.readFile(path.join(sourceDir, 'campaign.json'), 'utf8');
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') throw new Error('в папке нет campaign.json');
+    const id = crypto.randomUUID();
+    const dest = this.dirFor(id);
+    await fsp.cp(sourceDir, dest, { recursive: true, errorOnExist: true, force: false });
+    data.id = id;
+    data.updatedAt = new Date().toISOString();
+    await fsp.writeFile(path.join(dest, 'campaign.json'), JSON.stringify(data, null, 2), 'utf8');
+    return {
+      id,
+      name: sanitizeText(data.name, 60) || 'Импортированная кампания',
+      createdAt: data.createdAt || null,
+      updatedAt: data.updatedAt
+    };
+  }
+
+  /**
    * Имя копии: название кампании без запрещённых в имени папки символов.
    * @param {string} campaignId
    * @param {string} [label]

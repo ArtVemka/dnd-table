@@ -165,6 +165,76 @@ check('текст тем проходит WCAG AA', () => {
   if (failures.length) throw new Error(failures.join('; '));
 });
 
+check('текст листа читается на пергаменте', () => {
+  // Лист живёт на градиенте, а не на одной заливке. Проверяем самый тёмный
+  // участок бумаги: если текст читается там, он читается и на светлой части.
+  const css = fs.readFileSync(path.join(dir, '08-theme-layer.css'), 'utf8');
+  const match = css.match(/\.sheet\s*\{([^}]*--gold[^}]*)\}/);
+  if (!match) throw new Error('нет палитры .sheet');
+  const sheet = match[1];
+  const get = (text, name) => {
+    const found = text.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-f]{6})`, 'i'));
+    return found ? found[1] : '';
+  };
+  const lum = (hex) => {
+    const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((value) => (value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)));
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const ratio = (a, b) => {
+    const x = lum(a);
+    const y = lum(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+  const backgrounds = [];
+  for (const value of sheet.match(/background(?:-color|-image)?\s*:[^;]+;/g) || []) {
+    backgrounds.push(...(value.match(/#[0-9a-f]{6}\b/gi) || []));
+  }
+  if (!backgrounds.length) throw new Error('у .sheet нет цветов фона');
+  const paper = backgrounds.sort((a, b) => lum(a) - lum(b))[0];
+  const button = css.match(/\.sheet \.btn\s*\{([^}]*)\}/);
+  const buttonInk = button ? get(button[1], 'color') : '';
+  const inks = [
+    ['--text', get(sheet, '--text')],
+    ['--text-dim', get(sheet, '--text-dim')],
+    ['--muted', get(sheet, '--muted')],
+    ['--gold', get(sheet, '--gold')],
+    ['--ok', get(sheet, '--ok')],
+    ['--danger', get(sheet, '--danger')],
+    ['--info', get(sheet, '--info')],
+    ['.sheet .btn', buttonInk]
+  ];
+  // Не только токены: часть подписей листа задана отдельными правилами и
+  // раньше оставалась светлее бумаги, хотя токены уже проходили проверку.
+  const rule = (selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = new RegExp(`${escaped}\\s*[,{]`).exec(css);
+    if (!match) return '';
+    const open = css.indexOf('{', match.index);
+    const close = css.indexOf('}', open);
+    return open < 0 || close < 0 ? '' : css.slice(open + 1, close);
+  };
+  for (const selector of [
+    '.sheet .box__title',
+    '.sheet .box__note',
+    '.sheet .abil__name',
+    '.sheet .prof-row__ability',
+    '.sheet .field__label',
+    '.sheet .prof-row__label',
+    '.sheet .prof-row__value',
+    '.sheet .prof-row__value.is-proficient',
+    '.sheet .prof-row__value.is-expertise',
+    '.sheet .death-saves__value'
+  ]) {
+    const ink = get(rule(selector), 'color');
+    if (ink) inks.push([selector, ink]);
+  }
+  const failures = inks
+    .filter(([, ink]) => ink && ratio(ink, paper) < 4.5)
+    .map(([name, ink]) => `${name} на ${paper} = ${ratio(ink, paper).toFixed(2)}`);
+  if (failures.length) throw new Error(failures.join('; '));
+});
+
 check('предлагаемые акценты контрастны', () => {
   // theme.js — обычный браузерный модуль, поэтому на время проверки даём ему
   // минимальные window/document/localStorage. Иначе пришлось бы дублировать

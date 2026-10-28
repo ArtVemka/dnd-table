@@ -395,6 +395,37 @@
     }
     menu.appendChild(acBox);
 
+    // Защиты от урона: строки через запятую. Список типов общий с окном урона,
+    // сервер отбросит всё неизвестное и сохранит только русские названия.
+    const defenseBox = el('div', 'token-menu__section');
+    defenseBox.appendChild(el('div', 'token-menu__title', 'Защиты (через запятую)'));
+    const defenseInputs = {};
+    for (const [key, label] of [
+      ['resistances', 'Сопротивления'],
+      ['vulnerabilities', 'Уязвимости'],
+      ['immunities', 'Иммунитеты']
+    ]) {
+      const input = el('input', 'input');
+      input.type = 'text';
+      input.placeholder = label;
+      input.title = `${label}: например, огонь, холод`;
+      input.value = (token[`damage${key[0].toUpperCase()}${key.slice(1)}`] || []).join(', ');
+      input.addEventListener('change', () => {
+        if (!handlers.onSetTokenDefenses) return;
+        const collect = (field) => defenseInputs[field]
+          ? defenseInputs[field].value.split(',').map((item) => item.trim()).filter(Boolean)
+          : [];
+        handlers.onSetTokenDefenses(token.id, {
+          resistances: collect('resistances'),
+          vulnerabilities: collect('vulnerabilities'),
+          immunities: collect('immunities')
+        });
+      });
+      defenseInputs[key] = input;
+      defenseBox.appendChild(input);
+    }
+    menu.appendChild(defenseBox);
+
     // Перенос на показанную карту: заготовку можно ставить на любую вкладку,
     // а в момент сцены перевести на ту, которую уже видят игроки.
     if (options.canTransfer && options.activeMapId) {
@@ -1533,6 +1564,14 @@
       this.glowCanvas.hidden = true;
       surface.appendChild(this.glowCanvas);
       this.glowContext = this.glowCanvas.getContext('2d');
+      // Маска зрения: темнота вне радиуса своей фишки. Лежит над светом и
+      // фишками, но под туманом, поэтому открытые туманом участки за спиной
+      // всё равно остаются в тени, пока туда не дойдёт фишка.
+      this.sightCanvas = document.createElement('canvas');
+      this.sightCanvas.className = 'map-sight';
+      this.sightCanvas.hidden = true;
+      surface.appendChild(this.sightCanvas);
+      this.sightContext = this.sightCanvas.getContext('2d');
       // Прямоугольники стен и точки источников рисуются на том же холсте,
       // но мастеру и только мастеру: игроку незачем знать, где стена.
       // Именно стены: сам источник на карте не виден никому, свет виден
@@ -1925,9 +1964,7 @@
         if (template) {
           event.preventDefault();
           event.stopPropagation();
-          if (this.handlers.onDeleteMapTemplate) {
-            this.handlers.onDeleteMapTemplate(this.viewedMap, this.currentMapId, template.id);
-          }
+          this.showTemplateMenu(template, event.clientX, event.clientY);
         }
       });
       // Режим боя: короткое нажатие по клетке отправляет выбранную фишку туда.
@@ -2218,6 +2255,24 @@
       followLabel.appendChild(follow);
       followLabel.appendChild(el('span', null, 'за игроками'));
       box.appendChild(followLabel);
+
+      // Зрение по фишке: игрок видит только сектор вокруг своей фишки, стены
+      // режут обзор. Выключено по умолчанию, чтобы старые карты не потемнели.
+      const visionLabel = el('label', 'fog-bar__follow');
+      const vision = el('input');
+      vision.type = 'checkbox';
+      vision.checked = Boolean(map.visionPerPlayer);
+      vision.title = 'Показывать игроку только то, что видит его фишка';
+      vision.addEventListener('change', () => {
+        map.visionPerPlayer = vision.checked;
+        if (this.handlers.onSetMapVision) {
+          this.handlers.onSetMapVision(type, map.id, vision.checked);
+        }
+      });
+      vision.addEventListener('click', (event) => event.stopPropagation());
+      visionLabel.appendChild(vision);
+      visionLabel.appendChild(el('span', null, 'зрение по фишке'));
+      box.appendChild(visionLabel);
 
       const openAll = mapTool('Открыть всё', 'Убрать туман с карты целиком', [
         'M1.8 8s2.3-3.8 6.2-3.8S14.2 8 14.2 8s-2.3 3.8-6.2 3.8S1.8 8 1.8 8z',
@@ -2708,6 +2763,65 @@
      * ------------------------------------------------------------------ */
 
     /**
+     * Темнота вне зрения своей фишки.
+     *
+     * Считается по тем же стенам и многоугольникам, что и свет, поэтому обзор
+     * честно упирается в стену. Маска включается только когда у карты стоит
+     * «зрение по фишке» и у фишки игрока задан радиус: иначе старые игры
+     * внезапно потемнели бы целиком.
+     * @param {object|null} map
+     */
+    paintSight(map) {
+      const canvas = this.sightCanvas;
+      if (!canvas) return;
+      const enabled = this.role === 'player' && map && map.visionPerPlayer === true;
+      const sources = enabled
+        ? (this.tokens || []).filter((token) => (
+          token.assignedPlayerId === this.myPlayerId
+            && token.mapType === this.viewedMap
+            && (!token.mapId || !this.currentMapId || token.mapId === this.currentMapId)
+            && !token.hidden
+            && Number(token.vision) > 0
+        ))
+        : [];
+      if (!enabled || !sources.length) {
+        canvas.hidden = true;
+        return;
+      }
+      const width = Math.max(1, Math.round(this.surface.clientWidth));
+      const height = Math.max(1, Math.round(this.surface.clientHeight));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      const ctx = this.sightContext;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = 'rgba(5, 8, 13, 0.97)';
+      ctx.fillRect(0, 0, width, height);
+
+      const grid = this.lightMapGrid(map, width, height);
+      const cells = wallsInCells(normalizeWalls(map.walls), grid);
+      ctx.globalCompositeOperation = 'destination-out';
+      for (const source of sources) {
+        const polygon = lightPolygon({ x: source.x, y: source.y, radius: source.vision }, cells, grid);
+        ctx.beginPath();
+        for (let i = 0; i < polygon.points.length; i += 1) {
+          const [x, y] = polygon.points[i];
+          const px = (x / grid.columns) * width;
+          const py = (y / grid.rows) * height;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      canvas.hidden = false;
+    }
+
+    /**
      * Рисует темноту и пятна света.
      *
      * Свет состоит из двух слоёв, и это не украшение, а единственный способ
@@ -2723,6 +2837,7 @@
      * @param {object|null} map Текущая карта.
      */
     paintLight(map) {
+      this.paintSight(map);
       const veil = this.lightCanvas;
       const glow = this.glowCanvas;
       if (!veil || !glow) return;
@@ -3340,6 +3455,7 @@
       this.tokens = source.tokens || [];
       this.players = source.players || [];
       this.renderTokens();
+      this.paintSight(this.mapOf(this.viewedMap));
       this.updatePingAvailability();
     }
 
@@ -4013,6 +4129,107 @@
         if (distance <= reach) return template;
       }
       return null;
+    }
+
+    /** Меню шаблона: урон по области или удаление. */
+    showTemplateMenu(template, clientX, clientY) {
+      const menu = el('div', 'token-menu');
+      const damage = el('button', 'token-menu__item', 'Урон по области');
+      damage.type = 'button';
+      damage.title = 'Собрать фишки внутри шаблона и применить урон';
+      damage.addEventListener('click', () => {
+        this.closeMenu();
+        if (this.handlers.onTemplateDamage) this.handlers.onTemplateDamage(template);
+      });
+      menu.appendChild(damage);
+      const remove = el('button', 'token-menu__item token-menu__item--danger', 'Удалить шаблон');
+      remove.type = 'button';
+      remove.addEventListener('click', () => {
+        this.closeMenu();
+        if (this.handlers.onDeleteMapTemplate) {
+          this.handlers.onDeleteMapTemplate(this.viewedMap, this.currentMapId, template.id);
+        }
+      });
+      menu.appendChild(remove);
+      placeTokenMenu(menu, clientX, clientY, this);
+    }
+
+    /**
+     * Фишки, которые задевает шаблон.
+     *
+     * Проверяем центр и четыре угла клетки фишки: большой дракон, которого
+     * огненный шар задел краем, иначе остался бы невредим. Линия в правилах
+     * имеет ширину пять футов, а рисуется тонкой — для попадания берём 5 фт.
+     * @param {object} template
+     * @returns {object[]}
+     */
+    tokensInTemplate(template) {
+      const map = this.mapOf(this.viewedMap);
+      if (!map || !template) return [];
+      const width = this.image.naturalWidth;
+      const height = this.image.naturalHeight;
+      if (!width || !height) return [];
+      const cell = Math.max(1, this.effectiveCell());
+      const feetPerCell = Number(this.grid.feetPerCell) || DnD.GRID.defaultFeetPerCell;
+      const pxPerFoot = cell / Math.max(1, feetPerCell);
+      const size = Math.max(1, template.size * pxPerFoot);
+      const cx = template.x * width;
+      const cy = template.y * height;
+      const angle = (template.rotation * Math.PI) / 180;
+      const dirX = Math.sin(angle);
+      const dirY = -Math.cos(angle);
+      const triangleSign = (x1, y1, x2, y2, x3, y3) => (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3);
+      const inTriangle = (x, y, ax, ay, bx, by, dx, dy) => {
+        const s1 = triangleSign(x, y, ax, ay, bx, by);
+        const s2 = triangleSign(x, y, bx, by, dx, dy);
+        const s3 = triangleSign(x, y, dx, dy, ax, ay);
+        return (s1 >= 0 && s2 >= 0 && s3 >= 0) || (s1 <= 0 && s2 <= 0 && s3 <= 0);
+      };
+      const inside = (x, y) => {
+        if (template.kind === 'sphere') {
+          return Math.hypot(x - cx, y - cy) <= size;
+        }
+        if (template.kind === 'square') {
+          const cos = Math.cos(angle);
+          const sin = Math.sin(angle);
+          const dx = x - cx;
+          const dy = y - cy;
+          const localX = dx * cos + dy * sin;
+          const localY = -dx * sin + dy * cos;
+          return Math.abs(localX) <= size / 2 && Math.abs(localY) <= size / 2;
+        }
+        if (template.kind === 'cone') {
+          const baseX = cx + dirX * size;
+          const baseY = cy + dirY * size;
+          const half = size / 2;
+          return inTriangle(
+            x, y,
+            cx, cy,
+            baseX + Math.cos(angle) * half, baseY + Math.sin(angle) * half,
+            baseX - Math.cos(angle) * half, baseY - Math.sin(angle) * half
+          );
+        }
+        const endX = cx + dirX * size;
+        const endY = cy + dirY * size;
+        return DnD.distanceToSegment(x, y, cx, cy, endX, endY) <= Math.max(8, 2.5 * pxPerFoot);
+      };
+      const hits = [];
+      for (const token of this.tokens || []) {
+        if (token.mapType !== this.viewedMap) continue;
+        if (token.mapId && this.currentMapId && token.mapId !== this.currentMapId) continue;
+        const tx = token.x * width;
+        const ty = token.y * height;
+        const half = (DnD.clampNumber(token.size, 1, 4, 1) * cell) / 2;
+        const points = [
+          [tx, ty],
+          [tx - half, ty - half],
+          [tx + half, ty - half],
+          [tx - half, ty + half],
+          [tx + half, ty + half]
+        ];
+        if (points.some(([x, y]) => inside(x, y))) hits.push(token);
+      }
+      return hits;
     }
 
     /**
@@ -5746,9 +5963,24 @@
           message.role === 'player' ? 'мастеру' : 'шёпот'));
       }
       head.appendChild(el('span', 'chat__time', formatTime(message.time)));
-      // Удаление одного сообщения: только мастер. Крестик живёт в шапке
-      // строки, чтобы не отнимать место у текста.
-      if (this.handlers.canManage && this.handlers.canManage() && message.id) {
+      if (message.editedAt) {
+        const edited = el('span', 'chat__edited', 'изменено');
+        edited.title = `Изменено в ${formatTime(message.editedAt)}`;
+        head.appendChild(edited);
+      }
+      // Правка и удаление одного сообщения: только мастер. Карандаш и крестик
+      // живут в шапке строки, чтобы не отнимать место у текста.
+      if (this.handlers.canManage && this.handlers.canManage() && message.id
+        && !message.system && !message.isRoll) {
+        const edit = el('button', 'chat__edit', '✎');
+        edit.type = 'button';
+        edit.title = 'Изменить сообщение';
+        edit.setAttribute('aria-label', 'Изменить сообщение');
+        edit.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (this.handlers.onEditMessage) this.handlers.onEditMessage(message);
+        });
+        head.appendChild(edit);
         const remove = el('button', 'chat__delete', '×');
         remove.type = 'button';
         remove.title = 'Удалить сообщение';
@@ -5790,6 +6022,30 @@
       if (!this.log || !id) return;
       const row = this.log.querySelector(`[data-message-id="${CSS.escape(String(id))}"]`);
       if (row) row.remove();
+    }
+
+    /** Обновляет текст после правки и ставит пометку «изменено». */
+    updateMessage(id, text, editedAt) {
+      if (!this.log || !id) return;
+      const row = this.log.querySelector(`[data-message-id="${CSS.escape(String(id))}"]`);
+      if (!row) return;
+      let body = row.querySelector('.chat__text');
+      if (!body && text) {
+        body = el('div', 'chat__text');
+        row.appendChild(body);
+      }
+      if (body) body.textContent = text;
+      const head = row.querySelector('.chat__head');
+      if (head) {
+        let mark = head.querySelector('.chat__edited');
+        if (!mark) {
+          mark = el('span', 'chat__edited', 'изменено');
+          const remove = head.querySelector('.chat__delete');
+          head.insertBefore(mark, remove || null);
+        }
+        if (editedAt) mark.title = `Изменено в ${formatTime(editedAt)}`;
+      }
+      if (this.query) this.setQuery(this.query);
     }
 
     /** Показывает хендаут целиком, не уводя со стола. */
@@ -5930,6 +6186,10 @@
       const history = section('История бросков', 'dnd-table.panel.diceHistory', {
         onExpand: () => this.scrollToEnd()
       });
+      // Секция истории забирает остаток высоты панели и прокручивает строки
+      // внутри себя: иначе длинная история распирает панель, сжимает плашку
+      // результата и рисует строки поверх фона.
+      history.wrap.classList.add('dice__history-section');
       this.history = el('div', 'dice__history');
       history.body.appendChild(this.history);
       this.root.appendChild(history.wrap);
@@ -7147,6 +7407,31 @@
         }
       });
       row.appendChild(auraSelect);
+
+      // Зрение фишки для тумана по игрокам. Ноль — маска не рисуется.
+      const visionSelect = el('select', 'select select--tiny token-row__vision');
+      const visionOff = el('option', null, 'Без зрения');
+      visionOff.value = '0';
+      visionSelect.appendChild(visionOff);
+      for (const feet of [30, 60, 90, 120]) {
+        const option = el('option', null, `Зрение ${feet} фт`);
+        option.value = String(feet);
+        visionSelect.appendChild(option);
+      }
+      const visionFeet = Number(token.vision) || 0;
+      visionSelect.value = String(visionFeet);
+      if (visionFeet > 0 && !visionSelect.querySelector(`option[value="${visionFeet}"]`)) {
+        const custom = el('option', null, `Зрение ${visionFeet} фт`);
+        custom.value = String(visionFeet);
+        visionSelect.appendChild(custom);
+      }
+      visionSelect.title = 'Радиус зрения фишки: игрок видит только то, что видит она';
+      visionSelect.addEventListener('change', () => {
+        if (this.handlers.onSetTokenVision) {
+          this.handlers.onSetTokenVision(token.id, Number(visionSelect.value) || 0);
+        }
+      });
+      row.appendChild(visionSelect);
 
       const eye = el('button',
         `btn btn--tiny ${token.hidden ? 'btn--ghost' : ''}`,

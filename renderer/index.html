@@ -240,6 +240,24 @@
             <div id="players-root"></div>
           </div>
 
+          <div class="panel" id="calendar-panel" data-panel="calendar">
+            <div class="panel__title panel__title--row">
+              <span>Календарь</span>
+              <button id="btn-calendar-add" class="btn btn--ghost btn--tiny" type="button" hidden>Событие</button>
+            </div>
+            <div id="calendar-events" class="calendar-events"></div>
+          </div>
+
+          <div class="panel" id="party-notes-panel" data-panel="notes">
+            <div class="panel__title panel__title--row">
+              <span>Заметки партии</span>
+              <span id="party-notes-status" class="muted"></span>
+            </div>
+            <textarea id="party-notes" class="input party-notes__text" rows="6" maxlength="20000"
+                      placeholder="Что партия записала: имена, договорённости, планы…"></textarea>
+            <button id="btn-party-notes-save" class="btn btn--ghost btn--tiny" type="button">Сохранить</button>
+          </div>
+
           <div class="panel journal-panel" id="journal-panel" data-panel="journal" hidden>
             <div class="panel__title panel__title--row">
               <span>Журнал</span>

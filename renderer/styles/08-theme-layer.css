@@ -1112,7 +1112,7 @@ body > * {
 
 .dice__last-value {
   font-family: var(--font-num);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   text-shadow: 0 0 18px var(--accent-soft);
 }
 
@@ -1149,8 +1149,8 @@ body > * {
 }
 
 .dice__row-result {
-  font-family: var(--font-num);
-  font-variant-numeric: tabular-nums;
+  font-family: var(--font);
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 /* ---------------------------------------------------------------- Тосты */
@@ -1932,7 +1932,7 @@ body::after {
   appearance: none;
   border: none;
   background: transparent;
-  color: var(--muted);
+  color: var(--text-dim);
   font: inherit;
   font-family: var(--font-title);
   font-size: 12px;
@@ -2041,6 +2041,17 @@ body::after {
   pointer-events: none;
   z-index: 5;
   mix-blend-mode: screen;
+}
+
+/* Маска зрения: темнота вне радиуса своей фишки. Выше света и фишек, ниже
+   тумана, чтобы уже открытые участки не просвечивали за спиной. */
+.map-sight {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
 }
 
 /* Стены — подсказка мастеру, не часть освещения. Игроку она не достаётся:
@@ -2714,6 +2725,7 @@ body::after {
   font-family: var(--font-num);
   font-size: 10px;
   font-weight: 700;
+  font-variant-numeric: lining-nums tabular-nums;
   letter-spacing: 0;
   color: var(--bg-deep);
   background: linear-gradient(145deg, var(--gold), var(--accent));
@@ -3019,22 +3031,22 @@ body::after {
 
 .sheet {
   --text: #352514;
-  --text-dim: #57412a;
-  --muted: #7b6040;
+  --text-dim: #4a3620;
+  --muted: #5a4024;
   --border: rgba(112, 78, 38, 0.34);
   --border-strong: rgba(90, 60, 25, 0.58);
   --surface: rgba(255, 251, 239, 0.22);
   --surface-2: rgba(255, 251, 239, 0.3);
   --surface-3: rgba(120, 82, 38, 0.07);
   --bg-deep: rgba(255, 252, 242, 0.26);
-  --gold: #8a5a1f;
+  --gold: #6b3f10;
   --sheen: rgba(255, 253, 245, 0.45);
   --hairline: rgba(112, 78, 38, 0.2);
   --hover-wash: rgba(120, 82, 38, 0.07);
   --disabled-bg: rgba(120, 82, 38, 0.08);
-  --ok: #4d7138;
+  --ok: #3d5a2a;
   --danger: #8f3527;
-  --info: #4d5f80;
+  --info: #3f4f6e;
   --focus-ring: rgba(122, 59, 38, 0.55);
 
   position: relative;
@@ -3116,7 +3128,7 @@ body::after {
   letter-spacing: 0.02em;
   background: transparent;
   border: 1px solid rgba(112, 78, 38, 0.4);
-  color: #6b4a26;
+  color: #5a3d1f;
   box-shadow: none;
   border-radius: 2px;
 }
@@ -3161,8 +3173,9 @@ body::after {
 }
 
 .sheet .box__title {
-  color: #6b3a22;
+  color: #5a2c17;
   font-size: 11.5px;
+  font-weight: 600;
   letter-spacing: 0.16em;
   border-bottom: 1px solid rgba(112, 78, 38, 0.3);
   padding-bottom: 4px;
@@ -3173,7 +3186,8 @@ body::after {
 }
 
 .sheet .box__note {
-  color: #7b6040;
+  color: #5a4024;
+  font-size: 11.5px;
   font-style: italic;
 }
 
@@ -3196,7 +3210,8 @@ body::after {
 }
 
 .sheet .abil__name {
-  color: #6b5133;
+  color: #4a3520;
+  font-weight: 600;
   letter-spacing: 0.1em;
 }
 
@@ -3230,11 +3245,14 @@ body::after {
 }
 
 .sheet .prof-row__label {
-  color: #4a3520;
+  color: #352514;
+  font-weight: 600;
 }
 
 .sheet .prof-row__ability {
-  color: #8a6a45;
+  color: #5f4528;
+  font-size: 11.5px;
+  font-weight: 600;
 }
 
 .sheet .prof-row__value {
@@ -3242,7 +3260,7 @@ body::after {
 }
 
 .sheet .prof-row__value.is-proficient {
-  color: #6b3a22;
+  color: #5a2c17;
   padding: 0 4px;
   border-radius: 3px;
   background: rgba(122, 59, 38, 0.1);
@@ -3250,7 +3268,7 @@ body::after {
 }
 
 .sheet .prof-row__value.is-expertise {
-  color: #7a3b26;
+  color: #69301c;
   background: rgba(138, 90, 31, 0.14);
   text-shadow: none;
 }
@@ -3357,8 +3375,9 @@ body::after {
 }
 
 .sheet .field__label {
-  color: #6b5133;
-  font-size: 11px;
+  color: #4a3520;
+  font-size: 11.5px;
+  font-weight: 600;
   letter-spacing: 0.1em;
 }
 
@@ -3368,7 +3387,7 @@ body::after {
 }
 
 .sheet ::placeholder {
-  color: rgba(90, 68, 40, 0.55);
+  color: rgba(74, 53, 32, 0.7);
 }
 
 .sheet .death-saves,
@@ -3379,7 +3398,7 @@ body::after {
 
 .sheet .death-saves__value,
 .sheet .spell-slots__used {
-  color: #6b3a22;
+  color: #5a2c17;
 }
 
 .sheet .death-saves__label {

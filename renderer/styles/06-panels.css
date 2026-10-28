@@ -981,6 +981,27 @@
   color: var(--danger, #d9534f);
 }
 
+.chat__edit {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat__edit:hover {
+  color: var(--accent);
+}
+
+.chat__edited {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-style: italic;
+  white-space: nowrap;
+}
+
 .badge--roll {
   background: rgba(200, 117, 80, 0.18);
   border-color: rgba(200, 117, 80, 0.5);
@@ -1109,6 +1130,7 @@
   font-family: var(--font-title);
   font-size: 16px;
   letter-spacing: 0.02em;
+  font-variant-numeric: lining-nums tabular-nums;
   padding: 11px 2px;
   border-radius: 10px;
   border: 1px solid var(--border-strong);
@@ -1145,6 +1167,10 @@
 .dice__reroll {
   width: 100%;
   margin-top: 6px;
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  font-weight: 600;
 }
 
 .dice__hidden {
@@ -1153,14 +1179,14 @@
   gap: 6px;
   margin-top: 8px;
   font-size: 12.5px;
-  color: var(--muted);
+  color: var(--text-dim);
   cursor: pointer;
   user-select: none;
 }
 
 .dice__hint {
   font-size: 11.5px;
-  color: var(--muted);
+  color: var(--text-dim);
   min-height: 15px;
   line-height: 1.3;
   overflow-wrap: anywhere;
@@ -1194,6 +1220,7 @@
   justify-content: center;
   gap: 7px;
   padding: 10px;
+  flex: none;
   background: var(--accent-soft);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1211,6 +1238,25 @@
 
 .dice__last-value.is-pop {
   transform: scale(1.35);
+}
+
+.dice__history-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dice__history-section.is-collapsed {
+  flex: 0 0 auto;
+}
+
+.dice__history-section .section__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .dice__history {
@@ -1238,23 +1284,29 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text);
 }
 
 .dice__row-die {
-  font-family: var(--font-title);
-  color: var(--muted);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: lining-nums tabular-nums;
+  color: var(--text-dim);
 }
 
 .dice__row-result {
+  font-family: var(--font);
+  font-size: 13px;
   font-weight: 700;
-  color: var(--gold);
+  color: color-mix(in srgb, var(--gold) 60%, var(--text));
   min-width: 26px;
   text-align: right;
 }
 
 .dice__row-time {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-dim);
 }
 
 /* ------------------------------------------------------------- Порядок боя */
@@ -1639,8 +1691,73 @@
   min-width: 0;
 }
 
-.inventory-coins__split {
+.inventory-coins__split,
+.inventory-coins__give {
   grid-column: 1 / -1;
+}
+
+/* Календарь и общие заметки: общие панели левой колонки. */
+.calendar-events {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.calendar-event {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 2px;
+  border-bottom: 1px dotted var(--border);
+  font-size: 12.5px;
+}
+
+.calendar-event__date {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.calendar-event__title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.calendar-event__delete {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.calendar-event__delete:hover {
+  color: var(--danger);
+}
+
+.calendar-event--past {
+  opacity: 0.65;
+}
+
+.calendar-events__empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.party-notes__text {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .inventory-row {

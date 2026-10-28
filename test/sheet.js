@@ -173,11 +173,12 @@ check('состояния дают помеху там, где её видно �
 
 check('лист хранит вдохновение, истощение, концентрацию и монеты', () => {
   const sheet = DnD.createEmptySheet();
-  assert.strictEqual(sheet.inspiration, false);
+  assert.strictEqual(sheet.inspiration, 0);
   assert.strictEqual(sheet.exhaustion, 0);
   assert.strictEqual(sheet.concentration, '');
   assert.deepStrictEqual(sheet.coins, { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 });
   assert.strictEqual(DnD.LIMITS.maxExhaustion, 6);
+  assert.strictEqual(DnD.LIMITS.maxInspiration, 99);
 });
 
 check('истощение даёт последствия по PHB 2014', () => {
@@ -287,6 +288,27 @@ check('календарь переводит номер дня в месяц и 
   assert.strictEqual(DnD.monthIndexFromValue('вет', custom), 2);
   assert.strictEqual(DnD.monthIndexFromValue('2', custom), 2);
   assert.strictEqual(DnD.monthIndexFromValue('нет', custom), -1);
+});
+
+check('защиты от урона складываются по правилам 5e', () => {
+  const defenses = {
+    resistances: ['огонь'],
+    vulnerabilities: ['холод'],
+    immunities: ['яд']
+  };
+  assert.deepStrictEqual(DnD.damageAfterDefenses(11, 'огонь', defenses), { amount: 5, kind: 'resistant' });
+  assert.deepStrictEqual(DnD.damageAfterDefenses(11, 'холод', defenses), { amount: 22, kind: 'vulnerable' });
+  assert.deepStrictEqual(DnD.damageAfterDefenses(11, 'яд', defenses), { amount: 0, kind: 'immune' });
+  assert.deepStrictEqual(DnD.damageAfterDefenses(11, 'кислота', defenses), { amount: 11, kind: 'normal' });
+  assert.deepStrictEqual(
+    DnD.damageAfterDefenses(11, 'огонь', {
+      resistances: ['огонь'],
+      vulnerabilities: ['огонь'],
+      immunities: []
+    }),
+    { amount: 11, kind: 'normal' }
+  );
+  assert.deepStrictEqual(DnD.damageAfterDefenses(7, '', defenses), { amount: 7, kind: 'normal' });
 });
 
 function assert(condition, message) {

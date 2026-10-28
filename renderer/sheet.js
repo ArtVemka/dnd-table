@@ -511,6 +511,7 @@
       col3.appendChild(this.buildAttacksBlock());
       col3.appendChild(this.textarea('attacks', 'Атаки и заклинания'));
       col3.appendChild(this.textarea('equipment', 'Снаряжение'));
+      col3.appendChild(this.buildCoinsBlock());
       col3.appendChild(this.textarea('features', 'Особенности и черты'));
       col3.appendChild(this.textarea('notes', 'Заметки'));
       grid.appendChild(col3);
@@ -526,9 +527,10 @@
     }
 
     /**
-     * Состояние: вдохновение, истощение, концентрация и монеты.
+     * Состояние: вдохновение, истощение и концентрация.
      *
      * Это не производные числа, а ресурсы, которые игрок отмечает сам.
+     * Монеты живут отдельно, в колонке снаряжения: это имущество.
      * Истощение показываем уровнем и подсказкой, но скорость и броски
      * автоматически не правим: за столом мастер всё равно объявляет эффект.
      * @returns {HTMLElement}
@@ -538,10 +540,13 @@
       box.appendChild(el('div', 'box__title', 'Состояние'));
 
       const inspRow = el('label', 'prof-row prof-row--manual');
-      const insp = el('input');
-      insp.type = 'checkbox';
+      const insp = el('input', 'input sheet__inspiration');
+      insp.type = 'number';
+      insp.min = '0';
+      insp.max = String(DnD.LIMITS.maxInspiration);
+      insp.step = '1';
       insp.title = 'Вдохновение: можно перебросить проверку или бросок атаки';
-      insp.addEventListener('change', () => this.refresh());
+      insp.addEventListener('input', () => this.refresh());
       inspRow.appendChild(insp);
       inspRow.appendChild(el('span', 'prof-row__label', 'Вдохновение'));
       box.appendChild(inspRow);
@@ -596,6 +601,21 @@
       concActions.appendChild(concRoll);
       box.appendChild(concActions);
 
+      box.appendChild(el('div', 'box__note',
+        'Истощение: помеха проверкам, затем скорость, броски и максимум хитов. Уровень ведёт мастер.'));
+
+      this.stateNodes = { insp, exh, conc, concRoll };
+      return box;
+    }
+
+    /**
+     * Монеты персонажа живут в колонке снаряжения: это имущество, а не
+     * состояние. Отдельная коробка не смешивает кошелёк с вдохновением.
+     * @returns {HTMLElement}
+     */
+    buildCoinsBlock() {
+      const box = el('div', 'box');
+      box.appendChild(el('div', 'box__title', 'Монеты'));
       const coins = el('div', 'mini-grid sheet__coins');
       const coinNodes = {};
       for (const [key, label] of [['cp', 'мм'], ['sp', 'см'], ['ep', 'эл.'], ['gp', 'зм'], ['pp', 'пл']]) {
@@ -609,10 +629,7 @@
         coins.appendChild(row);
       }
       box.appendChild(coins);
-      box.appendChild(el('div', 'box__note',
-        'Истощение: помеха проверкам, затем скорость, броски и максимум хитов. Уровень ведёт мастер.'));
-
-      this.stateNodes = { insp, exh, conc, concRoll, coins: coinNodes };
+      if (this.stateNodes) this.stateNodes.coins = coinNodes;
       return box;
     }
 
@@ -1026,7 +1043,9 @@ sheet.spellSlotsUsed = DnD.SPELL_SLOT_LEVELS.map((level, index) => slotLevel(
 ));
 sheet.hitDiceSpent = DnD.clampNumber(current.hitDiceSpent, 0, DnD.LIMITS.maxLevel, 0);
 if (this.stateNodes) {
-  sheet.inspiration = Boolean(this.stateNodes.insp.checked);
+  sheet.inspiration = DnD.clampNumber(
+    this.stateNodes.insp.value, 0, DnD.LIMITS.maxInspiration, 0
+  );
   sheet.exhaustion = DnD.clampNumber(
     this.stateNodes.exh.value, 0, DnD.LIMITS.maxExhaustion, 0
   );
@@ -1441,7 +1460,9 @@ node.max.disabled = this.readOnly;
         input.value = value === null || value === undefined ? '' : String(value);
       }
       if (this.stateNodes) {
-        this.stateNodes.insp.checked = Boolean(data.inspiration);
+        this.stateNodes.insp.value = String(DnD.clampNumber(
+          data.inspiration, 0, DnD.LIMITS.maxInspiration, 0
+        ));
         this.stateNodes.exh.value = String(DnD.clampNumber(
           data.exhaustion, 0, DnD.LIMITS.maxExhaustion, 0
         ));

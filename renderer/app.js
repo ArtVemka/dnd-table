@@ -77,8 +77,10 @@ grid: { enabled: false, cell: 46, columns: 0, feetPerCell: DnD.GRID.defaultFeetP
       chatHistory: [],
       journal: '',
       journalEntries: [],
+      partyNotes: '',
       inventory: [],
       inventoryCoins: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
+      calendarEvents: [],
       rollRequests: []
     },
     viewedSheetPlayerId: null,
@@ -118,6 +120,8 @@ let surfacePanel = null;
 let journalEditingId = null;
 /** Поиск по журналу живёт в окне: серверу он не нужен. */
 let journalQuery = '';
+/** Таймер автосохранения общих заметок. */
+let partyNotesTimer = null;
 /** Какой предмет склада открыт на правку: null, 'new' или id предмета. */
 let inventoryEditingId = null;
 /**
@@ -291,6 +295,9 @@ let chosenSheetId = null;
               node.value = String(option.value);
               control.appendChild(node);
             }
+          } else if (spec.type === 'textarea') {
+            control = el('textarea', 'input');
+            control.rows = 4;
           } else {
             control = el('input', 'input');
             control.type = spec.type || 'text';
@@ -577,22 +584,8 @@ let chosenSheetId = null;
     };
   }
 
-  /** Типы урона для подписи в чате. Сопротивления в листе пока не хранятся. */
-  const DAMAGE_TYPES = [
-    ['', 'без типа'],
-    ['огонь', 'огонь'],
-    ['холод', 'холод'],
-    ['электричество', 'электричество'],
-    ['кислота', 'кислота'],
-    ['яд', 'яд'],
-    ['некротический', 'некротический'],
-    ['излучение', 'излучение'],
-    ['силовой', 'силовой'],
-    ['дробящий', 'дробящий'],
-    ['колющий', 'колющий'],
-    ['рубящий', 'рубящий'],
-    ['психический', 'психический']
-  ];
+  /** Типы урона для подписи в чате. Список общий с сервером и защитами фишек. */
+  const DAMAGE_TYPES = DnD.DAMAGE_TYPES;
 
   /**
    * Урон или лечение по фишке. Временные хиты съедает сервер, а проверку
@@ -636,6 +629,53 @@ let chosenSheetId = null;
       type: answer.type || '',
       healing: answer.mode === 'heal'
     });
+  }
+
+  /**
+   * Урон по всем фишкам внутри шаблона.
+   *
+   * Спасбросок не бросается автоматически: мастер выбирает «половина», если
+   * цель его прошла. Так одна кнопка не превращается в очередь заявок.
+   */
+  async function openTemplateDamage(template) {
+    if (!mapView || !template) return;
+    const hits = mapView.tokensInTemplate(template).filter((token) => Number(token.maxHp) > 0);
+    if (!hits.length) return toast('В шаблоне нет фишек с прочностью', 'error');
+    const names = hits.map((token) => token.name).join(', ');
+    const answer = await modal({
+      title: 'Урон по области',
+      message: `В шаблоне: ${names}.`,
+      confirmLabel: 'Применить',
+      fields: [
+        { key: 'amount', label: 'Количество', type: 'number', min: 1, max: 9999, value: '1' },
+        {
+          key: 'type',
+          label: 'Тип урона',
+          type: 'select',
+          value: '',
+          options: DAMAGE_TYPES.map(([value, label]) => ({ value, label }))
+        },
+        {
+          key: 'save',
+          label: 'Спасбросок',
+          type: 'select',
+          value: 'full',
+          options: [
+            { value: 'full', label: 'полный урон' },
+            { value: 'half', label: 'половина (успешный спасбросок)' }
+          ]
+        }
+      ]
+    });
+    if (!answer) return;
+    const raw = DnD.clampNumber(answer.amount, 1, 9999, 0);
+    if (!raw) return toast('Укажите количество', 'error');
+    const amount = answer.save === 'half' ? Math.floor(raw / 2) : raw;
+    if (!amount) return toast('После половины урона не осталось', 'error');
+    for (const token of hits) {
+      emit('applyTokenDamage', { tokenId: token.id, amount, type: answer.type || '' });
+    }
+    toast(`Урон ${amount} по ${hits.length} фишкам`, 'ok');
   }
 
   function emit(event, payload) {
@@ -692,6 +732,28 @@ let chosenSheetId = null;
     if (answer) emit('clearChat', {});
   }
 
+  /** Правка сообщения: только мастер, только текст, служебные строки не трогаем. */
+  async function editChatMessage(message) {
+    if (!message || app.role !== 'dm' || app.training || message.system || message.isRoll) return;
+    const answer = await modal({
+      title: 'Изменить сообщение',
+      fields: [{
+        key: 'text',
+        label: 'Текст',
+        type: 'textarea',
+        value: message.text || ''
+      }],
+      confirmLabel: 'Сохранить'
+    });
+    if (!answer) return;
+    const text = String(answer.text || '').trim();
+    if (!text) return toast('Текст сообщения пуст', 'error');
+    const result = await emitAck('editChatMessage', { id: message.id, text });
+    if (!result || !result.ok) {
+      return toast((result && result.error) || 'Не удалось изменить сообщение', 'error');
+    }
+  }
+
   /** Каждая вкладка карт хранит свой список картинок: {items, activeId}. */
   function normalizeMapSlots(source) {
     const slots = {};
@@ -728,8 +790,10 @@ let chosenSheetId = null;
       chatHistory: state.chatHistory || [],
       journal: state.journal || '',
       journalEntries: state.journalEntries || [],
+      partyNotes: state.partyNotes || '',
       inventory: state.inventory || [],
       inventoryCoins: state.inventoryCoins || { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
+      calendarEvents: state.calendarEvents || [],
       rollRequests: state.rollRequests || [],
       // Поводы для реакций приходят снимком: после переподключения карточка
       // должна быть на месте, а не жить только в памяти старого окна.
@@ -1159,6 +1223,17 @@ let chosenSheetId = null;
       app.room.calendarMonths = Array.isArray(months) ? months : [];
       renderGameTime();
       syncCalendarSettings();
+      renderCalendarEvents();
+    });
+
+    socket.on('calendarEventsUpdated', (events) => {
+      app.room.calendarEvents = Array.isArray(events) ? events : [];
+      renderCalendarEvents();
+    });
+
+    socket.on('partyNotesUpdated', (notes) => {
+      app.room.partyNotes = String(notes || '');
+      syncPartyNotes();
     });
 
     socket.on('tokenCreated', (token) => {
@@ -1323,6 +1398,15 @@ let chosenSheetId = null;
       const index = app.room.chatHistory.findIndex((message) => message.id === id);
       if (index >= 0) app.room.chatHistory.splice(index, 1);
       if (chatPanel) chatPanel.removeMessage(id);
+    });
+
+    socket.on('chatEdited', ({ id, text, editedAt }) => {
+      const message = app.room.chatHistory.find((item) => item.id === id);
+      if (message) {
+        message.text = text;
+        message.editedAt = editedAt;
+      }
+      if (chatPanel) chatPanel.updateMessage(id, text, editedAt);
     });
 
     socket.on('chatCleared', () => {
@@ -1569,6 +1653,7 @@ let chosenSheetId = null;
         onOpenMapFog: (type, mapId, x, y, radius) => emit('openMapFog', { type, mapId, x, y, radius }),
         onSetMapFog: (type, mapId, open) => emit('setMapFog', { type, mapId, open }),
         onSetMapFogFollow: (type, mapId, follow) => emit('setMapFogFollow', { type, mapId, follow }),
+        onSetMapVision: (type, mapId, visionPerPlayer) => emit('setMapVision', { type, mapId, visionPerPlayer }),
         // Освещение: правка только мастерская, сервер проверяет это сам.
         onSetMapDarkness: (type, mapId, darkness) => emit('setMapDarkness', { type, mapId, darkness }),
         onAddMapWall: (type, mapId, wall) => emit('addMapWall', {
@@ -1589,6 +1674,7 @@ let chosenSheetId = null;
         }),
         onDeleteMapTemplate: (type, mapId, templateId) => emit('deleteMapTemplate', { type, mapId, templateId }),
         onClearMapTemplates: (type, mapId) => emit('clearMapTemplates', { type, mapId }),
+        onTemplateDamage: openTemplateDamage,
         onAddMapLight: (type, mapId, light) => emit('addMapLight', {
           type,
           mapId,
@@ -1655,6 +1741,7 @@ let chosenSheetId = null;
         canAttach: () => app.role === 'dm' && !app.training,
         canManage: () => app.role === 'dm' && !app.training,
         onDeleteMessage: (id) => emit('deleteChatMessage', { id }),
+        onEditMessage: (message) => editChatMessage(message),
         onClear: () => confirmClearChat(),
         onImage: uploadChatImage,
         // Запрос поиска живёт в контроллере, а не в панели: снимок стола
@@ -1687,6 +1774,8 @@ let chosenSheetId = null;
         // Свет фишки: факел в руке. Дальность в футах, как в правилах.
         onSetTokenLight: (tokenId, radius, color) => emit('setTokenLight', { tokenId, radius, color }),
         onSetTokenAura: (tokenId, feet, color) => emit('setTokenAura', { tokenId, feet, color }),
+        onSetTokenVision: (tokenId, vision) => emit('setTokenVision', { tokenId, vision }),
+        onSetTokenDefenses: (tokenId, defenses) => emit('setTokenDefenses', { tokenId, ...defenses }),
         // Переименование, назначение игроку и вывод фишки из листа работают и
         // здесь, а не только на карте: правый клик по строке списка ведёт себя
         // так же, как правый клик по фишке. Без этих трёх обработчиков кнопки
@@ -1937,6 +2026,8 @@ let chosenSheetId = null;
     renderInitiativePanel();
     renderAdventurePanel();
     renderSurfacePanel();
+    renderCalendarEvents();
+    syncPartyNotes();
     updateTableHeader();
     updateRoleUi();
     refreshSheetView(true);
@@ -3644,6 +3735,148 @@ let chosenSheetId = null;
     if (rest) rest.hidden = app.role !== 'dm';
   }
 
+  /** События календаря в порядке дат. */
+  function calendarEvents() {
+    return (app.room && Array.isArray(app.room.calendarEvents) ? app.room.calendarEvents : [])
+      .slice()
+      .sort((a, b) => a.day - b.day);
+  }
+
+  function calendarEventLabel(event) {
+    const date = DnD.calendarFromDay(event.day, calendarMonths());
+    return `${date.day} ${date.name} ${date.year}`;
+  }
+
+  /** Список событий видят все; добавляет и удаляет только мастер. */
+  function renderCalendarEvents() {
+    const host = $('#calendar-events');
+    if (!host) return;
+    host.textContent = '';
+    const events = calendarEvents();
+    const today = gameTime().day;
+    if (!events.length) {
+      host.appendChild(el('div', 'calendar-events__empty', 'Событий пока нет'));
+    }
+    for (const event of events) {
+      const row = el('div', 'calendar-event');
+      if (event.day < today) row.classList.add('calendar-event--past');
+      row.appendChild(el('span', 'calendar-event__date', calendarEventLabel(event)));
+      row.appendChild(el('span', 'calendar-event__title', event.title));
+      if (app.role === 'dm') {
+        const remove = el('button', 'calendar-event__delete', '×');
+        remove.type = 'button';
+        remove.title = 'Удалить событие';
+        remove.setAttribute('aria-label', 'Удалить событие');
+        remove.addEventListener('click', () => deleteCalendarEvent(event));
+        row.appendChild(remove);
+      }
+      host.appendChild(row);
+    }
+    const add = $('#btn-calendar-add');
+    if (add) add.hidden = app.role !== 'dm';
+  }
+
+  async function addCalendarEvent() {
+    if (app.role !== 'dm') return;
+    const current = gameTime();
+    const date = DnD.calendarFromDay(current.day, calendarMonths());
+    const answer = await modal({
+      title: 'Событие календаря',
+      fields: [
+        { key: 'title', label: 'Название', type: 'text', value: '' },
+        {
+          key: 'day',
+          label: 'День',
+          type: 'number',
+          min: 1,
+          max: DnD.CALENDAR.daysPerMonth,
+          value: String(date.day)
+        },
+        { key: 'month', label: 'Месяц', type: 'text', value: date.name },
+        { key: 'year', label: 'Год', type: 'number', min: 1, max: 9999, value: String(date.year) }
+      ],
+      confirmLabel: 'Добавить'
+    });
+    if (!answer) return;
+    const title = String(answer.title || '').trim();
+    if (!title) return toast('Нужно название события', 'error');
+    const month = DnD.monthIndexFromValue(answer.month, calendarMonths());
+    if (month < 0) return toast('Такого месяца нет в календаре', 'error');
+    const day = DnD.dayFromCalendar(answer.year, month, answer.day, calendarMonths());
+    if (app.training || !app.socket || !app.connected) {
+      app.room.calendarEvents = (app.room.calendarEvents || []).concat({
+        id: `local-${Date.now()}`,
+        day,
+        title
+      });
+      renderCalendarEvents();
+      return toast('Событие добавлено', 'ok');
+    }
+    const result = await emitAck('addCalendarEvent', { title, day });
+    if (!result || !result.ok) {
+      return toast((result && result.error) || 'Не удалось добавить событие', 'error');
+    }
+    app.room.calendarEvents = result.events || app.room.calendarEvents;
+    renderCalendarEvents();
+    toast('Событие добавлено', 'ok');
+  }
+
+  async function deleteCalendarEvent(event) {
+    if (app.role !== 'dm' || !event) return;
+    if (app.training || !app.socket || !app.connected) {
+      app.room.calendarEvents = (app.room.calendarEvents || [])
+        .filter((item) => item.id !== event.id);
+      renderCalendarEvents();
+      return;
+    }
+    const result = await emitAck('deleteCalendarEvent', { id: event.id });
+    if (!result || !result.ok) {
+      return toast((result && result.error) || 'Не удалось удалить событие', 'error');
+    }
+    app.room.calendarEvents = result.events || app.room.calendarEvents;
+    renderCalendarEvents();
+  }
+
+  /** Общие заметки: сервер присылает их всем, поле не дёргаем под рукой. */
+  function syncPartyNotes() {
+    const field = $('#party-notes');
+    if (!field) return;
+    if (document.activeElement !== field) field.value = app.room.partyNotes || '';
+    const status = $('#party-notes-status');
+    if (status) status.textContent = app.training ? 'локально' : 'общие';
+  }
+
+  async function savePartyNotes() {
+    const field = $('#party-notes');
+    if (!field) return;
+    const text = field.value.slice(0, 20000);
+    const status = $('#party-notes-status');
+    if (app.training || !app.socket || !app.connected) {
+      app.room.partyNotes = text;
+      if (status) status.textContent = 'сохранено';
+      return;
+    }
+    if (status) status.textContent = 'сохраняю…';
+    const result = await emitAck('setPartyNotes', { text });
+    if (!result || !result.ok) {
+      if (status) status.textContent = 'ошибка';
+      return toast((result && result.error) || 'Не удалось сохранить заметки', 'error');
+    }
+    app.room.partyNotes = result.notes || text;
+    if (status) status.textContent = 'сохранено';
+  }
+
+  /** Автосохранение заметок: пауза после последнего символа, не на каждый. */
+  function schedulePartyNotesSave() {
+    if (partyNotesTimer) clearTimeout(partyNotesTimer);
+    const status = $('#party-notes-status');
+    if (status) status.textContent = '…';
+    partyNotesTimer = setTimeout(() => {
+      partyNotesTimer = null;
+      savePartyNotes();
+    }, 800);
+  }
+
   /** Сохраняет время на сервере; в тренировке двигает только это окно. */
   function sendGameTime(time) {
     const next = {
@@ -3989,6 +4222,12 @@ let chosenSheetId = null;
       split.title = 'Разделить монеты поровну между игроками с листами';
       split.addEventListener('click', splitInventoryCoins);
       row.appendChild(split);
+
+      const give = el('button', 'btn btn--tiny btn--ghost inventory-coins__give', 'Выдать игроку');
+      give.type = 'button';
+      give.title = 'Перевести монеты со склада в лист одного игрока';
+      give.addEventListener('click', giveInventoryCoins);
+      row.appendChild(give);
     }
     return row;
   }
@@ -4013,6 +4252,54 @@ let chosenSheetId = null;
       return toast((result && result.error) || 'Не удалось разделить монеты', 'error');
     }
     toast('Монеты разделены поровну', 'ok');
+  }
+
+  /** Переводит монеты со склада в лист выбранного игрока. */
+  async function giveInventoryCoins() {
+    const players = (app.room.players || [])
+      .filter((player) => player.role === 'player' && app.room.sheets && app.room.sheets[player.playerId]);
+    if (!players.length) return toast('Нет игроков с листами', 'error');
+    const coins = inventoryCoins();
+    if (!Object.values(coins).some((value) => value > 0)) {
+      return toast('В общем складе нет монет', 'error');
+    }
+    const coinLabels = [['cp', 'мм'], ['sp', 'см'], ['ep', 'эл.'], ['gp', 'зм'], ['pp', 'пл']];
+    const answer = await modal({
+      title: 'Выдать монеты',
+      message: 'Монеты перейдут со склада в кошелёк листа.',
+      confirmLabel: 'Выдать',
+      fields: [
+        {
+          key: 'playerId',
+          label: 'Игрок',
+          type: 'select',
+          value: players[0].playerId,
+          options: players.map((player) => ({ value: player.playerId, label: player.name }))
+        },
+        {
+          key: 'coin',
+          label: 'Монета',
+          type: 'select',
+          value: 'gp',
+          options: coinLabels.map(([value, label]) => ({ value, label }))
+        },
+        { key: 'amount', label: 'Количество', type: 'number', min: 1, max: DnD.LIMITS.maxCoins, value: '1' }
+      ]
+    });
+    if (!answer) return;
+    const amount = DnD.clampNumber(answer.amount, 1, DnD.LIMITS.maxCoins, 0);
+    if (!amount) return toast('Укажите количество', 'error');
+    const result = await emitAck('giveInventoryCoins', {
+      playerId: answer.playerId,
+      coin: answer.coin,
+      amount
+    });
+    if (!result || !result.ok) {
+      return toast((result && result.error) || 'Не удалось выдать монеты', 'error');
+    }
+    const player = players.find((item) => item.playerId === result.playerId);
+    const label = coinLabels.find(([key]) => key === result.coin);
+    toast(`${result.moved} ${label ? label[1] : result.coin} → ${player ? player.name : 'игрок'}`, 'ok');
   }
 
   /** Имя владельца предмета: пустой ownerId — общий склад. */
@@ -6600,6 +6887,9 @@ const gridRow = el('div', 'settings__row');
     $('#btn-game-rest').addEventListener('click', () => {
       partyLongRest();
     });
+    $('#btn-calendar-add').addEventListener('click', addCalendarEvent);
+    $('#btn-party-notes-save').addEventListener('click', savePartyNotes);
+    $('#party-notes').addEventListener('input', schedulePartyNotesSave);
     $('#btn-inventory-add').addEventListener('click', () => {
       inventoryEditingId = 'new';
       renderInventoryPanel();

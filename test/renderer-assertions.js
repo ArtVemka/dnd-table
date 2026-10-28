@@ -368,6 +368,22 @@
     const sheetView = new window.SheetView(sheetHost, {});
     sheetView.setSheet(SAMPLE_SHEET);
 
+    check('монеты лежат в снаряжении, а вдохновение считается штуками', () => {
+      const inspiration = sheetHost.querySelector('.sheet__inspiration');
+      assert(inspiration, 'нет поля вдохновения');
+      assert.strictEqual(inspiration.type, 'number', 'вдохновение осталось флажком');
+      assert.strictEqual(inspiration.max, String(window.DnD5e.LIMITS.maxInspiration));
+      const equipment = sheetHost.querySelector('[data-field="equipment"]');
+      assert(equipment, 'нет поля снаряжения');
+      const coinsBox = equipment.closest('.box').nextElementSibling;
+      assert(coinsBox && coinsBox.querySelector('.sheet__coins'), 'монеты не в колонке снаряжения');
+      assert.strictEqual(coinsBox.querySelector('.box__title').textContent, 'Монеты');
+      const stateBox = [...sheetHost.querySelectorAll('.box')]
+        .find((box) => box.querySelector('.box__title')?.textContent === 'Состояние');
+      assert(stateBox, 'нет блока состояния');
+      assert(!stateBox.querySelector('.sheet__coins'), 'монеты остались в состоянии');
+    });
+
     check('лист можно унести на бумагу, а из списка игроков печатать нечего', () => {
       const print = [...sheetHost.querySelectorAll('.btn')].find((button) => button.textContent.includes('Печать'));
       assert(print, 'в листе нет кнопки печати');
@@ -1200,6 +1216,29 @@
       mapView.render(MAP_STATE, { role: 'player', playerId: 'p-1' });
     });
 
+    check('зрение по фишке прячет карту от игрока и не трогает мастера', () => {
+      const sightState = {
+        ...MAP_STATE,
+        maps: {
+          ...MAP_STATE.maps,
+          world: {
+            ...MAP_STATE.maps.world,
+            items: [{ ...MAP_STATE.maps.world.items[0], visionPerPlayer: true }]
+          }
+        },
+        tokens: MAP_STATE.tokens.map((token) => (
+          token.id === 't2' ? { ...token, vision: 60 } : token
+        ))
+      };
+      mapView.render(sightState, { role: 'player', playerId: 'p-1' });
+      const playerSight = mapHost.querySelector('.map-sight');
+      assert(playerSight && !playerSight.hidden, 'у игрока нет маски зрения');
+      assert(playerSight.width > 0 && playerSight.height > 0, 'маска зрения без размера');
+      mapView.render(sightState, { role: 'dm', playerId: 'dm' });
+      assert(mapHost.querySelector('.map-sight').hidden, 'мастеру показали маску зрения');
+      mapView.render(MAP_STATE, { role: 'player', playerId: 'p-1' });
+    });
+
     check('кадр из предпросмотра переносится на картинку фишки', () => {
       const withCrop = {
         ...MAP_STATE,
@@ -1662,6 +1701,18 @@
       });
     });
 
+    check('шаблон собирает фишки внутри области для урона', () => {
+      mapView.render(bigMapState(MAP_STATE), { role: 'dm', playerId: 'dm' });
+      withRealMapSize(() => {
+        const hits = mapView.tokensInTemplate({ kind: 'sphere', x: 0.5, y: 0.5, size: 5, rotation: 0 });
+        const ids = hits.map((token) => token.id);
+        assert(ids.includes('t2'), `фишка в центре не попала: ${ids.join(', ')}`);
+        assert(!ids.includes('t1'), `фишка снаружи попала: ${ids.join(', ')}`);
+        const far = mapView.tokensInTemplate({ kind: 'sphere', x: 0.1, y: 0.1, size: 5, rotation: 0 });
+        assert.strictEqual(far.length, 0, `пустая область задела фишки: ${far.map((t) => t.id).join(', ')}`);
+      });
+    });
+
     check('в бою фишку выбирают нажатием и она перестаёт таскаться', () => {
       mapView.render(COMBAT_STATE, { role: 'dm', playerId: 'dm' });
       const node = mapHost.querySelector('[data-token-id="t1"]');
@@ -1723,16 +1774,18 @@
       assert(dmHost.querySelector('.chat__whisper').hidden, 'у мастера осталась кнопка шёпота');
     });
 
-    check('мастер выбирает адресата шёпота и удаляет сообщение', () => {
+    check('мастер выбирает адресата шёпота, правит и удаляет сообщение', () => {
       const host = document.createElement('div');
       let sent = null;
       let deleted = null;
+      let edited = null;
       const chat = new window.TableUI.ChatPanel(host, {
         canWhisper: () => true,
         whisperTargets: () => [{ playerId: 'p2', name: 'Игрок' }],
         canManage: () => true,
         onSend: (text, whisper, to) => { sent = { text, whisper, to }; },
-        onDeleteMessage: (id) => { deleted = id; }
+        onDeleteMessage: (id) => { deleted = id; },
+        onEditMessage: (message) => { edited = message; }
       });
       chat.renderAll([{ id: 'm1', from: 'Мастер', role: 'dm', text: 'Тайна' }]);
       const to = host.querySelector('.chat__to');
@@ -1743,6 +1796,13 @@
       host.querySelector('.chat__form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
       assert.deepStrictEqual(sent, { text: 'Только тебе', whisper: false, to: 'p2' },
         'шёпот мастера ушёл не тому');
+      const edit = host.querySelector('.chat__edit');
+      assert(edit, 'у мастера нет кнопки правки сообщения');
+      edit.click();
+      assert.strictEqual(edited && edited.id, 'm1', 'в правку ушло не то сообщение');
+      chat.updateMessage('m1', 'Исправленная тайна', new Date().toISOString());
+      assert.strictEqual(host.querySelector('.chat__text').textContent, 'Исправленная тайна');
+      assert(host.querySelector('.chat__edited'), 'нет пометки «изменено»');
       const remove = host.querySelector('.chat__delete');
       assert(remove, 'у мастера нет кнопки удаления сообщения');
       remove.click();
@@ -3175,6 +3235,41 @@
       assert(diceHost.querySelector('.dice__last').textContent.includes('Артём бросил d12'), 'крупный результат');
     });
 
+    // Длинная история не должна распирать панель: иначе плашка результата
+    // сжимается до полоски, а строки рисуются поверх фона и за границей панели.
+    const longDiceHost = document.createElement('div');
+    longDiceHost.className = 'panel';
+    longDiceHost.style.cssText = 'width:340px;height:560px;flex:none;';
+    sandbox.appendChild(longDiceHost);
+    const longDicePanel = new window.TableUI.DicePanel(longDiceHost, {});
+    const longRolls = Array.from({ length: 80 }, (_, index) => ({
+      playerName: 'Мастер',
+      formula: 'd20',
+      count: 1,
+      sides: 20,
+      values: [(index % 20) + 1],
+      keptValues: [(index % 20) + 1],
+      droppedValues: [],
+      modifier: 0,
+      result: (index % 20) + 1,
+      time: new Date().toISOString()
+    }));
+    longDicePanel.renderAll(longRolls);
+    longDicePanel.showLast(longRolls[longRolls.length - 1]);
+    check('длинная история не ломает плашку результата и фон панели', () => {
+      const hostRect = longDiceHost.getBoundingClientRect();
+      const lastRect = longDiceHost.querySelector('.dice__last').getBoundingClientRect();
+      const history = longDiceHost.querySelector('.dice__history');
+      const historyRect = history.getBoundingClientRect();
+      assert(lastRect.height >= 50, `плашка результата сжалась: ${lastRect.height}px`);
+      assert(lastRect.bottom <= historyRect.top, 'плашка налезла на историю');
+      assert(history.scrollHeight > history.clientHeight, 'история не прокручивается');
+      assert(historyRect.bottom <= hostRect.bottom + 1,
+        `история вылезла за панель: ${historyRect.bottom} > ${hostRect.bottom}`);
+      assert(historyRect.right <= hostRect.right + 1,
+        `история вылезла вправо: ${historyRect.right} > ${hostRect.right}`);
+    });
+
     /* ------------------------------------------------ панель порядка боя */
 
     const initiativeHost = document.createElement('div');
@@ -3519,6 +3614,7 @@
 
     const conditionChanges = [];
     const auraChanges = [];
+    const visionChanges = [];
     const condTokens = TOKENS.concat([
       { id: 't6', name: 'Огр', mapType: 'world', x: 0.5, y: 0.5, imageUrl: null, assignedPlayerId: null, color: '#8fb04a', conditions: ['prone', 'poisoned'] },
       { id: 't7', name: 'Монета', mapType: 'world', x: 0.3, y: 0.3, imageUrl: null, assignedPlayerId: null, color: '#c9a34a', conditions: [] }
@@ -3527,7 +3623,8 @@
       onSetTokenConditions: (tokenId, conditions, conditionDurations, conditionDurationUnits) => (
         conditionChanges.push({ tokenId, conditions, conditionDurations, conditionDurationUnits })
       ),
-      onSetTokenAura: (tokenId, feet, color) => auraChanges.push({ tokenId, feet, color })
+      onSetTokenAura: (tokenId, feet, color) => auraChanges.push({ tokenId, feet, color }),
+      onSetTokenVision: (tokenId, vision) => visionChanges.push({ tokenId, vision })
     });
     sandbox.appendChild(condPanel.root);
     condPanel.render(condTokens, PLAYERS, { role: 'dm', playerId: 'dm' });
@@ -3600,6 +3697,17 @@
       assert.deepStrictEqual(auraChanges.at(-1),
         { tokenId: 't6', feet: 20, color: '#6aa9ff' },
         'аура не ушла на сервер');
+    });
+
+    check('зрение фишки задаётся из списка и уходит мастеру', () => {
+      const rows = [...condPanel.root.querySelectorAll('.token-row')];
+      const ogre = rows.find((row) => row.textContent.includes('Огр'));
+      const vision = ogre.querySelector('.token-row__vision');
+      assert(vision, 'у фишки нет выбора зрения');
+      vision.value = '60';
+      vision.dispatchEvent(new Event('change', { bubbles: true }));
+      assert.deepStrictEqual(visionChanges.at(-1), { tokenId: 't6', vision: 60 },
+        'зрение не ушло на сервер');
     });
 
     check('подсказки состояний видны на карте всем, включая игрока', () => {
@@ -4490,6 +4598,15 @@
       assert(!document.querySelector('#btn-stop-host').hidden, 'нет кнопки остановки стола');
       assert(!document.querySelector('#addresses-panel').hidden, 'нет панели приглашения');
       assert(!document.querySelector('#journal-panel').hidden, 'нет панели журнала');
+    });
+    check('календарь и заметки партии готовы у мастера', () => {
+      assert(document.querySelector('#calendar-panel'), 'нет панели календаря');
+      assert(!document.querySelector('#btn-calendar-add').hidden, 'мастер не может добавить событие');
+      assert(document.querySelector('#calendar-events').textContent.includes('Событий пока нет'),
+        'пустой календарь не объясняет себя');
+      assert(!document.querySelector('#party-notes-panel').hidden, 'нет панели заметок партии');
+      assert(!document.querySelector('#party-notes').readOnly, 'заметки партии недоступны мастеру');
+      assert(document.querySelector('#btn-party-notes-save'), 'нет кнопки сохранения заметок');
     });
     check('журнал мастера пуст и готов к записи', () => {
       assert(document.querySelector('#btn-journal-add'), 'нет кнопки добавления записи');
@@ -5633,6 +5750,8 @@
       const surface = document.querySelector('#map-root .map-surface');
       const z = (selector) => Number(getComputedStyle(surface.querySelector(selector)).zIndex);
       assert(z('.map-light') < z('.map-glow'), 'пятна оказались под ночной завесой');
+      assert(z('.map-glow') < z('.map-sight'), 'маска зрения оказалась под светом');
+      assert(z('.map-sight') < z('.map-fog'), 'туман оказался под маской зрения');
       assert(z('.map-glow') < z('.map-walls'), 'стены оказались под пятнами света');
       assert(z('.map-walls') < z('.map-fog'), 'туман оказался под стенами');
       assert(z('.map-fog') === 7, `туман должен быть верхним слоем: ${z('.map-fog')}`);

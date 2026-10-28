@@ -396,10 +396,25 @@ async function createTableServer(options) {
     const pending = hpNotices.get(tokenId);
     if (!pending) return;
     hpNotices.delete(tokenId);
-    const { token, before, actor, type } = pending;
+    const { token, before, actor, type, defense } = pending;
     if (!room.tokens.includes(token) || !room.isTokenVisibleToPlayers(token)) return;
     const after = token.hp;
-    if (after === before) return;
+    if (after === before) {
+      if (defense === 'immune' && type) {
+        const name = room.tokenForViewer(token, false).name || 'Фишка';
+        const notice = {
+          from: actor.name,
+          playerId: actor.playerId,
+          role: actor.role,
+          text: `${name}: иммунитет к урону (${type})`,
+          system: true,
+          time: new Date().toISOString()
+        };
+        pushChat(notice);
+        io.emit('chatMessage', notice);
+      }
+      return;
+    }
     const delta = after - before;
     const name = room.tokenForViewer(token, false).name || 'Фишка';
     const kind = `${delta < 0 ? 'урон' : 'лечение'} ${Math.abs(delta)}${type ? `, ${type}` : ''}`;
@@ -420,8 +435,9 @@ async function createTableServer(options) {
    * @param {number} before прочность до правки
    * @param {{playerId: string, name: string, role: string}} actor
    * @param {string} [type] тип урона для подписи
+   * @param {string} [defense] normal|resistant|vulnerable|immune
    */
-  const announceTokenHp = (token, before, actor, type) => {
+  const announceTokenHp = (token, before, actor, type, defense) => {
     if (!token.assignedPlayerId) return;
     if (!room.isTokenVisibleToPlayers(token)) return;
     const pending = hpNotices.get(token.id);
@@ -435,6 +451,7 @@ async function createTableServer(options) {
       before,
       actor,
       type,
+      defense,
       timer: setTimeout(() => flushHpNotice(token.id), HP_NOTICE_DELAY)
     });
   };
@@ -818,7 +835,11 @@ async function createTableServer(options) {
         // Как и любая новая фишка, сначала скрыта: мастер выводит партию и
         // проверяет расстановку, потом открывает.
         hidden: true,
-        color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length]
+        color: TOKEN_PALETTE[room.tokens.length % TOKEN_PALETTE.length],
+        damageResistances: [],
+        damageVulnerabilities: [],
+        damageImmunities: [],
+        vision: 0
       };
       room.tokens.push(token);
       markDirty();
@@ -1015,6 +1036,55 @@ socket.on('setGrid', (payload) => {
       if (typeof ack === 'function') ack({ ok: true, months: room.calendarMonths });
     });
 
+    /** Событие календаря: добавляет и удаляет мастер, видят все. */
+    socket.on('addCalendarEvent', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const event = room.addCalendarEvent(payload);
+      if (!event) {
+        const error = room.calendarEvents.length >= LIMITS.maxCalendarEvents
+          ? 'Слишком много событий в календаре'
+          : 'Нужно название и день события';
+        emitError(socket, error);
+        if (typeof ack === 'function') ack({ ok: false, error });
+        return;
+      }
+      markDirty();
+      io.emit('calendarEventsUpdated', room.calendarEvents);
+      if (typeof ack === 'function') ack({ ok: true, event, events: room.calendarEvents });
+    });
+
+    socket.on('deleteCalendarEvent', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      if (!room.deleteCalendarEvent(payload && payload.id)) {
+        emitError(socket, 'Событие не найдено');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Событие не найдено' });
+        return;
+      }
+      markDirty();
+      io.emit('calendarEventsUpdated', room.calendarEvents);
+      if (typeof ack === 'function') ack({ ok: true, events: room.calendarEvents });
+    });
+
+    /**
+     * Общие заметки партии. В отличие от журнала, писать может любой участник.
+     * Побеждает последняя запись: отдельного слияния строк нет.
+     */
+    socket.on('setPartyNotes', (payload, ack) => {
+      if (!requireJoined(socket)) return;
+      const changed = room.setPartyNotes(payload && payload.text);
+      if (changed) {
+        markDirty();
+        io.emit('partyNotesUpdated', room.partyNotes);
+      }
+      if (typeof ack === 'function') ack({ ok: true, notes: room.partyNotes });
+    });
+
     socket.on('setGameTime', (payload) => {
       if (!requireDm(socket)) return;
       const before = { ...room.gameTime };
@@ -1143,7 +1213,11 @@ socket.on('setGrid', (payload) => {
         conditions: [],
         // Свет у новой фишки тоже должен быть: иначе гасить его было бы нечем,
         // а проверка «светит ли кто-нибудь» ломалась бы на самой первой фишке.
-        light: normalizeTokenLight(null)
+        light: normalizeTokenLight(null),
+        damageResistances: [],
+        damageVulnerabilities: [],
+        damageImmunities: [],
+        vision: 0
       };
       token.hp = token.maxHp;
       room.tokens.push(token);
@@ -1198,6 +1272,18 @@ socket.on('setGrid', (payload) => {
       const follow = Boolean(payload && payload.follow);
       if (item.fogFollow === follow) return;
       item.fogFollow = follow;
+      markDirty();
+      broadcastMapUpdate(type);
+    });
+
+    /** Тумблер «зрение по фишке»: игрок видит только то, что видит его фишка. */
+    socket.on('setMapVision', (payload) => {
+      if (!requireDm(socket)) return;
+      const { type, item } = findMapItem(payload);
+      if (!item) return emitError(socket, 'Карта не найдена');
+      const visionPerPlayer = Boolean(payload && payload.visionPerPlayer);
+      if (item.visionPerPlayer === visionPerPlayer) return;
+      item.visionPerPlayer = visionPerPlayer;
       markDirty();
       broadcastMapUpdate(type);
     });
@@ -1469,6 +1555,21 @@ socket.on('setGrid', (payload) => {
     });
 
     /**
+     * Защиты фишки: сопротивления, уязвимости и иммунитеты.
+     *
+     * Список типов один с окном урона. Неизвестное отбрасывается, поэтому
+     * отсюда можно отправлять и строку с запятыми, и готовый массив.
+     */
+    socket.on('setTokenDefenses', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      room.setTokenDefenses(token, payload);
+      markDirty();
+      emitToken('tokenUpdated', token);
+    });
+
+    /**
      * Состояния фишки: слепой, парализован, сбит с ног и прочие.
      *
      * В отличие от прочности, состояния видны и игрокам: по «сбит с ног» и
@@ -1513,6 +1614,16 @@ socket.on('setGrid', (payload) => {
       if (!token) return emitError(socket, 'Фишка не найдена');
       room.pushUndo();
       room.setTokenAura(token, { feet: payload && payload.feet, color: payload && payload.color });
+      markDirty();
+      emitToken('tokenUpdated', token);
+    });
+
+    socket.on('setTokenVision', (payload) => {
+      if (!requireDm(socket)) return;
+      const token = findToken(payload && payload.tokenId);
+      if (!token) return emitError(socket, 'Фишка не найдена');
+      room.pushUndo();
+      room.setTokenVision(token, payload && payload.vision);
       markDirty();
       emitToken('tokenUpdated', token);
     });
@@ -1588,7 +1699,7 @@ socket.on('setGrid', (payload) => {
         playerId: socket.data.playerId,
         name: socket.data.name,
         role: socket.data.role
-      }, result.type);
+      }, result.type, result.defense);
       if (result.concentration) {
         const player = room.players.get(token.assignedPlayerId);
         const modifier = fogModel.computeDerived(result.sheet).saves.con.total;
@@ -2040,7 +2151,11 @@ socket.on('setGrid', (payload) => {
           size: clampInt(block.size, 1, 4, 1),
           maxHp,
           hp: maxHp,
-          conditions: []
+          conditions: [],
+          damageResistances: [],
+          damageVulnerabilities: [],
+          damageImmunities: [],
+          vision: 0
         };
         room.tokens.push(token);
         created.push(token);
@@ -2523,6 +2638,51 @@ socket.on('rollDice', (payload) => {
       io.emit('chatDeleted', { id });
     });
 
+    /**
+     * Правка сообщения мастером: опечатка или случайно раскрытая тайна.
+     *
+     * Служебные объявления и строки бросков не редактируются: они связаны с
+     * историей бросков, и правка текста рассинхронизировала бы ленту.
+     */
+    socket.on('editChatMessage', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const id = String((payload && payload.id) || '');
+      const message = room.chatHistory.find((item) => item.id === id);
+      if (!message) {
+        emitError(socket, 'Сообщение не найдено');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Сообщение не найдено' });
+        return;
+      }
+      if (message.system || message.isRoll) {
+        emitError(socket, 'Системные сообщения и броски не редактируются');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Системные сообщения и броски не редактируются' });
+        return;
+      }
+      const text = sanitizeText(payload && payload.text, LIMITS.maxChatLength).trim();
+      if (!text) {
+        emitError(socket, 'Текст сообщения пуст');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Текст сообщения пуст' });
+        return;
+      }
+      message.text = text;
+      message.editedAt = new Date().toISOString();
+      markDirty();
+      const update = { id, text: message.text, editedAt: message.editedAt };
+      if (message.whisper) {
+        io.to('dm-sockets').emit('chatEdited', update);
+        if (message.to) io.to(message.to).emit('chatEdited', update);
+        if (message.role === ROLE_PLAYER && message.playerId) {
+          io.to(message.playerId).emit('chatEdited', update);
+        }
+      } else {
+        io.emit('chatEdited', update);
+      }
+      if (typeof ack === 'function') ack({ ok: true, message: update });
+    });
+
     /** Полная очистка ленты. Тоже только мастер. */
     socket.on('clearChat', () => {
       if (!requireDm(socket)) return;
@@ -2718,6 +2878,37 @@ socket.on('rollDice', (payload) => {
         io.to('dm-sockets').emit('characterSheetUpdated', { playerId, sheet });
       }
       if (typeof ack === 'function') ack({ ok: true, shares: result.shares, coins: result.coins });
+    });
+
+    /**
+     * Выдать монеты со склада одному игроку.
+     *
+     * Лист меняется без Ctrl+Z, как и при делении: снимок отмены не хранит
+     * кошельки, и откат разошёлся бы с ними.
+     */
+    socket.on('giveInventoryCoins', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Это действие доступно только ДМ' });
+        return;
+      }
+      const result = room.giveInventoryCoins(
+        payload && payload.playerId,
+        payload && payload.coin,
+        payload && payload.amount
+      );
+      if (!result.ok) {
+        emitError(socket, result.error);
+        if (typeof ack === 'function') ack({ ok: false, error: result.error });
+        return;
+      }
+      markDirty();
+      io.emit('inventoryCoinsUpdated', result.coins);
+      const sheet = room.sheets.get(result.playerId);
+      if (sheet) {
+        io.to(result.playerId).emit('characterSheetData', { playerId: result.playerId, sheet });
+        io.to('dm-sockets').emit('characterSheetUpdated', { playerId: result.playerId, sheet });
+      }
+      if (typeof ack === 'function') ack(result);
     });
 
     socket.on('rollRequest', (payload, ack) => {

@@ -34,6 +34,10 @@ const normalizeSurface = fogModel.normalizeSurface;
 const normalizeWalls = fogModel.normalizeWalls;
 const normalizeLights = fogModel.normalizeLights;
 const LIGHT_LIMITS = fogModel.LIGHT_LIMITS || { maxRadius: 200 };
+/** Типы урона: один список с интерфейсом, иначе сопротивление не совпадёт с типом. */
+const DAMAGE_TYPE_IDS = fogModel.DAMAGE_TYPE_IDS || new Set();
+/** Урон после защит: правило одно с листом и картой. */
+const damageAfterDefenses = fogModel.damageAfterDefenses;
 /** Максимум хитов с поправкой на истощение: правило читают лист, карта и сервер. */
 const effectiveMaxHp = fogModel.effectiveMaxHp;
 /** Пул костей хитов нужен долгому отдыху всей партии: правило одно с листом. */
@@ -64,6 +68,8 @@ const LIMITS = {
   maxTokenConditions: 16,
   /** Истощение по PHB: шесть уровней, дальше смерть. */
   maxExhaustion: 6,
+  /** Вдохновений может быть несколько: счётчик, а не флажок. */
+  maxInspiration: 99,
   /** Название заклинания концентрации: одна строка. */
   maxConcentrationLength: 120,
   /** Монеты в листе и общем складе. */
@@ -79,6 +85,9 @@ const LIMITS = {
   maxJournalText: 8000,
   maxJournalTags: 8,
   maxJournalTag: 32,
+  maxCalendarEvents: 200,
+  maxCalendarTitle: 120,
+  maxPartyNotes: 20000,
   maxInventoryItems: 500,
   maxInventoryName: 120,
   maxInventoryNotes: 1000,
@@ -282,6 +291,33 @@ function normalizeAura(raw) {
     ? raw.color
     : '#6aa9ff';
   return { feet, color };
+}
+
+/**
+ * Радиус зрения фишки в футах: 0 — зрения нет, маска не рисуется.
+ * @param {unknown} raw
+ * @returns {number}
+ */
+function normalizeVision(raw) {
+  return clampInt(raw, 0, 240, 0);
+}
+
+/**
+ * Защиты фишки от урона: сопротивления, уязвимости и иммунитеты.
+ *
+ * Список один на клиента и сервер, поэтому неизвестные типы отбрасываются.
+ * Строка с запятыми принимается на случай старых кампаний и ручной правки.
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function normalizeDamageDefenses(raw) {
+  const source = Array.isArray(raw) ? raw : String(raw || '').split(',');
+  const result = [];
+  for (const item of source) {
+    const value = sanitizeText(item, 40).trim().toLowerCase();
+    if (DAMAGE_TYPE_IDS.has(value) && !result.includes(value)) result.push(value);
+  }
+  return result.slice(0, 16);
 }
 
 /**
@@ -560,7 +596,7 @@ function createEmptySheet(playerName = '') {
     // Потраченные кости хитов: короткий отдых увеличивает, долгий уменьшает.
     hitDiceSpent: 0,
     // Вдохновение, истощение и концентрация — ресурсы листа, а не производные.
-    inspiration: false,
+    inspiration: 0,
     exhaustion: 0,
     concentration: '',
     coins: emptyCoins(),
@@ -795,7 +831,7 @@ function normalizeSheet(input, fallbackPlayerName = '') {
     sheet.spellSlotsMax = clampSlotArray(raw.spellSlotsMax);
   sheet.hitDice = sanitizeText(raw.hitDice, 20);
   sheet.hitDiceSpent = clampInt(raw.hitDiceSpent, 0, LIMITS.maxLevel, 0);
-  sheet.inspiration = Boolean(raw.inspiration);
+  sheet.inspiration = clampInt(raw.inspiration, 0, LIMITS.maxInspiration, 0);
   sheet.exhaustion = clampInt(raw.exhaustion, 0, LIMITS.maxExhaustion, 0);
   sheet.concentration = sanitizeText(raw.concentration, LIMITS.maxConcentrationLength).trim();
   sheet.coins = normalizeCoins(raw.coins);
@@ -846,6 +882,8 @@ class RoomState {
     this.gameTime = emptyTime();
     /** @type {string[]} названия месяцев; длина задаёт длину года. */
     this.calendarMonths = DEFAULT_CALENDAR_MONTHS.slice();
+    /** @type {object[]} события календаря: абсолютный день и название. */
+    this.calendarEvents = [];
     /** @type {object[]} */
     this.tokens = [];
     /**
@@ -873,6 +911,8 @@ class RoomState {
     this.chatHistory = [];
     /** Заметки мастера по кампании, не путать с импортированным журналом. */
     this.journal = '';
+    /** Общие заметки партии: их правят и мастер, и игроки. */
+    this.partyNotes = '';
     /** @type {object[]} структурированный журнал: NPC, места, квесты, фракции, предметы. */
     this.journalEntries = [];
     /** @type {object[]} общий склад партии. */
@@ -967,6 +1007,8 @@ class RoomState {
     // В кампаниях до появления часов поля нет: стол начинает с утра первого дня.
     this.gameTime = normalizeTime(data.gameTime);
     this.calendarMonths = normalizeCalendarMonths(data.calendarMonths);
+    this.calendarEvents = normalizeCalendarEvents(data.calendarEvents);
+    this.partyNotes = sanitizeText(data.partyNotes, LIMITS.maxPartyNotes);
 
     const tokens = Array.isArray(data.tokens) ? data.tokens.slice(0, LIMITS.maxTokens) : [];
     this.tokens = tokens
@@ -1343,6 +1385,7 @@ fogMask: normalizeFog(source.fogMask),
           // Тумблер «открывать туман за фишками игроков». Старые карты
           // открывались только кистью, поэтому по умолчанию выключен.
           fogFollow: source.fogFollow === true,
+          visionPerPlayer: source.visionPerPlayer === true,
           uploadedAt: source.uploadedAt || new Date().toISOString()
         });
     } else if (Array.isArray(source.items)) {
@@ -1364,6 +1407,7 @@ fogMask: normalizeFog(source.fogMask),
           templates: normalizeTemplates(item.templates),
           darkness: normalizeDarkness(item.darkness),
           fogFollow: item.fogFollow === true,
+          visionPerPlayer: item.visionPerPlayer === true,
           uploadedAt: item.uploadedAt || new Date().toISOString()
         });
       }
@@ -1513,7 +1557,14 @@ fogMask: normalizeFog(source.fogMask),
       conditionDurations: durations,
       conditionDurationUnits: normalizeConditionUnits(token.conditionDurationUnits, conditions, durations),
       // Аура едет вместе с фишкой: «Духовные стражи», аура паладина, свет костра.
-      aura: normalizeAura(token.aura)
+      aura: normalizeAura(token.aura),
+      // Радиус зрения для тумана по фишке. Ноль — маска не рисуется.
+      vision: normalizeVision(token.vision),
+      // Защиты от урона. Хранятся на фишке, а не в листе: мастер ставит их
+      // монстру, а у игрока лист остаётся единственным источником здоровья.
+      damageResistances: normalizeDamageDefenses(token.damageResistances),
+      damageVulnerabilities: normalizeDamageDefenses(token.damageVulnerabilities),
+      damageImmunities: normalizeDamageDefenses(token.damageImmunities)
     };
     if (Number.isFinite(Number(token.maxHp)) && Number(token.maxHp) > 0) {
       result.maxHp = clampInt(token.maxHp, 1, LIMITS.maxTokenHp, 1);
@@ -1549,6 +1600,31 @@ fogMask: normalizeFog(source.fogMask),
    */
   setTokenAura(token, raw) {
     token.aura = normalizeAura(raw);
+    return token;
+  }
+
+  /**
+   * Радиус зрения фишки в футах.
+   * @param {object} token
+   * @param {unknown} raw
+   * @returns {object}
+   */
+  setTokenVision(token, raw) {
+    token.vision = normalizeVision(raw);
+    return token;
+  }
+
+  /**
+   * Защиты фишки от урона.
+   * @param {object} token
+   * @param {{resistances?: unknown, vulnerabilities?: unknown, immunities?: unknown}} [raw]
+   * @returns {object}
+   */
+  setTokenDefenses(token, raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    token.damageResistances = normalizeDamageDefenses(source.resistances);
+    token.damageVulnerabilities = normalizeDamageDefenses(source.vulnerabilities);
+    token.damageImmunities = normalizeDamageDefenses(source.immunities);
     return token;
   }
 
@@ -1610,16 +1686,25 @@ fogMask: normalizeFog(source.fogMask),
    * @returns {{token: object, sheet: object|null, absorbed: number, concentration: object|null, beforeHp: number}|null}
    */
   applyTokenDamage(token, rawAmount, rawType, healing) {
-    const amount = clampInt(rawAmount, 0, 9999, 0);
-    if (!amount) return null;
-    const type = healing ? '' : sanitizeText(rawType, 40).trim();
+    const raw = clampInt(rawAmount, 0, 9999, 0);
+    if (!raw) return null;
+    const type = healing ? '' : sanitizeText(rawType, 40).trim().toLowerCase();
     const sheet = token.assignedPlayerId ? this.sheets.get(token.assignedPlayerId) : null;
     const max = sheet ? effectiveMaxHp(sheet) : (token.maxHp === null || token.maxHp === undefined
       ? null
       : clampInt(token.maxHp, 1, 9999, 1));
     if (max === null) return null;
     const beforeHp = sheet ? sheet.hp : clampInt(token.hp, 0, max, 0);
+    const defense = healing
+      ? { amount: raw, kind: 'normal' }
+      : damageAfterDefenses(raw, type, {
+        resistances: token.damageResistances,
+        vulnerabilities: token.damageVulnerabilities,
+        immunities: token.damageImmunities
+      });
+    const amount = defense.amount;
     let absorbed = 0;
+    let instantDeath = false;
     if (sheet) {
       if (healing) {
         const wasDown = sheet.hp <= 0;
@@ -1632,7 +1717,32 @@ fogMask: normalizeFog(source.fogMask),
         const temp = clampInt(sheet.tempHp, 0, 9999, 0);
         absorbed = Math.min(temp, amount);
         sheet.tempHp = temp - absorbed;
-        sheet.hp = clampInt(sheet.hp - (amount - absorbed), 0, max, 0);
+        const hpDamage = amount - absorbed;
+        const wasDown = sheet.hp <= 0;
+        // Урон по лежащему герою — провал спасброска смерти. Если урон не
+        // меньше максимума хитов, герой погибает сразу.
+        if (hpDamage > 0 && wasDown) {
+          sheet.deathSavesSuccesses = 0;
+          if (hpDamage >= max) {
+            sheet.deathSavesFailures = LIMITS.maxDeathSaves;
+            instantDeath = true;
+          } else {
+            sheet.deathSavesFailures = Math.min(
+              LIMITS.maxDeathSaves,
+              clampInt(sheet.deathSavesFailures, 0, LIMITS.maxDeathSaves, 0) + 1
+            );
+          }
+        }
+        sheet.hp = clampInt(sheet.hp - hpDamage, 0, max, 0);
+        // Массивный урон: остаток после обнуления хитов не меньше максимума.
+        if (!wasDown && hpDamage > 0 && sheet.hp === 0) {
+          const remaining = hpDamage - beforeHp;
+          if (remaining >= max) {
+            sheet.deathSavesFailures = LIMITS.maxDeathSaves;
+            sheet.deathSavesSuccesses = 0;
+            instantDeath = true;
+          }
+        }
       }
       token.maxHp = max;
       token.hp = sheet.hp;
@@ -1648,8 +1758,12 @@ fogMask: normalizeFog(source.fogMask),
       type,
       healing: Boolean(healing),
       beforeHp,
+      rawAmount: raw,
+      damage: amount,
+      defense: defense.kind,
+      instantDeath,
       // Проверку концентрации бросает игрок: сервер только готовит СЛ.
-      concentration: sheet && !healing && sheet.concentration
+      concentration: sheet && !healing && sheet.concentration && amount > 0
         ? { spell: sheet.concentration, dc: Math.max(10, Math.floor(amount / 2)) }
         : null
     };
@@ -1730,6 +1844,8 @@ fogMask: normalizeFog(source.fogMask),
       grid: this.grid,
       gameTime: this.gameTime,
       calendarMonths: this.calendarMonths,
+      calendarEvents: this.calendarEvents,
+      partyNotes: this.partyNotes,
       tokens: this.tokens,
       // Порядок боя видят все: он и есть объявление для игроков.
       initiative: this.initiative,
@@ -1998,6 +2114,9 @@ fogMask: normalizeFog(source.fogMask),
       gameTime: this.gameTime,
       // Названия месяцев тоже общие: иначе игрок видел бы чужую дату.
       calendarMonths: this.calendarMonths,
+      // События календаря и заметки партии общие: их читают все, пишут по роли.
+      calendarEvents: this.calendarEvents,
+      partyNotes: this.partyNotes,
       // Скрытые фишки — заготовки мастера, и игрокам их видеть нельзя.
       // Фильтруем здесь, а не в интерфейсе: иначе фишка утекает в снимок
       // состояния, который игрок получает целиком.
@@ -2134,6 +2253,42 @@ fogMask: normalizeFog(source.fogMask),
   }
 
   /**
+   * Выдаёт монеты со склада конкретному игроку.
+   *
+   * Сколько реально перешло, возвращается в ответе: запросить больше, чем
+   * лежит на складе или влезает в кошелёк листа, нельзя молча.
+   * @param {string} playerId
+   * @param {string} coin
+   * @param {unknown} rawAmount
+   * @returns {{ok: true, playerId: string, coin: string, moved: number, coins: object, playerCoins: object}|{ok: false, error: string}}
+   */
+  giveInventoryCoins(playerId, coin, rawAmount) {
+    const key = String(coin || '');
+    if (!COIN_KEYS.includes(key)) return { ok: false, error: 'Неизвестная монета' };
+    const player = this.players.get(String(playerId || ''));
+    if (!player || player.role !== ROLE_PLAYER) return { ok: false, error: 'Игрок не найден' };
+    const sheet = this.sheets.get(player.playerId);
+    if (!sheet) return { ok: false, error: 'У игрока нет листа' };
+    const amount = clampInt(rawAmount, 1, LIMITS.maxCoins, 0);
+    if (!amount) return { ok: false, error: 'Укажите количество' };
+    const available = clampInt(this.inventoryCoins[key], 0, LIMITS.maxCoins, 0);
+    if (!available) return { ok: false, error: 'На складе нет этих монет' };
+    const roomInSheet = LIMITS.maxCoins - clampInt(sheet.coins[key], 0, LIMITS.maxCoins, 0);
+    const moved = Math.min(amount, available, roomInSheet);
+    if (!moved) return { ok: false, error: 'В кошельке листа нет места' };
+    this.inventoryCoins[key] = available - moved;
+    sheet.coins[key] = clampInt(sheet.coins[key] + moved, 0, LIMITS.maxCoins, 0);
+    return {
+      ok: true,
+      playerId: player.playerId,
+      coin: key,
+      moved,
+      coins: this.inventoryCoins,
+      playerCoins: sheet.coins
+    };
+  }
+
+  /**
    * Названия месяцев. Меняет только мастер: от них зависит подпись даты,
    * которую видят все.
    * @param {unknown} input
@@ -2146,6 +2301,47 @@ fogMask: normalizeFog(source.fogMask),
     if (same) return false;
     this.pushUndo();
     this.calendarMonths = next;
+    return true;
+  }
+
+  /**
+   * Добавляет событие календаря.
+   * @param {{title?: unknown, day?: unknown}} input
+   * @returns {object|null}
+   */
+  addCalendarEvent(input) {
+    if (this.calendarEvents.length >= LIMITS.maxCalendarEvents) return null;
+    const event = normalizeCalendarEvent(input);
+    if (!event) return null;
+    this.pushUndo();
+    this.calendarEvents.push(event);
+    return event;
+  }
+
+  /**
+   * Удаляет событие календаря.
+   * @param {unknown} id
+   * @returns {boolean}
+   */
+  deleteCalendarEvent(id) {
+    const key = String(id || '');
+    const next = this.calendarEvents.filter((event) => event.id !== key);
+    if (next.length === this.calendarEvents.length) return false;
+    this.pushUndo();
+    this.calendarEvents = next;
+    return true;
+  }
+
+  /**
+   * Общие заметки партии. Пишут и мастер, и игроки, поэтому без pushUndo:
+   * откат мастера не должен стирать чужую запись.
+   * @param {unknown} input
+   * @returns {boolean} изменились ли заметки
+   */
+  setPartyNotes(input) {
+    const next = sanitizeText(input, LIMITS.maxPartyNotes);
+    if (next === this.partyNotes) return false;
+    this.partyNotes = next;
     return true;
   }
 
@@ -2194,7 +2390,8 @@ fogMask: normalizeFog(source.fogMask),
       inventoryCoins: this.inventoryCoins,
       // Часы и календарь мастер крутит руками: смена названий тоже отменяется.
       gameTime: this.gameTime,
-      calendarMonths: this.calendarMonths
+      calendarMonths: this.calendarMonths,
+      calendarEvents: this.calendarEvents
     }));
     if (this.undoStack.length > 20) this.undoStack.shift();
   }
@@ -2212,6 +2409,7 @@ fogMask: normalizeFog(source.fogMask),
     this.inventoryCoins = normalizeCoins(data.inventoryCoins);
     if ('gameTime' in data) this.gameTime = normalizeTime(data.gameTime);
     if ('calendarMonths' in data) this.calendarMonths = normalizeCalendarMonths(data.calendarMonths);
+    if ('calendarEvents' in data) this.calendarEvents = normalizeCalendarEvents(data.calendarEvents);
     if ('activeMap' in data) this.activeMap = data.activeMap;
     if ('activeMapId' in data) this.activeMapId = data.activeMapId;
     return true;
@@ -2234,6 +2432,38 @@ function newJournalId() {
 
 function newInventoryId() {
   return `i-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+function newCalendarEventId() {
+  return `c-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+/**
+ * Событие календаря: абсолютный день и короткое название.
+ * @param {unknown} raw
+ * @returns {{id: string, day: number, title: string}|null}
+ */
+function normalizeCalendarEvent(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = sanitizeText(raw.title, LIMITS.maxCalendarTitle).trim();
+  if (!title) return null;
+  const day = clampInt(raw.day, TIME_LIMITS.minDay, TIME_LIMITS.maxDay, 0);
+  if (!day) return null;
+  const id = sanitizeText(raw.id, 40).trim() || newCalendarEventId();
+  return { id, day, title };
+}
+
+function normalizeCalendarEvents(raw) {
+  const result = [];
+  const seen = new Set();
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const event = normalizeCalendarEvent(item);
+    if (!event || seen.has(event.id)) continue;
+    seen.add(event.id);
+    result.push(event);
+    if (result.length >= LIMITS.maxCalendarEvents) break;
+  }
+  return result;
 }
 
 function newRollRequestId() {

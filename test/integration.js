@@ -66,7 +66,8 @@ const TRACKED = [
   'joined', 'playersUpdate', 'characterSheetData', 'characterSheetUpdated', 'mapUpdated',
   'tokenCreated', 'tokenUpdated', 'tokenMoved', 'tokenDeleted', 'tokenHidden', 'gridUpdated',
   'tokensUpdated', 'mapPing', 'reactionPrompt',
-  'diceRollResult', 'chatMessage', 'chatDeleted', 'chatCleared', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
+  'diceRollResult', 'chatMessage', 'chatDeleted', 'chatCleared', 'chatEdited', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
+  'calendarEventsUpdated', 'partyNotesUpdated',
   'journalUpdated', 'inventoryUpdated', 'inventoryCoinsUpdated', 'rollRequestUpdated', 'stateReload',
   'gameTimeUpdated', 'calendarMonthsUpdated'
 ];
@@ -289,7 +290,7 @@ async function main() {
     skillProficiencies: { athletics: true, perception: false },
     skillExpertise: { athletics: true, stealth: true },
     hp: 44, maxHp: 44, tempHp: 0, hitDice: '1d10', hitDiceSpent: 2,
-    inspiration: true, exhaustion: 2, concentration: 'Благословение',
+    inspiration: 3, exhaustion: 2, concentration: 'Благословение',
     coins: { cp: 1, sp: 2, ep: 3, gp: 4, pp: 5 },
     armorClass: 18, initiativeMisc: 0, speed: 25,
     attacks: 'Боевой топор +7, 1d8+3',
@@ -313,7 +314,7 @@ async function main() {
     assert.strictEqual(saved.sheet.hitDiceSpent, 2);
     assert.strictEqual(saved.sheet.subclass, 'Мастер войны');
     assert.strictEqual(saved.sheet.armorClass, 18);
-    assert.strictEqual(saved.sheet.inspiration, true);
+    assert.strictEqual(saved.sheet.inspiration, 3);
     assert.strictEqual(saved.sheet.exhaustion, 2);
     assert.strictEqual(saved.sheet.concentration, 'Благословение');
     assert.deepStrictEqual(saved.sheet.coins, { cp: 1, sp: 2, ep: 3, gp: 4, pp: 5 });
@@ -945,6 +946,83 @@ async function main() {
 
   await new Promise((resolve) => dm.emit('setCalendarMonths', { months: defaultMonths }, resolve));
   await waitFor(() => room.calendarMonths.length === defaultMonths.length, 'возврат календаря');
+
+  /* ------------------------------------------------- события календаря */
+
+  p1.log.calendarEventsUpdated.length = 0;
+  const eventAck = await new Promise((resolve) => {
+    dm.emit('addCalendarEvent', { title: 'Ярмарка', day: 5 }, resolve);
+  });
+  const eventBroadcast = await waitFor(() => p1.log.calendarEventsUpdated[0], 'рассылка события');
+  check('мастер добавляет событие календаря, и его видят все', () => {
+    assert.strictEqual(eventAck.ok, true);
+    assert.strictEqual(eventBroadcast.length, 1);
+    assert.strictEqual(eventBroadcast[0].title, 'Ярмарка');
+    assert.strictEqual(eventBroadcast[0].day, 5);
+    assert.ok(eventBroadcast[0].id, 'у события нет id');
+    assert.strictEqual(
+      room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER }).calendarEvents[0].title,
+      'Ярмарка'
+    );
+  });
+  check('событие календаря переживает сохранение кампании', () => {
+    const saved = new RoomState({ state: room.serialize() });
+    assert.strictEqual(saved.calendarEvents[0].title, 'Ярмарка');
+  });
+
+  p1.log.errorMessage.length = 0;
+  const deniedEvent = await new Promise((resolve) => {
+    p1.emit('addCalendarEvent', { title: 'Нельзя', day: 6 }, resolve);
+  });
+  check('событие календаря добавляет только мастер', () => {
+    assert.strictEqual(deniedEvent.ok, false);
+    assert.match(deniedEvent.error, /только ДМ/);
+    assert.strictEqual(room.calendarEvents.length, 1);
+  });
+
+  const secondEvent = await new Promise((resolve) => {
+    dm.emit('addCalendarEvent', { title: 'Полнолуние', day: 12 }, resolve);
+  });
+  await new Promise((resolve) => {
+    dm.emit('deleteCalendarEvent', { id: eventAck.event.id }, resolve);
+  });
+  check('мастер удаляет событие календаря', () => {
+    assert.strictEqual(room.calendarEvents.length, 1);
+    assert.strictEqual(room.calendarEvents[0].id, secondEvent.event.id);
+  });
+  await new Promise((resolve) => dm.emit('undoDmAction', {}, resolve));
+  check('удаление события календаря отменяется', () => {
+    assert.strictEqual(room.calendarEvents.length, 2);
+    assert.ok(room.calendarEvents.some((event) => event.title === 'Ярмарка'));
+  });
+
+  /* ----------------------------------------------------- заметки партии */
+
+  console.log('\nЗаметки партии');
+  p2.log.partyNotesUpdated.length = 0;
+  const notesAck = await new Promise((resolve) => {
+    p1.emit('setPartyNotes', { text: 'Партия идёт к башне.' }, resolve);
+  });
+  const notesBroadcast = await waitFor(() => p2.log.partyNotesUpdated[0], 'рассылка заметок');
+  check('игрок пишет общие заметки, и их видит весь стол', () => {
+    assert.strictEqual(notesAck.ok, true);
+    assert.strictEqual(notesBroadcast, 'Партия идёт к башне.');
+    assert.strictEqual(
+      room.snapshotFor({ playerId: 'p-test-0002', role: ROLE_PLAYER }).partyNotes,
+      'Партия идёт к башне.'
+    );
+  });
+  const notesDmAck = await new Promise((resolve) => {
+    dm.emit('setPartyNotes', { text: 'Мастер дописал: ключ у кузнеца.' }, resolve);
+  });
+  check('мастер тоже правит общие заметки', () => {
+    assert.strictEqual(notesDmAck.ok, true);
+    assert.strictEqual(room.partyNotes, 'Мастер дописал: ключ у кузнеца.');
+  });
+  check('заметки партии переживают сохранение кампании', () => {
+    const saved = new RoomState({ state: room.serialize() });
+    assert.strictEqual(saved.partyNotes, 'Мастер дописал: ключ у кузнеца.');
+  });
 
   /* ------------------------------------------------ долгий отдых партии */
 
@@ -1811,11 +1889,100 @@ async function main() {
     assert.match(deniedDamage.message, /только ДМ/);
   });
 
+  // Защиты от урона и смерть от урона на нуле.
+  const heroRoomToken = room.tokens.find((item) => item.id === heroToken.id);
+  const originalMaxHp = damageSheet.maxHp;
+  damageSheet.maxHp = 20;
+  damageSheet.hp = 20;
+  damageSheet.tempHp = 0;
+  damageSheet.concentration = '';
+  damageSheet.deathSavesFailures = 0;
+  damageSheet.deathSavesSuccesses = 0;
+  room.syncSheetTokens('p-test-0001');
+  room.setTokenDefenses(heroRoomToken, {
+    resistances: ['огонь'],
+    vulnerabilities: ['холод'],
+    immunities: ['яд']
+  });
+  const fireHit = room.applyTokenDamage(heroRoomToken, 10, 'огонь', false);
+  check('сопротивление уменьшает урон вдвое', () => {
+    assert.strictEqual(fireHit.damage, 5);
+    assert.strictEqual(fireHit.defense, 'resistant');
+    assert.strictEqual(damageSheet.hp, 15);
+  });
+  const coldHit = room.applyTokenDamage(heroRoomToken, 10, 'холод', false);
+  check('уязвимость удваивает урон', () => {
+    assert.strictEqual(coldHit.damage, 20);
+    assert.strictEqual(coldHit.defense, 'vulnerable');
+    assert.strictEqual(damageSheet.hp, 0);
+  });
+  damageSheet.hp = 20;
+  damageSheet.deathSavesFailures = 0;
+  damageSheet.deathSavesSuccesses = 0;
+  room.syncSheetTokens('p-test-0001');
+  const poisonHit = room.applyTokenDamage(heroRoomToken, 10, 'яд', false);
+  check('иммунитет не пропускает урон и не просит концентрацию', () => {
+    assert.strictEqual(poisonHit.damage, 0);
+    assert.strictEqual(poisonHit.defense, 'immune');
+    assert.strictEqual(damageSheet.hp, 20);
+    assert.strictEqual(poisonHit.concentration, null);
+  });
+  damageSheet.hp = 0;
+  damageSheet.deathSavesFailures = 0;
+  damageSheet.deathSavesSuccesses = 2;
+  room.syncSheetTokens('p-test-0001');
+  room.applyTokenDamage(heroRoomToken, 5, 'кислота', false);
+  check('урон по лежащему герою даёт провал спасброска смерти', () => {
+    assert.strictEqual(damageSheet.hp, 0);
+    assert.strictEqual(damageSheet.deathSavesFailures, 1);
+    assert.strictEqual(damageSheet.deathSavesSuccesses, 0);
+  });
+  damageSheet.hp = 5;
+  damageSheet.deathSavesFailures = 0;
+  damageSheet.deathSavesSuccesses = 0;
+  room.syncSheetTokens('p-test-0001');
+  const massiveHit = room.applyTokenDamage(heroRoomToken, 25, 'кислота', false);
+  check('урон не меньше максимума хитов убивает сразу', () => {
+    assert.strictEqual(massiveHit.instantDeath, true);
+    assert.strictEqual(damageSheet.deathSavesFailures, 3);
+    assert.strictEqual(damageSheet.hp, 0);
+  });
+
+  p2.log.tokenUpdated.length = 0;
+  emit(dm, 'setTokenDefenses', {
+    tokenId: heroToken.id,
+    resistances: ['Огонь', 'мусор'],
+    vulnerabilities: 'холод',
+    immunities: []
+  });
+  const defenseUpdate = await waitFor(
+    () => p2.log.tokenUpdated.find((item) => item.id === heroToken.id && item.damageResistances
+      && item.damageResistances.includes('огонь')),
+    'защиты фишки дошли до игрока'
+  );
+  check('защиты фишки нормализуются и видны игроку', () => {
+    assert.deepStrictEqual(defenseUpdate.damageResistances, ['огонь']);
+    assert.deepStrictEqual(defenseUpdate.damageVulnerabilities, ['холод']);
+  });
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenDefenses', { tokenId: heroToken.id, resistances: ['огонь'] });
+  const deniedDefenses = await waitFor(
+    () => p1.log.errorMessage.find((item) => /только ДМ/.test(item.message)),
+    'игрок пробовал править защиты'
+  );
+  check('защиты фишки правит только мастер', () => {
+    assert.match(deniedDefenses.message, /только ДМ/);
+  });
+
   // Возвращаем лист к полному здоровью: дальше идут проверки, которые
   // рассчитывают на целого персонажа.
+  damageSheet.maxHp = originalMaxHp;
   damageSheet.hp = require('../renderer/dnd5e.js').effectiveMaxHp(damageSheet);
   damageSheet.tempHp = 0;
   damageSheet.concentration = '';
+  damageSheet.deathSavesFailures = 0;
+  damageSheet.deathSavesSuccesses = 0;
+  room.setTokenDefenses(heroRoomToken, { resistances: [], vulnerabilities: [], immunities: [] });
   room.syncSheetTokens('p-test-0001');
 
   emit(dm, 'deleteToken', { tokenId: heroToken.id });
@@ -2695,6 +2862,71 @@ async function main() {
     assert.strictEqual(saved.fogMask.length, FOG_COLUMNS * FOG_ROWS);
     assert.strictEqual(saved.fogFollow, true, 'тумблер автотумана пропал из кампании');
   });
+
+  /* ------------------------------------------------ зрение по фишке */
+
+  emit(dm, 'createToken', { name: 'Зрячий', maxHp: 10, size: 1, side: 'ally', mapType: fogType, mapId: fogMap.id });
+  const visionToken = await waitFor(
+    () => room.tokens.find((token) => token.name === 'Зрячий'),
+    'фишка для зрения'
+  );
+  emit(dm, 'assignTokenToPlayer', { tokenId: visionToken.id, playerId: 'p-test-0001' });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === visionToken.id).assignedPlayerId === 'p-test-0001',
+    'фишка назначена игроку'
+  );
+  emit(dm, 'setTokenHidden', { tokenId: visionToken.id, hidden: false });
+  await waitFor(
+    () => room.tokens.find((token) => token.id === visionToken.id).hidden === false,
+    'фишка зрения показана'
+  );
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setTokenVision', { tokenId: visionToken.id, vision: 60 });
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пробовал задать зрение');
+  check('зрение фишки задаёт только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.strictEqual(room.tokens.find((token) => token.id === visionToken.id).vision, 0);
+  });
+
+  emit(dm, 'setTokenVision', { tokenId: visionToken.id, vision: 60 });
+  await waitFor(() => room.tokens.find((token) => token.id === visionToken.id).vision === 60, 'радиус зрения');
+  check('мастер задаёт зрение фишки, и игрок его видит', () => {
+    assert.strictEqual(room.tokens.find((token) => token.id === visionToken.id).vision, 60);
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: ROLE_PLAYER });
+    assert.strictEqual(snapshot.tokens.find((token) => token.id === visionToken.id).vision, 60);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'setMapVision', { type: fogType, mapId: fogMap.id, visionPerPlayer: true });
+  await waitFor(() => p1.log.errorMessage.length > 0, 'игрок пробовал включить зрение карты');
+  check('зрение по фишке включает только мастер', () => {
+    assert.ok(p1.log.errorMessage.some((item) => /только ДМ/.test(item.message)));
+    assert.notStrictEqual(
+      room.maps[fogType].items.find((item) => item.id === fogMap.id).visionPerPlayer,
+      true
+    );
+  });
+
+  emit(dm, 'setMapVision', { type: fogType, mapId: fogMap.id, visionPerPlayer: true });
+  await waitFor(
+    () => room.maps[fogType].items.find((item) => item.id === fogMap.id).visionPerPlayer === true,
+    'зрение карты включено'
+  );
+  check('зрение по фишке переживает сохранение кампании', () => {
+    const saved = new RoomState({ state: room.serialize() });
+    const savedMap = saved.normalizeMapSlot(saved.maps[fogType])
+      .items.find((item) => item.id === fogMap.id);
+    assert.strictEqual(savedMap.visionPerPlayer, true);
+    assert.strictEqual(saved.tokens.find((token) => token.id === visionToken.id).vision, 60);
+  });
+
+  emit(dm, 'deleteToken', { tokenId: visionToken.id });
+  await waitFor(() => !room.tokens.some((token) => token.id === visionToken.id), 'удаление фишки зрения');
+  emit(dm, 'setMapVision', { type: fogType, mapId: fogMap.id, visionPerPlayer: false });
+  await waitFor(
+    () => room.maps[fogType].items.find((item) => item.id === fogMap.id).visionPerPlayer === false,
+    'зрение карты выключено'
+  );
 
   /* ------------------------------------------------------ поверхность */
 
@@ -3593,6 +3825,65 @@ async function main() {
     assert.ok(!other.chatHistory.some((message) => message.text === 'Только для тебя'));
   });
 
+  // Правка сообщения: опечатку исправляет мастер, игрок — нет.
+  p1.log.chatMessage.length = 0;
+  emit(dm, 'chatMessage', { text: 'Опечатка в тайне' });
+  const editTarget = await waitFor(
+    () => p1.log.chatMessage.find((message) => message.text === 'Опечатка в тайне'),
+    'сообщение для правки'
+  );
+  p1.log.errorMessage.length = 0;
+  const deniedEdit = await new Promise((resolve) => {
+    p1.emit('editChatMessage', { id: editTarget.id, text: 'Игрок исправил' }, resolve);
+  });
+  check('сообщение чата правит только мастер', () => {
+    assert.strictEqual(deniedEdit.ok, false);
+    assert.match(deniedEdit.error, /только ДМ/);
+    assert.strictEqual(
+      room.chatHistory.find((message) => message.id === editTarget.id).text,
+      'Опечатка в тайне'
+    );
+  });
+  p1.log.chatEdited.length = 0;
+  const editAck = await new Promise((resolve) => {
+    dm.emit('editChatMessage', { id: editTarget.id, text: 'Исправленная тайна' }, resolve);
+  });
+  const editedEvent = await waitFor(
+    () => p1.log.chatEdited.find((item) => item.id === editTarget.id),
+    'правка сообщения дошла до игрока'
+  );
+  check('мастер исправляет сообщение, и пометка видна всем', () => {
+    assert.strictEqual(editAck.ok, true);
+    assert.strictEqual(editedEvent.text, 'Исправленная тайна');
+    assert.ok(editedEvent.editedAt, 'нет времени правки');
+    assert.strictEqual(
+      room.chatHistory.find((message) => message.id === editTarget.id).text,
+      'Исправленная тайна'
+    );
+  });
+
+  // Шёпот после правки не должен утечь соседу.
+  p2.log.chatMessage.length = 0;
+  emit(dm, 'chatMessage', { text: 'Шёпот для правки', to: P2 });
+  const whisperToEdit = await waitFor(
+    () => p2.log.chatMessage.find((message) => message.text === 'Шёпот для правки'),
+    'шёпот для правки'
+  );
+  p1.log.chatEdited.length = 0;
+  p2.log.chatEdited.length = 0;
+  await new Promise((resolve) => {
+    dm.emit('editChatMessage', { id: whisperToEdit.id, text: 'Шёпот исправлен' }, resolve);
+  });
+  await waitFor(() => p2.log.chatEdited.some((item) => item.id === whisperToEdit.id), 'правка шёпота');
+  await wait(100);
+  check('правка шёпота не утекает чужому игроку', () => {
+    assert.strictEqual(p1.log.chatEdited.length, 0, 'чужой игрок получил правку шёпота');
+    assert.strictEqual(
+      room.chatHistory.find((message) => message.id === whisperToEdit.id).text,
+      'Шёпот исправлен'
+    );
+  });
+
   // Удаление сообщения: мастер чистит ленту, игрок — нет.
   p1.log.chatMessage.length = 0;
   emit(dm, 'chatMessage', { text: 'Случайно раскрытая тайна' });
@@ -3990,6 +4281,34 @@ async function main() {
         && item.sheet.coins.gp === splitExpected),
       'лист второго игрока не обновился'
     );
+  });
+
+  // Перевод монет со склада в один лист, а не деление поровну.
+  room.setInventoryCoins({ gp: 10 });
+  room.sheets.get('p-test-0001').coins.gp = 1;
+  p1.log.characterSheetData.length = 0;
+  const giveAck = await new Promise((resolve) => {
+    dm.emit('giveInventoryCoins', { playerId: 'p-test-0001', coin: 'gp', amount: 5 }, resolve);
+  });
+  await waitFor(
+    () => p1.log.characterSheetData.find((item) => item.playerId === 'p-test-0001'
+      && item.sheet.coins.gp === 6),
+    'лист после выдачи монет'
+  );
+  check('монеты со склада можно выдать одному игроку', () => {
+    assert.strictEqual(giveAck.ok, true);
+    assert.strictEqual(giveAck.moved, 5);
+    assert.strictEqual(room.inventoryCoins.gp, 5);
+    assert.strictEqual(room.sheets.get('p-test-0001').coins.gp, 6);
+  });
+  p1.log.errorMessage.length = 0;
+  const deniedGive = await new Promise((resolve) => {
+    p1.emit('giveInventoryCoins', { playerId: 'p-test-0001', coin: 'gp', amount: 1 }, resolve);
+  });
+  check('выдавать монеты может только мастер', () => {
+    assert.strictEqual(deniedGive.ok, false);
+    assert.match(deniedGive.error, /только ДМ/);
+    assert.strictEqual(room.inventoryCoins.gp, 5);
   });
 
   p1.log.errorMessage.length = 0;

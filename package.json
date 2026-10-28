@@ -1,6 +1,6 @@
 {
   "name": "dnd-table",
-  "version": "1.10.2",
+  "version": "1.10.3",
   "private": true,
   "description": "Portable desktop application for D&D 5e",
   "author": {
@@ -11,8 +11,8 @@
   "scripts": {
     "start": "electron .",
     "postinstall": "node scripts/copy-vendor.js",
-    "dist": "electron-builder --dir",
-    "dist:portable": "electron-builder --dir && node scripts/make-portable.js",
+    "dist": "electron-builder --dir --config.electronDist=node_modules/electron/dist",
+    "dist:portable": "electron-builder --dir --config.electronDist=node_modules/electron/dist && node scripts/make-portable.js",
     "dist:setup": "node scripts/build-setup.js",
     "test": "node test/styles.js && node test/integration.js && node test/importer.js && node test/sheet.js && node test/iroh-identity.js && node test/android-bridge.js && node test/open5e.js && node test/presence.js",
     "test:android-bridge": "node test/android-bridge.js",

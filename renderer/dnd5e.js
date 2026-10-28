@@ -236,6 +236,54 @@ const SURFACE_TYPES = [
   const SURFACE_IDS = new Set(SURFACE_TYPES.map((item) => item.id));
 
   /**
+   * Типы урона D&D 5e. Один список на лист, карту, сервер и подписи в чате:
+   * сопротивление огню должно совпадать с типом, выбранным в окне урона.
+   * Первая пара с пустым id — «без типа» для окна урона.
+   */
+  const DAMAGE_TYPES = [
+    ['', 'без типа'],
+    ['огонь', 'огонь'],
+    ['холод', 'холод'],
+    ['электричество', 'электричество'],
+    ['кислота', 'кислота'],
+    ['яд', 'яд'],
+    ['некротический', 'некротический'],
+    ['излучение', 'излучение'],
+    ['силовой', 'силовой'],
+    ['дробящий', 'дробящий'],
+    ['колющий', 'колющий'],
+    ['рубящий', 'рубящий'],
+    ['психический', 'психический']
+  ];
+  const DAMAGE_TYPE_IDS = new Set(DAMAGE_TYPES.map(([id]) => id).filter(Boolean));
+
+  /**
+   * Урон после сопротивлений, уязвимостей и иммунитетов.
+   *
+   * Сопротивление и уязвимость одного типа гасят друг друга, иммунитет
+   * побеждает всё. Дробное сопротивление округляется вниз, как в правилах.
+   * @param {number} rawAmount
+   * @param {string} rawType
+   * @param {{resistances?: string[], vulnerabilities?: string[], immunities?: string[]}} [defenses]
+   * @returns {{amount: number, kind: 'normal'|'resistant'|'vulnerable'|'immune'}}
+   */
+  function damageAfterDefenses(rawAmount, rawType, defenses = {}) {
+    const amount = Math.max(0, Math.round(Number(rawAmount) || 0));
+    const type = String(rawType || '').trim().toLowerCase();
+    if (!type) return { amount, kind: 'normal' };
+    const immune = Array.isArray(defenses.immunities) && defenses.immunities.includes(type);
+    if (immune) return { amount: 0, kind: 'immune' };
+    const resistant = Array.isArray(defenses.resistances) && defenses.resistances.includes(type);
+    const vulnerable = Array.isArray(defenses.vulnerabilities) && defenses.vulnerabilities.includes(type);
+    // Сопротивление и уязвимость одного типа взаимно уничтожаются.
+    const multiplier = (resistant ? 0.5 : 1) * (vulnerable ? 2 : 1);
+    return {
+      amount: Math.floor(amount * multiplier + 1e-9),
+      kind: multiplier < 1 ? 'resistant' : multiplier > 1 ? 'vulnerable' : 'normal'
+    };
+  }
+
+  /**
    * Приводит клетки поверхности к виду, который согласуют клиент и сервер.
    *
    * Приходит из файла кампании и из сообщений, поэтому здесь отсекаются
@@ -1139,6 +1187,8 @@ const GRID = {
     maxAttackDamage: 80,
     /** Истощение по PHB: шесть уровней, дальше смерть. */
     maxExhaustion: 6,
+    /** Вдохновений может быть несколько: счётчик, а не флажок. */
+    maxInspiration: 99,
     /** Название заклинания концентрации: одна строка, а не описание. */
     maxConcentrationLength: 120,
     /** Монеты в листе и общем складе: больше миллиона штук не носят. */
@@ -1234,7 +1284,7 @@ const GRID = {
       // конкретную кость выбирают в листе, а счётчик один.
       hitDiceSpent: 0,
       // Вдохновение и истощение — ресурсы мастера, а не производные числа.
-      inspiration: false,
+      inspiration: 0,
       exhaustion: 0,
       // Название заклинания, на котором держится концентрация. Пусто — нет.
       concentration: '',
@@ -1552,6 +1602,9 @@ const GRID = {
     MOVE_BLOCKING,
     SURFACE_TYPES,
     SURFACE_IDS,
+    DAMAGE_TYPES,
+    DAMAGE_TYPE_IDS,
+    damageAfterDefenses,
     DICE_SIDES,
     FOG,
     FULL_CASTER_CLASSES,

@@ -184,9 +184,10 @@ body.is-resizing * {
 }
 
 /*
- * Уголки панелей. Идея простая: маленькая линия в углу, цветом темы. В
- * «Трактире» и «Магии» она светящаяся, в «Лесу» и «Океане» просто тонкая.
- * Панели без содержимого (карта) лишних уголков не получают.
+ * Уголки панелей. Не прямые линии HUD-скобок, а четверть-дуги: завиток
+ * переплёта, как на уголках старинной книги. В «Трактире» и «Магии» дуга
+ * светящаяся, в «Лесу» и «Океане» просто тонкая. Панели без содержимого
+ * (карта) лишних уголков не получают.
  */
 .panel::before,
 .panel::after {
@@ -205,7 +206,7 @@ body.is-resizing * {
   left: 6px;
   border-right: 0;
   border-bottom: 0;
-  border-top-left-radius: var(--radius-sm);
+  border-top-left-radius: 100%;
 }
 
 .panel::after {
@@ -213,7 +214,7 @@ body.is-resizing * {
   bottom: 6px;
   border-left: 0;
   border-top: 0;
-  border-bottom-right-radius: var(--radius-sm);
+  border-bottom-right-radius: 100%;
 }
 
 .panel:hover::before,
@@ -339,6 +340,12 @@ body.is-resizing * {
 /* Справочник приключения: иконка с подсказкой вместо длинного слова. */
 .tabs__btn--compact .tabs__label {
   display: none;
+}
+
+/* Мастерские вкладки (Поверхность, Приключение): акцентная иконка отделяет
+   их от общих вкладок стола, подсказка называет «только ДМ» прямо. */
+.tabs__btn--dm .tabs__icon {
+  color: var(--accent);
 }
 
 @container (max-width: 430px) {

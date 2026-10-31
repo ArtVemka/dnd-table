@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-10-29T18:35:00Z",
+  "summary": "Проект D&D Стол (Electron, Node.js) — рабочий сломан локальным ИИ. Три незакоммиченных файла с переделкой темы «Лес» и анимации кубиков. Локальный портбл собран из грязного дерева, GitHub v1.10.3 чист. Тесты падают: 2/14 в styles.js, 1/453 в smoke.",
+  "decisions": [
+    "Стабильная база — коммит 9703f56, релиз v1.10.3",
+    "Локальный ИИ переделал тему «Лес» и анимацию кубиков без согласования",
+    "План: откатить до чистого коммита → проверить тесты → вернуть изменения по частям"
+  ],
+  "files_changed": [
+    "renderer/styles/01-tokens.css — палитра «Лес» перекрашена, контраст --muted/--surface-3 = 3.95 (нужно ≥4.5), --danger совпал со стандартной темой",
+    "renderer/styles/08-theme-layer.css — фиксированный цвет #1e1811 в .panel ломает светлые темы, добавлены правила для листа персонажа",
+    "renderer/table.js — _tumbleTimers и 20 искр вместо 10, таймеры не централизованы"
+  ],
+  "next_steps": [
+    "git diff > local-theme.patch (сохранить патч)",
+    "cp release/D&D Стол/data в безопасное место",
+    "git checkout 9703f56 -- renderer/styles/01-tokens.css renderer/styles/08-theme-layer.css renderer/table.js",
+    "npm test && npx electron test/smoke-main.js (ожидаемо 14/0 и 453/0)",
+    "Возврат темы «Лес» по частям: палитра → текстуры → лист → кубики → анимации",
+    "Расширить тесты, добавить защиту от грязной сборки"
+  ],
+  "context_snapshot": {
+    "project_path": "E:\\DnD",
+    "stable_commit": "9703f56 (v1.10.3)",
+    "dirty_files": [
+      "renderer/styles/01-tokens.css",
+      "renderer/styles/08-theme-layer.css",
+      "renderer/table.js"
+    ],
+    "untracked_dirs": ["_asar_extract/", "docs/screenshots/"],
+    "test_results_dirty": {
+      "styles": "14 checks, 2 failures: les dark --muted contrast 3.95, shared --danger",
+      "smoke": "453 checks, 1 failure: natural 20/1 expects 10 sparks, got 20"
+    },
+    "test_results_clean_v1103": {
+      "styles": "14/0 pass",
+      "smoke": "453/0 pass"
+    },
+    "constraints": [
+      "Не удалять release/D&D Стол/data",
+      "Не делать git reset --hard без сохранения патча",
+      "Не выпускать новый релиз без разрешения",
+      "Не добавлять новые зависимости",
+      "Не переделывать 1.10.3 заново"
+    ]
+  }
+}

@@ -717,3 +717,75 @@
   border-radius: 999px;
   pointer-events: none;
 }
+
+/* ------------------------------------------------------------ Атака из листа */
+
+.map-attack {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.map-attack__label {
+  color: var(--text);
+}
+
+.map-attack__close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.map-stage.is-attacking .map-surface,
+.map-stage.is-attacking .token {
+  cursor: crosshair;
+}
+
+/* Мультивыбор фишек (Shift+клик): рамка вокруг выделенных. */
+.token.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+
+/* Эмоут на фишке: пузырь с TTL, убирает его сервер и следующий кадр отрисовки. */
+.token__emote {
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+
+/* Булавки карты: кружок-подсказка мастера в слое стен. Слой стен пропускает
+   нажатия сквозь себя (pointer-events none), поэтому кликается только кружок. */
+.map-pin {
+  fill: var(--accent);
+  stroke: var(--bg);
+  stroke-width: 2;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.map-pin:hover {
+  fill: var(--accent-hover);
+}
+

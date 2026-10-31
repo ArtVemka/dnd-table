@@ -1,4 +1,4 @@
-/* ==================================================================
+﻿/* ==================================================================
  * Панели стола.
  * Фишки, вывод из листа, чат, кубики, порядок боя.
  *
@@ -2152,3 +2152,226 @@ button.inventory-row:hover {
   font-family: var(--font-num);
   font-size: 12px;
 }
+
+/* Полоски партии поверх стола: компактные строки с хитами и числом состояний.
+   У игрока видна только своя строка; в кинорежиме HUD скрывается целиком. */
+.party-hud {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.party-hud__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.party-hud__name {
+  color: var(--text);
+}
+
+.party-hud__bar {
+  position: relative;
+  width: 96px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.party-hud__fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--ok);
+}
+
+.party-hud__hp {
+  color: var(--muted);
+}
+
+.party-hud__conditions {
+  color: var(--gold);
+}
+
+.party-hud__row.is-low .party-hud__fill {
+  background: var(--gold);
+}
+
+.party-hud__row.is-down .party-hud__fill {
+  background: var(--danger);
+  width: 0 !important;
+}
+
+.party-hud__row.is-down .party-hud__name {
+  color: var(--danger);
+}
+
+body.is-showcase .party-hud {
+  display: none;
+}
+
+
+/* Кинорежим «Показывает мастер»: оверлей на весь экран по образцу лайтбокса
+   чата. Зритель подтверждает показ, мастер видит счётчик «Смотрят N». */
+.showcase {
+  position: fixed;
+  inset: 0;
+  z-index: 1600;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  background: var(--scrim);
+  overflow: auto;
+}
+
+.showcase__title {
+  color: var(--text);
+}
+
+.showcase__image {
+  max-width: 94vw;
+  max-height: 84vh;
+  object-fit: contain;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.showcase__text {
+  max-width: 90vw;
+  color: var(--text);
+}
+
+.showcase__watchers {
+  color: var(--muted);
+}
+
+.showcase__close {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+
+/* Снимок в записи журнала: полоска с рамкой, читается рядом с текстом. */
+.journal-editor__image {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+
+/* Мини-лог бросков на карте: правый нижний угол, последние шесть строк.
+   party-hud занимает левый нижний, map-badge — нижний центр. В кинорежиме
+   лог скрывается вместе с HUD. */
+.map-log {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  text-align: right;
+}
+
+.map-log__line {
+  color: var(--muted);
+}
+
+body.is-showcase .map-log {
+  display: none;
+}
+
+
+/* Фильтр «только броски» в чате: класс на логе прячет разговоры, броски и
+   системные плашки остаются. Кнопка подсвечивается, пока фильтр включён. */
+.chat__filter.is-active {
+  color: var(--accent);
+}
+
+.chat__log.is-rolls-only .chat__msg:not(.chat__msg--roll):not(.chat__msg--system) {
+  display: none;
+}
+
+
+/* Панель опроса чата: вопрос и кнопки вариантов внизу по центру, поверх
+   карты (map-badge ниже). Свой голос подсвечен; в кинорежиме скрыта. */
+.vote {
+  position: fixed;
+  bottom: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1500;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface-2);
+  box-shadow: var(--panel-shadow);
+  max-width: min(92vw, 420px);
+}
+
+.vote__title {
+  color: var(--text);
+}
+
+.vote__option {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.vote__option:hover {
+  border-color: var(--accent);
+}
+
+.vote__option.is-mine {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.vote__close {
+  margin-top: 2px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+body.is-showcase .vote {
+  display: none;
+}
+

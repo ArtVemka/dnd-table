@@ -207,6 +207,56 @@ check('ключ запроса приводится к одному виду', (
   if (value !== 'красный дракон') throw new Error(`ключ: «${value}»`);
 });
 
+check('заклинание собирается в карточку справочника', () => {
+  const built = open5e.buildSpell({
+    key: 'test_fireball',
+    name: 'Fire Ball',
+    level: 3,
+    school: { key: 'evocation', name: 'Evocation' },
+    casting_time: 'action',
+    range_text: '150 feet',
+    verbal: true,
+    somatic: true,
+    material: true,
+    material_specified: 'a tiny ball of bat guano and sulfur',
+    duration: 'instantaneous',
+    concentration: true,
+    ritual: false,
+    desc: '<p>A bright intoned streak.</p>',
+    higher_level: '<p>Damage increases by 1d6 per slot.</p>',
+    document: { display_name: 'SRD 5.1', gamesystem: { name: '5th Edition 2014' } }
+  }, { name: 'Огненный шар', desc: 'Яркая струя ревёт.', higher: 'Урон растёт на 1d6.', duration: 'мгновенная' });
+  const spell = built.spell;
+  if (spell.name !== 'Огненный шар') throw new Error(`имя: ${spell.name}`);
+  if (spell.level !== 3) throw new Error(`уровень: ${spell.level}`);
+  if (spell.school !== 'Воплощение') throw new Error(`школа: ${spell.school}`);
+  if (!spell.text.includes('3-й уровень · Воплощение (концентрация)')) throw new Error(`шапка: ${spell.text}`);
+  if (!spell.text.includes('Компоненты: В, С, М')) throw new Error(`компоненты: ${spell.text}`);
+  if (!spell.text.includes('Дистанция: 150 фт.')) throw new Error(`дистанция: ${spell.text}`);
+  if (!spell.text.includes('Яркая струя ревёт.')) throw new Error(`описание не переведено: ${spell.text}`);
+  if (!spell.text.includes('На более высокой ступени')) throw new Error(`ступень: ${spell.text}`);
+  if (spell.sourceId !== 'open5e:test_fireball') throw new Error(`ключ: ${spell.sourceId}`);
+  if (built.meta.source !== 'SRD 5.1') throw new Error(`издание: ${built.meta.source}`);
+});
+
+check('заговор отличается от заклинания по шапке', () => {
+  const built = open5e.buildSpell({ key: 'x', name: 'Fire Bolt', level: 0, school: { key: 'evocation' } }, {});
+  if (!built.spell.text.startsWith('Заговор · Воплощение')) throw new Error(`шапка: ${built.spell.text}`);
+});
+
+check('HTML-описание становится обычным текстом', () => {
+  const text = open5e.stripHtml('<p>Первый абзац.<br>Вторая строка</p><ul><li>Пункт</li></ul>');
+  if (text.includes('<')) throw new Error(`теги остались: ${text}`);
+  if (!text.includes('Первый абзац.') || !text.includes('Вторая строка') || !text.includes('• Пункт')) {
+    throw new Error(`текст: ${text}`);
+  }
+});
+
+check('заклинания ищутся в отдельном эндпоинте', () => {
+  const url = open5e.spellUrl('fire ball');
+  if (!url.includes('/v2/spells/') || !url.includes('name__icontains=fire%20ball')) throw new Error(`url: ${url}`);
+});
+
 (async () => {
   let failed = 0;
   for (const item of checks) {

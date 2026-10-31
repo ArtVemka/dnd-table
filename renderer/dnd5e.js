@@ -442,6 +442,30 @@ const GRID = {
   const LIGHT_AMBIENT = '#080a18';
 
   /**
+   * Кривая суток: темнота уровнях карты по часу игровых суток.
+   *
+   * Индекс — час от 0 до 23, значение — darkness карты. Первые полтора часа
+   * после рассвета считаются рассветом: сумерки видны, но ночь уже отступает.
+   * Правило одно для клиента и сервера: сервер по нему красит карты с флагом
+   * «авто-свет», поэтому кривая живёт рядом со светом в dnd5e.js.
+   */
+  const DARKNESS_BY_HOUR = [
+    // 00..05 ночь
+    0.9, 0.95, 0.95, 0.95, 0.9, 0.75,
+    // 06..08 рассвет и утро
+    0.45, 0.2, 0,
+    // 09..17 день
+    0, 0, 0, 0, 0, 0, 0, 0, 0,
+    // 18..23 закат и ночь
+    0.05, 0.2, 0.4, 0.6, 0.8, 0.9
+  ];
+
+  function darknessForHour(hour) {
+    const index = Math.max(0, Math.min(DARKNESS_BY_HOUR.length - 1, Math.round(Number(hour) || 0)));
+    return DARKNESS_BY_HOUR[index];
+  }
+
+  /**
    * Холст для рисования карты. Размер холста складывается из клеток сетки,
    * поэтому здесь только предел по большой стороне.
    */
@@ -586,6 +610,8 @@ const GRID = {
   const LIGHT_LIMITS = {
     maxWalls: 400,
     maxLights: 80,
+    // Булавок на карте: те же лимиты, что у пинов сервера (LIMITS.maxMapPins).
+    maxPins: 60,
     minRadius: 1,
     maxRadius: 200,
     /** Лучей по окружности источника: 64 дают круг, неотличимый от настоящего. */
@@ -612,13 +638,22 @@ const GRID = {
     const by = Math.max(0, Math.min(1, y2));
     // Точка или почти точка свет не держит: стеной она считаться не должна.
     if (Math.hypot(bx - ax, by - ay) < 0.004) return null;
-    return {
+    const wall = {
       id: String(raw.id || '').slice(0, 40),
       x1: ax,
       y1: ay,
       x2: bx,
       y2: by
     };
+    // Двери и окна. Поле опционально: стены без него держат свет и зрение
+    // как раньше, и все позиции старых кампаний остаются корректны.
+    if (raw.door && typeof raw.door === 'object') {
+      wall.door = { open: raw.door.open === true, locked: raw.door.locked === true };
+    }
+    if (raw.window === true) {
+      wall.window = true;
+    }
+    return wall;
   }
 
   /**
@@ -779,7 +814,7 @@ const GRID = {
    * @param {{columns: number, rows: number, feetPerCell: number}} grid
    * @returns {{points: Array<[number, number]>, radiusCells: number}}
    */
-  function lightPolygon(light, walls, grid) {
+  function lightPolygon(light, walls, grid, options) {
     const columns = Math.max(1, grid.columns);
     const rows = Math.max(1, grid.rows);
     // Тусклый свет по правилам светит вдвое меньше яркого, поэтому половина
@@ -806,8 +841,11 @@ const GRID = {
     // Шестьдесят четыре луча дают правильный многоугольник: при растягивании
     // на карту разница с кругом уже не видна, а лишних лучей считать незачем.
     const angles = [];
-    for (let step = 0; step < LIGHT_LIMITS.rays; step += 1) {
-      angles.push((step / LIGHT_LIMITS.rays) * Math.PI * 2);
+    // Режим «Офисный ПК» режет лучи вдвое: на iGPU 64 рейкаста на источник —
+    // уже заметный кадр, 32 визуально почти неотличимы.
+    const rays = Math.max(16, Math.round(Number(options && options.rays) || LIGHT_LIMITS.rays));
+    for (let step = 0; step < rays; step += 1) {
+      angles.push((step / rays) * Math.PI * 2);
     }
     // Плюс по три луча на каждый угол стены: свет, прошедший мимо угла, даёт
     // тонкую щель в тени за стеной, и край получается ровным, а не ступенчатым.
@@ -832,14 +870,28 @@ const GRID = {
   /**
    * Стены в клетках: так же, как фишки лежат в долях карты, но свет считается
    * в квадратной мере.
+   *
+   * Двери и окна фильтруются по режиму: «light» убирает окна и открытые
+   * двери (свет сквозь них проходит), «vision» убирает только открытые
+   * двери (глаз сквозь стекло не видит). Без режима идут все стены подряд —
+   * так вызовы без знания о дверях сохраняют старое поведение.
    * @param {object[]} walls
    * @param {{columns: number, rows: number}} grid
+   * @param {'light'|'vision'} [mode]
    * @returns {object[]}
    */
-  function wallsInCells(walls, grid) {
+  function wallsInCells(walls, grid, mode) {
     const columns = Math.max(1, grid.columns);
     const rows = Math.max(1, grid.rows);
-    return (walls || []).map((wall) => ({
+    const keep = (wall) => {
+      if (!mode) return true;
+      // Открытая дверь ничего не держит ни в свете, ни в зрении.
+      if (wall.door && wall.door.open) return false;
+      // Окно (и стеклянная дверь) держит зрение, но пропускает свет.
+      if (wall.window && mode === 'light') return false;
+      return true;
+    };
+    return (walls || []).filter(keep).map((wall) => ({
       x1: wall.x1 * columns,
       y1: wall.y1 * rows,
       x2: wall.x2 * columns,
@@ -1156,6 +1208,9 @@ const GRID = {
     // Аватар ездит вместе с игроком и рисуется в кружке 30px, поэтому его
     // предел заметно меньше карты. Те же числа, что в server/state.js.
     maxAvatarBytes: 2 * 1024 * 1024,
+    // Звук саундборда: та же граница, что проверяет сервер в audio.js, —
+    // иначе клиент пропустил бы файл, который сервер потом отвергнет.
+    maxAudioBytes: 2 * 1024 * 1024,
     // Пределы листа. Раньше они были в четырёх местах, и клиент с сервером
     // разошлись: форма показывала одно значение, а сохранялось другое.
     // Теперь клиент и сервер берут числа отсюда и из серверных LIMITS.
@@ -1296,6 +1351,9 @@ const GRID = {
       // Атаки для быстрых бросков: [{name, bonus, damage}]. Текстовое поле
       // attacks остаётся для описаний и старых листов.
       attackList: [],
+      /** Заклинания листа: [{id, name, level, prepared, note}]. Список не
+       * вычисляется из класса: полуклинцы и уникумы пишут своё руками. */
+      spells: [],
       attacks: '',
       equipment: '',
       features: '',
@@ -1574,6 +1632,48 @@ const GRID = {
   }
 
   /**
+   * Накопленный опыт на границе уровня (DMG): индекс 0 — вход на 1 уровень.
+   * Девятнадцатый элемент — порог 20 уровня, выше персонаж не поднимается.
+   */
+  const XP_LEVELS = [0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
+    85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000];
+
+  /**
+   * Порог опыта, при котором персонаж уровня level дорастает до следующего.
+   * @param {number} level
+   * @returns {number}
+   */
+  function xpToNextLevel(level) {
+    const index = Math.max(1, Math.min(20, Math.round(Number(level) || 1)));
+    if (index >= 20) return Infinity;
+    return XP_LEVELS[index];
+  }
+
+  /**
+   * Булавки карты: краткие подсказки мастера с координатами в долях.
+   * @param {unknown} raw
+   * @returns {{id: string, x: number, y: number, title: string, text: string}[]}
+   */
+  function normalizePins(raw) {
+    if (!Array.isArray(raw)) return [];
+    const result = [];
+    for (const entry of raw.slice(0, LIGHT_LIMITS.maxPins)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const x = Number(entry.x);
+      const y = Number(entry.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      result.push({
+        id: String(entry.id || '').slice(0, 40) || `pin-${result.length}`,
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+        title: String(entry.title || '').slice(0, 60) || 'Пин',
+        text: String(entry.text || '').slice(0, 2000)
+      });
+    }
+    return result;
+  }
+
+  /**
    * @param {number} adjustedXp
    * @param {{easy: number, medium: number, hard: number, deadly: number}|null} thresholds
    * @returns {'trivial'|'easy'|'medium'|'hard'|'deadly'|null}
@@ -1622,6 +1722,8 @@ const GRID = {
     combinedCasterLevel,
     casterSlotRow,
     LIGHT_AMBIENT,
+    DARKNESS_BY_HOUR,
+    darknessForHour,
     LIGHT_LIMITS,
     LIGHT_PRESETS,
     LIMITS,
@@ -1648,6 +1750,7 @@ abilityModifier,
       encounterXp,
       monsterXp,
       partyThresholds,
+      xpToNextLevel,
     createEmptySheet,
     darknessAlpha,
     distanceToSegment,
@@ -1659,8 +1762,9 @@ fogHasOpenArea,
     lightPolygon,
     newFogMask,
     normalizeFogMask,
-normalizeLight,
+      normalizeLight,
       normalizeLights,
+      normalizePins,
       normalizeWall,
       normalizeWalls,
       normalizeGrid,

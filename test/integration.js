@@ -28,6 +28,36 @@ const { createTableServer } = require('../server/socket');
 const { RoomState, ROLE_DM, ROLE_PLAYER } = require('../server/state');
 
 const HOST_KEY = 'test-host-key-0123456789';
+
+/**
+ * Минимальный WAV: заголовок RIFF/WAVE и тишина нужной длины. Сервер
+ * смотрит на сигнатуру, ей и ограничивается проверка.
+ * @param {number} bodyLength
+ */
+function wavBytes(bodyLength) {
+  const head = Buffer.alloc(44);
+  head.write('RIFF', 0);
+  head.writeUInt32LE(36 + bodyLength, 4);
+  head.write('WAVE', 8);
+  head.write('fmt ', 12);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20); // PCM
+  head.writeUInt16LE(1, 22); // моно
+  head.writeUInt32LE(8000, 24);
+  head.writeUInt32LE(8000, 28);
+  head.writeUInt16LE(1, 30);
+  head.writeUInt16LE(8, 32);
+  head.write('data', 36);
+  head.writeUInt32LE(bodyLength, 40);
+  return Buffer.concat([head, Buffer.alloc(bodyLength, 96)]);
+}
+
+/** Секунда тишины в 8 кГц — настоящий, хоть и скучный звук. */
+const WAV_1S = 'data:audio/wav;base64,' + wavBytes(8000).toString('base64');
+/** FLAC, выданный за WAV: должен отбраковаться по сигнатуре файла. */
+const FLAC_AS_WAV = 'data:audio/wav;base64,' + Buffer.concat([Buffer.from('fLaC'), Buffer.alloc(64)]).toString('base64');
+/** Файл больше maxAudioBytes (2 МБ). */
+const WAV_TOO_BIG = 'data:audio/wav;base64,' + wavBytes(2 * 1024 * 1024 + 16).toString('base64');
 /** Настоящий PNG 1x1. */
 const PNG_1PX =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
@@ -69,7 +99,8 @@ const TRACKED = [
   'diceRollResult', 'chatMessage', 'chatDeleted', 'chatCleared', 'chatEdited', 'errorMessage', 'dmNoteUpdated', 'adventureUpdated',
   'calendarEventsUpdated', 'partyNotesUpdated',
   'journalUpdated', 'inventoryUpdated', 'inventoryCoinsUpdated', 'rollRequestUpdated', 'stateReload',
-  'gameTimeUpdated', 'calendarMonthsUpdated'
+  'gameTimeUpdated', 'calendarMonthsUpdated', 'timerUpdated',
+  'soundCue', 'soundboardUpdated'
 ];
 
 /**
@@ -757,6 +788,104 @@ async function main() {
   emit(dm, 'setActiveMap', { type: 'world' });
   await waitFor(() => room.activeMap === 'world', 'возврат к общей карте');
 
+  /* ------------------------------------------------------- звук на столе */
+
+  console.log('\nЗвук на столе');
+  const worldActive = room.maps.world.items.find((item) => item.id === room.maps.world.activeId)
+    || room.maps.world.items[0];
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'uploadSound', { name: 'игрок.wav', sound: WAV_1S });
+  await waitFor(() => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')), 'отказ игроку в загрузке звука');
+  check('игрок не может загружать звуки', () => {
+    assert.strictEqual(room.soundboard.length, 0);
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'uploadSound', { name: 'подделка.wav', sound: FLAC_AS_WAV });
+  await waitFor(() => dm.log.errorMessage.find((item) => item.message.includes('FLAC')), 'отказ звуку по сигнатуре');
+  check('сервер смотрит на содержимое файла, а не на обещанный MIME', () => {
+    assert.strictEqual(room.soundboard.length, 0);
+  });
+
+  emit(dm, 'uploadSound', { name: 'длинный.wav', sound: WAV_TOO_BIG });
+  await waitFor(() => dm.log.errorMessage.find((item) => item.message.includes('2 МБ')), 'отказ звуку по размеру');
+  check('лимит размера звука проверяется на сервере', () => {
+    assert.strictEqual(room.soundboard.length, 0);
+  });
+
+  dm.log.errorMessage.length = 0;
+  emit(dm, 'uploadSound', { name: 'Гонг', sound: WAV_1S });
+  const board = await waitFor(() => dm.log.soundboardUpdated.find((items) => items.length === 1), 'саундборд мастеру');
+  const gongRef = room.soundboard[0].ref;
+  const served = await httpGet(url + gongRef);
+  check('ДМ загружает звук, файл раздаётся по ссылке как и карта', () => {
+    assert.match(gongRef, /^\/files\/[a-z0-9-]+\.wav$/);
+    assert.strictEqual(board[0].name, 'Гонг');
+    assert.strictEqual(served.status, 200);
+    assert.strictEqual(served.body.length, 44 + 8000);
+  });
+  check('список саундборда остаётся в мастерской', () => {
+    assert.strictEqual(p1.log.soundboardUpdated.length, 0);
+  });
+
+  emit(dm, 'setMapAudio', { type: 'world', mapId: worldActive.id, ref: '/files/чужой.wav' });
+  await waitFor(() => dm.log.errorMessage.find((item) => item.message.includes('саундборде')), 'отказ чужой ссылке эмбиента');
+  check('эмбиентом карты становится только сохранённый на столе звук', () => {
+    assert.strictEqual(worldActive.audioRef, null);
+  });
+
+  p1.log.mapUpdated.length = 0;
+  emit(dm, 'setMapAudio', { type: 'world', mapId: worldActive.id, ref: gongRef });
+  const ambientShown = await waitFor(
+    () => p1.log.mapUpdated.find((item) => item.type === 'world'
+      && item.items.some((map) => map.audioRef === gongRef)),
+    'эмбиент карты игрокам'
+  );
+  check('эмбиент карты едет внутри mapUpdated', () => {
+    assert.strictEqual(ambientShown.items.find((map) => map.id === worldActive.id).audioRef, gongRef);
+    assert.strictEqual(worldActive.audioRef, gongRef);
+  });
+
+  p1.log.soundCue.length = 0;
+  dm.log.soundCue.length = 0;
+  emit(dm, 'playSound', { ref: '/files/нет-такого.wav', action: 'play' });
+  emit(dm, 'playSound', { ref: gongRef, action: 'loop' });
+  const cue = await waitFor(() => p1.log.soundCue[0], 'кю игроку');
+  check('кю слышит весь стол кроме источника, чужая ссылка молчит', () => {
+    assert.strictEqual(cue.ref, gongRef);
+    assert.strictEqual(cue.action, 'loop');
+    assert.strictEqual(p1.log.soundCue.length, 1);
+    assert.strictEqual(dm.log.soundCue.length, 0);
+  });
+
+  check('саундборд и эмбиент переживают перезапуск без миграции схемы', () => {
+    const reloaded = new RoomState({ state: room.serialize() });
+    assert.strictEqual(reloaded.soundboard.length, 1);
+    assert.strictEqual(reloaded.soundboard[0].ref, gongRef);
+    assert.strictEqual(reloaded.maps.world.items.find((map) => map.id === worldActive.id).audioRef, gongRef);
+  });
+  check('рука в файле кампании: чужие ссылки звуков вычищаются при загрузке', () => {
+    const polluted = new RoomState({
+      state: {
+        soundboard: [
+          { id: 'x', name: 'подстава', ref: 'http://chuzhoy.example/troilo.wav' },
+          { name: 'свой', ref: '/files/ok.wav' }
+        ],
+        maps: { world: { items: [{ id: 'm1', url: '/files/a.png', audioRef: 'data:text/html,утёк' }] } }
+      }
+    });
+    assert.strictEqual(polluted.soundboard.length, 1);
+    assert.strictEqual(polluted.soundboard[0].name, 'свой');
+    assert.strictEqual(polluted.maps.world.items[0].audioRef, null);
+  });
+
+  emit(dm, 'deleteSound', { id: room.soundboard[0].id });
+  await waitFor(() => dm.log.soundboardUpdated.some((items) => items.length === 0), 'пустой саундборд после удаления');
+  check('удаление звука снимает и эмбиент с карты', () => {
+    assert.strictEqual(room.soundboard.length, 0);
+    assert.strictEqual(worldActive.audioRef, null);
+  });
+
   /* ------------------------------------ перенос фишек на показанную карту */
 
   console.log('\nПеренос фишек на показанную карту');
@@ -887,6 +1016,41 @@ async function main() {
   check('время переживает сохранение и загрузку кампании', () => {
     const saved = new RoomState({ state: room.serialize() });
     assert.deepStrictEqual(saved.gameTime, { day: 3, hour: 23 });
+  });
+
+  /* ------------------------------------------------------ бытовой таймер */
+
+  console.log('\nБытовой таймер');
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'timerStart', { seconds: 90 });
+  await waitFor(() => p1.log.errorMessage.find((item) => item.message.includes('только ДМ')), 'отказ игроку в таймере');
+  check('игрок не может запустить таймер', () => {
+    assert(!room.timer.running, 'таймер пошёл от игрока');
+  });
+
+  p1.log.timerUpdated.length = 0;
+  emit(dm, 'timerStart', { seconds: 90, label: 'Отдых' });
+  const timerEvent = await waitFor(() => p1.log.timerUpdated[0], 'рассылка таймера');
+  check('мастер запускает таймер, игроки видят его в снимке', () => {
+    assert(timerEvent.running, 'таймер не идёт');
+    assert(timerEvent.endsAt > Date.now() + 80_000, 'момент конца уехал');
+    assert.strictEqual(room.timer.label, 'Отдых');
+    const snapshot = room.snapshotFor({ playerId: 'p-test-0001', role: 'player' });
+    assert(snapshot.timer && snapshot.timer.running, 'таймер не попал в снимок игрока');
+  });
+
+  emit(dm, 'timerStart', { seconds: 1e9 });
+  await waitFor(() => p1.log.timerUpdated.length >= 2, 'вторая рассылка таймера');
+  check('длительность таймера ограничена четырьмя часами', () => {
+    assert.strictEqual(room.timer.totalSec, 4 * 3600);
+  });
+
+  emit(dm, 'timerStop', {});
+  const stoppedEvent = await waitFor(() => p1.log.timerUpdated[2], 'остановка таймера');
+  check('мастер останавливает таймер, стоп переживает сохранение', () => {
+    assert(!stoppedEvent.running, 'остановка не разослана');
+    const saved = new RoomState({ state: room.serialize() });
+    assert(!saved.timer.running, 'таймер наследился в новую кампанию');
   });
 
   // Старая кампания без часов открывается утром первого дня.
@@ -1864,6 +2028,64 @@ async function main() {
   await new Promise((resolve) => dm.emit('rollRequestClear', { id: concentration.id }, resolve));
   await waitFor(() => room.rollRequests.length === 0, 'снятие проверки концентрации');
 
+  /* ------------------------------------------------- концентрация при уроне */
+
+  console.log('\nКонцентрация при уроне');
+
+  // Серия урона: урон без концентрации заявок не делает, первый урон делает
+  // одну заявку, второй урон в той же серии дедупится, а тяжёлый поднимает СЛ.
+  damageSheet.concentration = '';
+  room.syncSheetTokens('p-test-0001');
+  p2.log.rollRequestUpdated.length = 0;
+  emit(dm, 'applyTokenDamage', { tokenId: heroToken.id, amount: 4, type: 'огонь' });
+  await waitFor(
+    () => p2.log.tokenUpdated.some((item) => item.id === heroToken.id && item.hp < 30),
+    'урон без концентрации'
+  );
+  check('урон без концентрации не вызывает заявки', () => {
+    assert.ok(!room.rollRequests.some((item) => /Концентрация/.test(item.label)), 'заявка без концентрации появилась');
+  });
+
+  damageSheet.concentration = 'Щит веры';
+  room.syncSheetTokens('p-test-0001');
+  p2.log.rollRequestUpdated.length = 0;
+  emit(dm, 'applyTokenDamage', { tokenId: heroToken.id, amount: 6, type: 'огонь' });
+  const firstCc = await waitFor(
+    () => room.rollRequests.find((item) => /^Концентрация: /.test(item.label)),
+    'первая заявка концентрации'
+  );
+  emit(dm, 'applyTokenDamage', { tokenId: heroToken.id, amount: 2, type: 'огонь' });
+  emit(dm, 'applyTokenDamage', { tokenId: heroToken.id, amount: 60, type: 'огонь' });
+  p2.log.characterSheetUpdated.length = 0;
+  const secondCc = await waitFor(
+    () => room.rollRequests.find((item) => /^Концентрация: /.test(item.label) && item.dc === 30),
+    'тяжёлый урон поднял СЛ'
+  );
+  check('серия урона даёт одну проверку, тяжёлый урон поднимает СЛ', () => {
+    assert.strictEqual(room.rollRequests.filter((item) => /^Концентрация: /.test(item.label)).length, 1);
+    assert.strictEqual(secondCc.id, firstCc.id, 'концентрационная заявка была заменена новой');
+    assert.strictEqual(secondCc.dc, 30);
+  });
+
+  // Провал спасброска гасит концентрацию и пишет в чат. Формула заведомо
+  // провальная: 1..20 минус 30 всегда ниже любой сложности.
+  p1.log.chatMessage.length = 0;
+  emit(p1, 'rollDice', { formula: '1d20-30', label: secondCc.label });
+  await waitFor(
+    () => room.sheets.get('p-test-0001').concentration !== 'Щит веры',
+    'провал снял концентрацию'
+  );
+  const ccBreak = await waitFor(
+    () => p1.log.chatMessage.find((message) => /концентрация оборвалась/.test(message.text)),
+    'сообщение об обрыве концентрации'
+  );
+  check('провал спасброска снимает концентрацию и объясняет в чате', () => {
+    assert.strictEqual(damageSheet.concentration, '');
+    assert.match(ccBreak.text, /Щит веры/);
+    assert.ok(!room.rollRequests.some((item) => /^Концентрация: /.test(item.label)), 'заявка осталась в списке');
+  });
+  damageSheet.hp = 30;
+
   damageSheet.hp = 0;
   damageSheet.deathSavesFailures = 2;
   damageSheet.concentration = '';
@@ -1985,6 +2207,127 @@ async function main() {
   room.setTokenDefenses(heroRoomToken, { resistances: [], vulnerabilities: [], immunities: [] });
   room.syncSheetTokens('p-test-0001');
 
+  /* ------------------------------------------------------------ автозаявки AoE */
+
+  console.log('\nАвтоспасброски AoE');
+
+  emit(dm, 'addMapTemplate', { type: 'world', templateId: 'tpl-f06', kind: 'sphere', size: 40 });
+  await waitFor(
+    () => room.maps.world.items.some((item) => (item.templates || []).some((tpl) => tpl.id === 'tpl-f06')),
+    'шаблон для AoE'
+  );
+  const aoeMapItem = room.maps.world.items.find((item) => (item.templates || []).some((tpl) => tpl.id === 'tpl-f06'));
+
+  emit(dm, 'createToken', { name: 'Огр-цель', mapType: 'world', maxHp: 30 });
+  const aoeMonster = await waitFor(
+    () => dm.log.tokenCreated.find((item) => item.name === 'Огр-цель'),
+    'монстр для AoE'
+  );
+  // Имя монстра попадёт в объявление, поэтому фишку делаем видимой: скрытые
+  // заготовки в объявлении гасятся в «скрытый монстр» самим сервером.
+  emit(dm, 'setTokenHidden', { tokenId: aoeMonster.id, hidden: false });
+  await waitFor(
+    () => room.tokens.some((item) => item.id === aoeMonster.id && item.hidden === false),
+    'монстр AoE виден игрокам'
+  );
+  emit(dm, 'setTokenDefenses', { tokenId: aoeMonster.id, resistances: ['огонь'] });
+  await waitFor(
+    () => room.tokens.some((item) => item.id === aoeMonster.id
+      && Array.isArray(item.damageResistances) && item.damageResistances.includes('огонь')),
+    'защиты монстра'
+  );
+
+  p1.log.rollRequestUpdated.length = 0;
+  p1.log.characterSheetData.length = 0;
+  dm.log.tokenUpdated.length = 0;
+  dm.log.chatMessage.length = 0;
+  const monsterBefore = room.tokens.find((item) => item.id === aoeMonster.id).hp;
+  emit(dm, 'castAoe', {
+    type: 'world',
+    templateId: 'tpl-f06',
+    tokenIds: [heroToken.id, aoeMonster.id, aoeMonster.id],
+    spellName: 'Огненный шар',
+    save: 'dex',
+    dc: 15,
+    damage: '8d6',
+    damageType: 'огонь',
+    halfOnSave: true
+  });
+  const aoeRequests = await waitFor(
+    () => {
+      const list = (p1.log.rollRequestUpdated[0] || []).filter(
+        (item) => item.to === 'p-test-0001' && /Огненный шар/.test(item.label)
+      );
+      return list.length ? list : null;
+    },
+    'заявка AoE игроку'
+  );
+  check('игрок получает ровно одну заявку о фразе области', () => {
+    assert.strictEqual(aoeRequests.length, 1);
+    assert.strictEqual(aoeRequests[0].to, 'p-test-0001');
+    assert.strictEqual(aoeRequests[0].dc, 15);
+    assert.match(aoeRequests[0].label, /Лов 15 или 8d6/);
+    assert.match(aoeRequests[0].label, /огонь/);
+    assert.match(aoeRequests[0].formula, /^1d20[+-]\d+$/);
+  });
+  check('заявка AoE дубликата не создаёт и урон игроку не применяет', () => {
+    assert.strictEqual(p1.log.characterSheetData.length, 0,
+      'урон применился к листу игрока без его броска');
+    const same = room.rollRequests.filter((item) => /Огненный шар/.test(item.label));
+    assert.strictEqual(same.length, 1, 'заявок больше одной');
+  });
+  await waitFor(
+    () => dm.log.tokenUpdated.some((item) => item.id === aoeMonster.id && item.hp < 30),
+    'монстр получил урон от AoE'
+  );
+  check('монстру сервер бросает d20 и записывает урон с учётом сопротивления', () => {
+    const monster = room.tokens.find((item) => item.id === aoeMonster.id);
+    // Итог не строго предсказуем (d20 у монстра случайный), но попасть
+    // должно: 8d6 минимум 8, половина от успеха минимум 4, а сопротивление
+    // огня срезает то, что прошло. Главное, что урон реально дошёл.
+    assert(monster.hp < monsterBefore, 'урон по монстру от AoE не пришёл');
+    assert.strictEqual(
+      dm.log.chatMessage.some((message) => /Огр-цель/.test(message.text) && /спасбросок/.test(message.text)),
+      true,
+      'в чате нет объявления о броске монстра'
+    );
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(p1, 'castAoe', { type: 'world', templateId: 'tpl-f06', tokenIds: [], save: 'dex', dc: 15, damage: '8d6' });
+  const deniedAoe = await waitFor(
+    () => p1.log.errorMessage.find((item) => /только ДМ/.test(item.message)),
+    'игрок пробовал вызвать AoE'
+  );
+  check('автоспасброски вызывает только мастер', () => {
+    assert.match(deniedAoe.message, /только ДМ/);
+  });
+
+  p1.log.errorMessage.length = 0;
+  emit(dm, 'castAoe', { type: 'world', templateId: 'tpl-нет', tokenIds: [heroToken.id], save: 'dex', dc: 15, damage: '8d6' });
+  const missingTemplate = await waitFor(
+    () => dm.log.errorMessage.find((item) => /Шаблон/.test(item.message)),
+    'AoE по несуществующему шаблону'
+  );
+  check('AoE по несуществующему шаблону отклоняется', () => {
+    assert.match(missingTemplate.message, /Шаблон/);
+  });
+
+  // Заявку снимаем и шаблон убираем, чтобы следующие блоки работали с чистым
+  // списком: после этой секции идут свои тесты шаблонов.
+  emit(dm, 'rollRequestClear', { id: aoeRequests[0].id });
+  await waitFor(() => !room.rollRequests.some((item) => /Огненный шар/.test(item.label)), 'снятие заявки AoE');
+  emit(dm, 'clearMapTemplates', { type: 'world', mapId: aoeMapItem.id });
+  await waitFor(
+    () => !room.maps.world.items.some((item) => (item.templates || []).some((tpl) => tpl.id === 'tpl-f06')),
+    'шаблон AoE убран'
+  );
+
+  emit(dm, 'deleteToken', { tokenId: aoeMonster.id });
+  await waitFor(() => !room.tokens.some((item) => item.id === aoeMonster.id), 'уборка монстра AoE');
+
+  // Уборка фишки героя: она выше нужна была для проверок урона и AoE,
+  // а дальше по тесту остаётся ровно одна фишка.
   emit(dm, 'deleteToken', { tokenId: heroToken.id });
   await waitFor(() => !room.tokens.some((item) => item.id === heroToken.id), 'уборка фишки игрока');
 
@@ -4569,10 +4912,13 @@ async function main() {
   const keepName = await store.saveImage(sweepId, Buffer.from('keep'), 'png');
   const dropName = await store.saveImage(sweepId, Buffer.from('drop'), 'png');
   const chatKeepName = await store.saveImage(sweepId, Buffer.from('chat'), 'png');
+  const soundKeepName = await store.saveAudio(sweepId, Buffer.from('gong'), 'wav');
+  const ambientKeepName = await store.saveAudio(sweepId, Buffer.from('forest'), 'ogg');
   const sweepRemoved = await store.sweepFiles(sweepId, {
-    maps: { world: { items: [{ url: `/files/${keepName}` }] }, battle: { items: [] }, sketch: { items: [] } },
+    maps: { world: { items: [{ url: `/files/${keepName}`, audioRef: `/files/${ambientKeepName}` }] }, battle: { items: [] }, sketch: { items: [] } },
     tokens: [],
     players: [],
+    soundboard: [{ id: 'snd-1', name: 'Гонг', ref: `/files/${soundKeepName}` }],
     chatHistory: [{ image: `/files/${chatKeepName}` }],
     adventure: null
   }, { keepMs: 0 });
@@ -4581,6 +4927,10 @@ async function main() {
     assert.ok(fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', keepName)));
     assert.ok(fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', chatKeepName)),
       'картинка из чата удалена как мусор');
+    assert.ok(fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', soundKeepName)),
+      'трек саундборда удалён свалкой: при «Играть» будет 404');
+    assert.ok(fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', ambientKeepName)),
+      'эмбиент карты удалён свалкой');
     assert.ok(!fs.existsSync(path.join(root, 'campaigns', sweepId, 'files', dropName)));
   });
 

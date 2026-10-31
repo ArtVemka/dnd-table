@@ -876,6 +876,197 @@ async function previewCreature(key) {
   return result;
 }
 
+/* ---------------------------------------------------------- заклинания */
+
+const SPELL_API = 'https://api.open5e.com/v2/spells/';
+
+/** Школы магии по PHB: API отдаёт ключи вроде «evocation». */
+const SCHOOL_RU = {
+  abjuration: 'Ограждение',
+  conjuration: 'Вызов',
+  divination: 'Прорицание',
+  enchantment: 'Очарование',
+  evocation: 'Воплощение',
+  illusion: 'Иллюзия',
+  necromancy: 'Некромантия',
+  transmutation: 'Преобразование'
+};
+
+/** Время накладывания: значения конечны, словарь быстрее переводчика. */
+const CASTING_RU = {
+  action: 'действие',
+  bonus: 'бонусное действие',
+  reaction: 'реакция',
+  minute: '1 минута',
+  hour: '1 час',
+  day: '1 сутки',
+  special: 'особое'
+};
+
+/** Дистанция: числа остаются, единицы и крайние случаи переводятся на месте. */
+function rangeRu(text) {
+  const value = String(text || '').trim().toLowerCase();
+  if (!value) return '';
+  if (value === 'touch') return 'касание';
+  if (value === 'self') return 'на себя';
+  if (value === 'sight') return 'в пределах видимости';
+  if (value === 'unlimited') return 'без ограничений';
+  return value
+    .replace(/\bmiles?\b/g, 'миль')
+    .replace(/\byards\b/g, 'ярдов')
+    .replace(/\bfeet\b/g, 'фт')
+    .replace(/\bfoot\b/g, 'фт');
+}
+
+function spellUrl(english) {
+  return `${SPELL_API}?name__icontains=${encodeURIComponent(english)}&limit=40`;
+}
+
+/**
+ * Open5e отдаёт описания заклинаний с HTML-разметкой. В справочнике лежит
+ * обычный текст, поэтому теги снимаются сразу, а не при каждом показе.
+ */
+function stripHtml(value) {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|li|ul|h\d+)>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&(?:#x27|apos|lsquo|rsquo);/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Компоненты: «В, С, М (щепотка гуано)» — как в русской книге. */
+function componentsRu(spell) {
+  const parts = [];
+  if (spell.verbal) parts.push('В');
+  if (spell.somatic) parts.push('С');
+  if (spell.material) {
+    parts.push(spell.material_specified ? `М (${stripHtml(spell.material_specified)})` : 'М');
+  }
+  return parts.join(', ');
+}
+
+/**
+ * Собирает карточку заклинания для справочника. Поля-переводы приходят в
+ * texts; если перевод не удался, остаётся английский оригинал.
+ */
+function buildSpell(spell, texts = {}) {
+  const source = spell && typeof spell === 'object' ? spell : {};
+  const level = Math.max(0, Math.min(9, Math.round(Number(source.level) || 0)));
+  const school = SCHOOL_RU[String((source.school && source.school.key) || '')]
+    || String((source.school && source.school.name) || '');
+  const head = [level ? `${level}-й уровень` : 'Заговор', school].filter(Boolean).join(' · ');
+  const flags = [];
+  if (source.concentration) flags.push('концентрация');
+  if (source.ritual) flags.push('ритуал');
+  const casting = CASTING_RU[String(source.casting_time || '')] || String(source.casting_time || '');
+  const range = rangeRu(source.range_text);
+  const duration = String((texts.duration) || source.duration || '');
+  const components = componentsRu(source);
+  const lines = [
+    head + (flags.length ? ` (${flags.join(', ')})` : ''),
+    casting && `Время накладывания: ${casting}.`,
+    range && `Дистанция: ${range}.`,
+    components && `Компоненты: ${components}.`,
+    duration && `Длительность: ${duration}.`
+  ].filter(Boolean).join(' ');
+  const desc = String(texts.desc || stripHtml(source.desc));
+  const higherRaw = String(texts.higher || stripHtml(source.higher_level));
+  const text = [
+    lines,
+    desc,
+    higherRaw && `На более высокой ступени: ${higherRaw}`
+  ].filter(Boolean).join('\n\n');
+
+  return {
+    spell: {
+      name: String(texts.name || source.name || 'Заклинание').slice(0, LIMITS.maxAdventureTitle),
+      level,
+      school,
+      text: text.slice(0, LIMITS.maxAdventureText),
+      sourceId: `open5e:${String(source.key || '')}`
+    },
+    meta: {
+      source: String((source.document && (source.document.display_name || source.document.name)) || 'Open5e'),
+      system: String((source.document && source.document.gamesystem && source.document.gamesystem.name) || '')
+    }
+  };
+}
+
+/**
+ * Поиск заклинаний. Тот же путь, что у монстров: русский запрос сначала
+ * становится английским, потом идёт в name__icontains.
+ */
+async function searchSpells(query) {
+  const resolved = await resolveEnglish(query);
+  if (!resolved.english) return { ...resolved, results: [] };
+
+  const cacheKey = `spell:${resolved.english.toLowerCase()}`;
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 10 * 60_000) {
+    return { ...resolved, results: cached.results };
+  }
+
+  const data = await getJson(spellUrl(resolved.english));
+  const wanted = resolved.english.toLowerCase();
+  const results = (Array.isArray(data.results) ? data.results : [])
+    .map((spell) => ({
+      key: String(spell.key || ''),
+      name: String(spell.name || ''),
+      level: Math.max(0, Math.min(9, Math.round(Number(spell.level) || 0))),
+      school: SCHOOL_RU[String((spell.school && spell.school.key) || '')]
+        || String((spell.school && spell.school.name) || ''),
+      source: String((spell.document && (spell.document.display_name || spell.document.name)) || 'Open5e'),
+      system: String((spell.document && spell.document.gamesystem && spell.document.gamesystem.name) || '')
+    }))
+    .filter((item) => item.key && item.name)
+    .sort((left, right) => {
+      const score = (item) => {
+        let value = 0;
+        if (/5th edition|5e/i.test(item.system)) value += 100;
+        if (item.name.toLowerCase() === wanted) value += 50;
+        else if (item.name.toLowerCase().startsWith(wanted)) value += 25;
+        if (/srd/i.test(item.source)) value += 10;
+        return value;
+      };
+      return score(right) - score(left) || left.level - right.level || left.name.localeCompare(right.name);
+    })
+    .slice(0, MAX_RESULTS);
+
+  searchCache.set(cacheKey, { at: Date.now(), results });
+  while (searchCache.size > 20) searchCache.delete(searchCache.keys().next().value);
+  return { ...resolved, results };
+}
+
+/**
+ * Карточка заклинания с переводом. Портрета нет: заклинание — это текст,
+ * и четыре сети (имя, описание, ступень, длительность) не должны ждать друг друга.
+ */
+async function previewSpell(key) {
+  const safeKey = String(key || '').trim();
+  if (!/^[a-z0-9_.-]{1,120}$/i.test(safeKey)) {
+    const error = new Error('Некорректный идентификатор заклинания');
+    error.code = 'BAD_KEY';
+    throw error;
+  }
+  const spell = await getJson(`${SPELL_API}${encodeURIComponent(safeKey)}/`);
+  const [name, desc, higher, duration] = await Promise.all([
+    translateName(spell.name),
+    translate(stripHtml(spell.desc)),
+    spell.higher_level ? translate(stripHtml(spell.higher_level)) : Promise.resolve(''),
+    spell.duration && String(spell.duration).toLowerCase() !== 'instantaneous'
+      ? translate(String(spell.duration))
+      : Promise.resolve(String(spell.duration).toLowerCase() === 'instantaneous' ? 'мгновенная' : '')
+  ]);
+  return buildSpell(spell, { name, desc, higher, duration });
+}
+
 function isPrivateHost(hostname) {
   const host = String(hostname || '').toLowerCase();
   if (!host || host === 'localhost' || host.endsWith('.local')) return true;
@@ -925,6 +1116,11 @@ module.exports = {
   searchCreatures,
   previewCreature,
   buildActor,
+  searchSpells,
+  previewSpell,
+  buildSpell,
+  spellUrl,
+  stripHtml,
   formatCr,
   formatSpeed,
   sizeToCells,

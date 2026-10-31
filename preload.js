@@ -72,11 +72,19 @@ contextBridge.exposeInMainWorld('desktop', {
   uploadOpen5eImage: (draftId, dataUrl) => ipcRenderer.invoke('bestiary:uploadImage', draftId, dataUrl),
   importOpen5e: (draftId, crop) => ipcRenderer.invoke('bestiary:import', draftId, crop),
 
+  // Заклинания Open5e: поиск, карточка, сохранение в справочник
+  searchOpen5eSpells: (query) => ipcRenderer.invoke('spells:search', query),
+  previewOpen5eSpell: (key) => ipcRenderer.invoke('spells:preview', key),
+  importOpen5eSpell: (draftId) => ipcRenderer.invoke('spells:import', draftId),
+
   // Лист персонажа в отдельном окне
   openSheetWindow: (request) => ipcRenderer.invoke('sheet:openWindow', request),
 
   // Журнал кампании в отдельном окне
   openJournalWindow: (request) => ipcRenderer.invoke('journal:openWindow', request),
+
+  // Скриншот собственного окна: страница сохраняется в журнал кампании.
+  capturePage: () => ipcRenderer.invoke('app:capturePage'),
 
   // Файлы
   openDataDir: () => ipcRenderer.invoke('shell:openDataDir'),

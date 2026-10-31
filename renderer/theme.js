@@ -19,6 +19,8 @@
   const SCALE_KEY = 'dnd-table.a11yScale';
   const CONTRAST_KEY = 'dnd-table.a11yContrast';
   const COLORBLIND_KEY = 'dnd-table.a11yColorblind';
+  /** Производительность: режим «Офисный ПК» без прозрачности и теней. */
+  const PERF_KEY = 'dnd-table.perf';
   /** Разрешённые масштабы: ступени выбраны так, чтобы интерфейс не разъезжался. */
   const SCALES = [0.9, 1, 1.15, 1.3];
   const DEFAULT_THEME = 'standart';
@@ -192,6 +194,10 @@
     return read(COLORBLIND_KEY, 'off') === 'on';
   }
 
+  function perfOn() {
+    return read(PERF_KEY, 'off') === 'on';
+  }
+
   /** @param {string} theme @returns {object[]} */
   function accentChoices(theme) {
     const source = THEMES.find((item) => item.id === theme) || THEMES[0];
@@ -253,6 +259,7 @@
     else root.dataset.a11yScale = String(scale);
     root.dataset.a11yContrast = contrastOn() ? 'on' : 'off';
     root.dataset.a11yColorblind = colorblindOn() ? 'on' : 'off';
+    root.dataset.perf = perfOn() ? 'on' : 'off';
     applyAccent(current());
   }
 
@@ -263,7 +270,8 @@
           theme: current(),
           tone: currentTone(),
           focus: focusOn(),
-          motion: motionOn()
+          motion: motionOn(),
+          perf: perfOn()
         }
       }));
     } catch {
@@ -326,6 +334,13 @@
     notify();
   }
 
+  /** @param {boolean} on */
+  function setPerf(on) {
+    write(PERF_KEY, on ? 'on' : 'off');
+    applyState();
+    notify();
+  }
+
   /**
    * @param {string} theme
    * @param {string} color пустая строка возвращает цвет темы
@@ -352,7 +367,7 @@
   // поэтому смена темы, тона и режима в главном окне сразу видна и в листе.
   try {
     const watched = new Set([STORAGE_KEY, TONE_KEY, FOCUS_KEY, MOTION_KEY, ACCENT_KEY,
-      SCALE_KEY, CONTRAST_KEY, COLORBLIND_KEY]);
+      SCALE_KEY, CONTRAST_KEY, COLORBLIND_KEY, PERF_KEY]);
     global.addEventListener('storage', (event) => {
       if (!watched.has(event.key)) return;
       applyState();
@@ -372,6 +387,7 @@
     SCALE_KEY,
     CONTRAST_KEY,
     COLORBLIND_KEY,
+    PERF_KEY,
     SCALES,
     DEFAULT_THEME,
     DEFAULT_TONE,
@@ -383,6 +399,7 @@
     fontScale,
     contrastOn,
     colorblindOn,
+    perfOn,
     accentFor,
     accentChoices,
     apply,
@@ -392,6 +409,7 @@
     setFontScale,
     setContrast,
     setColorblind,
+    setPerf,
     setAccent,
     clearAccent
   };

@@ -61,6 +61,8 @@
   let socket = null;
   let entries = [];
   let editingId = null;
+  /** Ссылки /files/ идут по адресу стола: подставляется из контекста окна. */
+  let assetUrl = (url) => url || '';
   let query = '';
 
   function kindLabel(kind) {
@@ -99,6 +101,9 @@
       row.appendChild(el('span', 'journal-row__kind', kindLabel(entry.kind)));
       const main = el('span', 'journal-row__main');
       main.appendChild(el('span', 'journal-row__title', entry.title));
+      if (entry.image) {
+        main.appendChild(el('span', 'journal-row__tags', 'со снимком'));
+      }
       if (entry.visible) {
         main.appendChild(el('span', 'journal-row__tags', 'видна игрокам'));
       }
@@ -156,6 +161,14 @@
     visible.title = 'Запись увидят игроки в своей панели журнала';
     visibleLabel.appendChild(visible);
     visibleLabel.appendChild(el('span', null, 'Показать игрокам'));
+
+    // Снимок, если запись его стоит: ссылка на файл кампании, а не dataURL.
+    if (entry && entry.image) {
+      const shot = el('img', 'journal-editor__image');
+      shot.src = assetUrl(entry.image);
+      shot.alt = entry.title || 'Снимок из журнала';
+      form.appendChild(shot);
+    }
 
     form.appendChild(title);
     form.appendChild(kind);
@@ -225,6 +238,9 @@
       return;
     }
 
+    // Запись хранит ссылки /files/<имя>: окно открыто по file://, поэтому
+    // картинки собираются по адресу стола из контекста.
+    assetUrl = (url) => (/^https?:\/\//i.test(url || '') ? url : context.url.replace(/\/$/, '') + url);
     document.title = context.title || 'Журнал кампании';
     $('#journal-title').textContent = context.title || 'Журнал кампании';
     setStatus('Записи журнала: правки сохраняются сами');
@@ -293,6 +309,24 @@
     });
     $('#btn-journal-refresh').addEventListener('click', () => {
       if (socket) socket.emit('journalRequest');
+    });
+    $('#btn-session-export').addEventListener('click', () => {
+      if (!socket || !socket.connected) return toast('Нет соединения со столом', 'error');
+      socket.emit('sessionLogExport', {}, (result) => {
+        if (!result || !result.ok) {
+          return toast((result && result.error) || 'Экспорт не удался', 'error');
+        }
+        // Так же, как в браузере: blob + ссылка, без доступа к fs из окна.
+        const blob = new Blob([result.text], { type: 'text/markdown;charset=utf-8' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = result.name || 'session.md';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(link.href);
+        toast('Хронология сессии выгружена');
+      });
     });
     $('#journal-search').addEventListener('input', (event) => {
       query = event.target.value.trim().toLowerCase();

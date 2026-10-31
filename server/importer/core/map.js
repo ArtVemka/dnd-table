@@ -216,6 +216,34 @@ function mapToCampaign(built, context) {
           });
         }
       }
+      // Стены сцены: пиксели становятся долями карты, дверь и окно — их
+      // метками. Кривые отрезки normalizeWall отбросит при первом открытии
+      // кампании, поэтому здесь он и не вызывается.
+      const sceneWalls = Array.isArray(entity.raw && entity.raw.walls) ? entity.raw.walls : [];
+      if (sceneWalls.length) {
+        const walls = [];
+        for (const wall of sceneWalls) {
+          const parts = Array.isArray(wall.c) ? wall.c : [];
+          if (parts.length < 4) continue;
+          const entry = {
+            id: nextId('wall'),
+            x1: toFraction(parts[0], 0, sceneWidth),
+            y1: toFraction(parts[1], 0, sceneHeight),
+            x2: toFraction(parts[2], 0, sceneWidth),
+            y2: toFraction(parts[3], 0, sceneHeight)
+          };
+
+          if (wall.door) {
+            // ds: 0 закрыта, 1 открыта, 2 заперта (и секретная дверь тоже).
+            entry.door = wall.ds === 1
+              ? { open: true, locked: false }
+              : { open: false, locked: wall.ds === 2 };
+          }
+          if (wall.window) entry.window = true;
+          walls.push(entry);
+        }
+        if (walls.length) mapItem.walls = walls;
+      }
       usedSlots.push(slot);
       applied.push({ kind: 'scene', name: plan.name, where: `вкладка «${MAP_LABELS[slot]}»` });
       continue;
@@ -249,11 +277,25 @@ function mapToCampaign(built, context) {
     }
 
     if (plan.kind === 'rolltable') {
+      const doc = entity.raw || {};
+      const results = Array.isArray(doc.results) ? doc.results : [];
       adventure.tables.push({
         id: nextId('table'),
         name: entity.name || 'Таблица',
-        formula: String((entity.raw && entity.raw.formula) || ''),
-        description: String((entity.raw && entity.raw.description) || ''),
+        formula: String(doc.formula || ''),
+        description: String(doc.description || ''),
+        // Строки Foundry: range — диапазон результата формулы, weight — вес.
+        // Таблица без range тянет строки по весам, как мешок фишек.
+        rows: results.map((entry, index) => {
+          const range = entry && Array.isArray(entry.range) ? entry.range : [];
+          return {
+            id: nextId('row'),
+            label: String((entry && (entry.text || entry.label)) || 'Строка'),
+            weight: Number((entry && entry.weight) || 1),
+            min: range.length ? Number(range[0]) : undefined,
+            max: range.length > 1 ? Number(range[1]) : undefined
+          };
+        }),
         sourceId: entity.sourceId
       });
       applied.push({ kind: 'rolltable', name: plan.name, where: 'справочник таблиц' });

@@ -168,6 +168,230 @@ let chosenSheetId = null;
   }
 
   /**
+   * Слэш-команды чата: /r бросок, /w шёпот, /hp хиты выбранной фишки,
+   * /ac класс брони, /help подсказка.
+   *
+   * Разбираются в клиенте, выполняются сервером: команда не шлёт текст в чат
+   * сама, сервер валидирует права. «/» в обычном сообщении не съедается —
+   * неизвестную команду onSend отправляет как текст.
+   * @param {string} text
+   * @returns {boolean} true — текст съеден как команда
+   */
+  function handleSlashCommand(text) {
+    const raw = (text || '').trim();
+    if (!raw.startsWith('/')) return false;
+    const space = raw.indexOf(' ');
+    const first = space < 0 ? raw : raw.slice(0, space);
+    const body = space < 0 ? '' : raw.slice(space + 1).trim();
+    if (first === '/help') {
+      toast('/r формула — бросок · /w имя текст — шёпот · /hp ±N — хиты выбранной фишки · /ac N — класс брони · /vote вопрос | вариант | вариант — опрос · /help — подсказка');
+      return true;
+    }
+    if (first === '/r') {
+      if (!body) return toast('После /r нужна формула: /r 1d20+5', 'error'), true;
+      emit('rollDice', { formula: body });
+      return true;
+    }
+    if (first === '/w') {
+      if (!body) return toast('После /w имя и текст: /w Артём привет', 'error'), true;
+      const gap = body.indexOf(' ');
+      const name = gap < 0 ? body : body.slice(0, gap);
+      const message = gap < 0 ? '' : body.slice(gap + 1).trim();
+      if (!message) return toast('Текст шёпота пуст: /w Артём привет', 'error'), true;
+      if (app.role === 'dm') {
+        const target = (app.room.players || []).find((player) => player.role === 'player'
+          && String(player.name || '').toLowerCase() === name.toLowerCase());
+        if (!target) return toast(`Игрок «${name}» не найден`, 'error'), true;
+        emit('chatMessage', { text: message, whisper: true, to: target.playerId });
+      } else {
+        // Игрок шепчет только мастеру, и адресат один: имя в команде прочтёт,
+        // но шёпот уйдёт ведомому.
+        emit('chatMessage', { text: message, whisper: true });
+      }
+      return true;
+    }
+    if (first === '/hp' || first === '/ac') {
+      if (app.role !== 'dm') {
+        toast('Править фишки может только мастер', 'error');
+        return true;
+      }
+      const token = (mapView && typeof mapView.combatToken === 'function') ? mapView.combatToken() : null;
+      if (!token) return toast('Сначала выберите фишку в бою', 'error'), true;
+      if (first === '/ac') {
+        if (!/^\d+$/.test(body) || Number(body) < 1) {
+          return toast('После /ac натуральное число: /ac 17', 'error'), true;
+        }
+        emit('setTokenArmorClass', { tokenId: token.id, armorClass: Math.min(60, Number(body)) });
+        return true;
+      }
+      const amount = /^([+-]?(?:\d+))$/.exec(body);
+      if (!amount || Number(amount[1]) === 0) {
+        return toast('После /hp число со знаком: /hp 4 лечит, /hp -5 ранит', 'error'), true;
+      }
+      const healing = Number(amount[1]) > 0;
+      emit('applyTokenDamage', { tokenId: token.id, amount: Math.abs(Number(amount[1])), healing });
+      return true;
+    }
+    if (first === '/vote') {
+      if (app.role !== 'dm') {
+        toast('Опрос запускает мастер: /vote', 'error');
+        return true;
+      }
+      if (!body) {
+        return toast('После /vote вопрос и варианты: /vote Кто первый? | Скорость | Инициатива', 'error'), true;
+      }
+      const parts = body.split('|').map((item) => item.trim()).filter(Boolean);
+      if (parts.length < 3) {
+        return toast('Нужен вопрос и минимум два варианта через |', 'error'), true;
+      }
+      emit('startVote', { question: parts[0], options: parts.slice(1) });
+      return true;
+    }
+    return false;
+  }
+
+  /* --- Кинорежим -------------------------------------------------------------- */
+
+  let showcaseNode = null;
+  let showcaseStamp = '';
+  let showcaseDismissed = false;
+
+  /**
+   * Оверлей «Показывает мастер»: картинка или текст на весь экран.
+   *
+   * Зритель подтверждает показ серверу, чтобы у мастера рос счётчик «Смотрят
+   * N». Скрыть показ можно локально (Esc у игрока) — полный мастер-выключатель
+   * только у ведущего.
+   * @param {object|null} showcase
+   */
+  function applyShowcase(showcase) {
+    if (!showcase) return;
+    if (!showcase.on) {
+      if (showcaseNode) {
+        showcaseNode.remove();
+        showcaseNode = null;
+      }
+      document.body.classList.remove('is-showcase');
+      showcaseDismissed = false;
+      showcaseStamp = '';
+      return;
+    }
+    const stamp = [showcase.kind, showcase.ref, showcase.title, showcase.text].join('|');
+    if (stamp !== showcaseStamp) {
+      // Новый показ заново виден даже тому, кто скрыл предыдущий.
+      showcaseStamp = stamp;
+      showcaseDismissed = false;
+    }
+    if (showcaseDismissed) return;
+    if (!showcaseNode) {
+      showcaseNode = el('div', 'showcase');
+      showcaseNode.setAttribute('role', 'dialog');
+      showcaseNode.setAttribute('aria-label', 'Мастер показывает содержимое');
+      const close = el('button', 'showcase__close', '×');
+      close.type = 'button';
+      close.title = app.role === 'dm' ? 'Остановить показ для всех' : 'Скрыть только у себя';
+      close.addEventListener('click', () => {
+        closeShowcase();
+      });
+      showcaseNode.appendChild(close);
+      document.body.appendChild(showcaseNode);
+      const esc = (event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        closeShowcase();
+      };
+      showcaseNode.addEventListener('keydown', esc);
+      showcaseNode.tabIndex = -1;
+    }
+    // Пересобираем содержимое: ref и текст могли смениться без пересоздания.
+    // Кнопка закрытия живёт первой и остаётся.
+    [...showcaseNode.children].filter((child) => child !== showcaseNode.firstChild).forEach((child) => child.remove());
+    if (showcase.title) showcaseNode.appendChild(el('div', 'showcase__title', showcase.title));
+    if (showcase.kind === 'text') {
+      const text = el('div', 'showcase__text', showcase.text || '');
+      text.style.whiteSpace = 'pre-wrap';
+      showcaseNode.appendChild(text);
+    } else {
+      const image = el('img', 'showcase__image');
+      image.src = assetUrl(showcase.ref);
+      image.alt = showcase.title || 'Изображение от мастера';
+      showcaseNode.appendChild(image);
+    }
+    if (app.role === 'dm') {
+      const watchers = Array.isArray(showcase.watchers) ? showcase.watchers.length : 0;
+      const counter = el('div', 'showcase__watchers', `Смотрят ${watchers}`);
+      counter.id = 'showcase-watchers';
+      showcaseNode.appendChild(counter);
+    } else {
+      emit('showcaseSeen');
+    }
+    document.body.classList.add('is-showcase');
+    showcaseNode.focus();
+  }
+
+  /** Закрытие показа: у мастера — для всех, у игрока — только у себя. */
+  function closeShowcase() {
+    if (!showcaseNode) return;
+    if (app.role === 'dm') {
+      emit('setShowcase', { on: false });
+      return;
+    }
+    showcaseNode.remove();
+    showcaseNode = null;
+    document.body.classList.remove('is-showcase');
+    showcaseDismissed = true;
+  }
+
+  /**
+   * Панель опроса: вопрос, кнопки вариантов и счёт голосов.
+   *
+   * Сервер рассылает два вида payload: мастеру с картой голосов, игроку со
+   * счётом и его собственным голосом. Голосуются все, включая мастера;
+   * голос меняется повторным кликом, а закрывает опрос только мастер.
+   * @param {{question: string, options: string[], counts?: number[], yourVote?: number, votes?: Record<string, number>}|null} vote
+   */
+  let voteNode = null;
+  function applyVote(vote) {
+    if (!vote || !Array.isArray(vote.options) || vote.options.length < 2) {
+      if (voteNode) {
+        voteNode.remove();
+        voteNode = null;
+      }
+      return;
+    }
+    if (!voteNode) {
+      voteNode = el('div', 'vote');
+      voteNode.setAttribute('role', 'dialog');
+      document.body.appendChild(voteNode);
+    }
+    const counts = Array.isArray(vote.counts)
+      ? vote.counts
+      : Object.values(vote.votes || {}).reduce((acc, value) => {
+          acc[value] = (acc[value] || 0) + 1;
+          return acc;
+        }, []);
+    while (voteNode.firstChild) voteNode.firstChild.remove();
+    voteNode.appendChild(el('div', 'vote__title', vote.question || 'Опрос'));
+    const yourVote = Number.isInteger(vote.yourVote) ? vote.yourVote : null;
+    vote.options.forEach((option, index) => {
+      const button = el('button', 'vote__option', `${option} · ${counts[index] || 0}`);
+      button.type = 'button';
+      button.title = 'Голосовать (повторный клик меняет голос)';
+      if (yourVote === index) button.classList.add('is-mine');
+      button.addEventListener('click', () => {
+        emit('voteCast', { optionIndex: index });
+      });
+      voteNode.appendChild(button);
+    });
+    if (app.role === 'dm') {
+      const close = el('button', 'vote__close', 'Закрыть опрос');
+      close.type = 'button';
+      close.addEventListener('click', () => emit('voteClosed'));
+      voteNode.appendChild(close);
+    }
+  }
+
+  /**
    * Крупный результат приватного броска мастера.
    *
    * Бросок из статблока не должен светиться в чате: игроки не видят ни
@@ -580,7 +804,8 @@ let chosenSheetId = null;
       : NaN;
     return {
       armorClass: Number.isFinite(ac) && ac > 0 ? Math.round(ac) : null,
-      attackBonus: Number.isFinite(attack) ? Math.round(attack) : null
+      attackBonus: Number.isFinite(attack) ? Math.round(attack) : null,
+      down: Number(sheet.hp) <= 0
     };
   }
 
@@ -676,6 +901,72 @@ let chosenSheetId = null;
       emit('applyTokenDamage', { tokenId: token.id, amount, type: answer.type || '' });
     }
     toast(`Урон ${amount} по ${hits.length} фишкам`, 'ok');
+  }
+
+  /**
+   * Автоспасброски по шаблону AoE.
+   *
+   * Геометрию накрытых фишек считает ДМ у себя (tokensInTemplate по этой же
+   * карте), сервер пересчитывает валидность списков сам. Дальше стол бросает
+   * урон, монстрам кидает d20, а игрокам уходит заявка о спасброске.
+   * Ручной «Урон по области» никуда не уходит: он был и остался.
+   */
+  async function openTemplateAoe(template) {
+    if (!mapView || !template) return;
+    const hits = mapView.tokensInTemplate(template).filter((token) => Number(token.maxHp) > 0);
+    if (!hits.length) return toast('В шаблоне нет фишек с прочностью', 'error');
+    const names = hits.map((token) => token.name).join(', ');
+    const answer = await modal({
+      title: 'Автоспасброски по области',
+      message: `В шаблоне: ${names}.`,
+      confirmLabel: 'Применить',
+      fields: [
+        { key: 'name', label: 'Заклинание (для чата)', type: 'text', value: '' },
+        {
+          key: 'save',
+          label: 'Спасбросок',
+          type: 'select',
+          value: 'dex',
+          options: Object.entries(DnD.ABILITY_LABELS).map(([value, label]) => ({ value, label }))
+        },
+        { key: 'dc', label: 'СЛ (1-40)', type: 'number', min: 1, max: 40, value: '15' },
+        { key: 'damage', label: 'Урон (формула)', type: 'text', value: '8d6' },
+        {
+          key: 'type',
+          label: 'Тип урона',
+          type: 'select',
+          value: 'огонь',
+          options: DAMAGE_TYPES.map(([value, label]) => ({ value, label }))
+        },
+        {
+          key: 'half',
+          label: 'При успехе',
+          type: 'select',
+          value: 'true',
+          options: [
+            { value: 'true', label: 'половина урона' },
+            { value: 'false', label: 'полный урон всегда' }
+          ]
+        }
+      ]
+    });
+    if (!answer) return;
+    const dc = DnD.clampNumber(answer.dc, 1, 40, 0);
+    if (!dc) return toast('Укажите СЛ от 1 до 40', 'error');
+    const parsed = DnDDice.parseFormula(String(answer.damage || '').trim());
+    if (!parsed.ok) return toast(parsed.error, 'error');
+    emit('castAoe', {
+      type: mapView.viewedMap,
+      mapId: mapView.currentMapId,
+      templateId: template.id,
+      tokenIds: hits.map((token) => token.id),
+      spellName: String(answer.name || '').trim(),
+      save: String(answer.save || 'dex'),
+      dc,
+      damage: parsed.formula,
+      damageType: String(answer.type || ''),
+      halfOnSave: String(answer.half) === 'true'
+    });
   }
 
   function emit(event, payload) {
@@ -797,7 +1088,10 @@ let chosenSheetId = null;
       rollRequests: state.rollRequests || [],
       // Поводы для реакций приходят снимком: после переподключения карточка
       // должна быть на месте, а не жить только в памяти старого окна.
-      reactions: state.reactions || []
+      reactions: state.reactions || [],
+      // Саундборд — список мастера: игроку он в снимке не приходит, и без
+      // этого поля панель просто пуста.
+      soundboard: state.soundboard || []
     };
   }
 
@@ -1144,6 +1438,12 @@ let chosenSheetId = null;
       renderRollRequests();
     });
 
+    // Кинорежим: полное сообщение приходит всем; клиент рисует оверлей.
+    socket.on('showcaseUpdated', (showcase) => applyShowcase(showcase));
+
+    // Опрос чата: панель с кнопками вариантов, свой голос подсвечен.
+    socket.on('voteUpdated', (vote) => applyVote(vote));
+
     /* --- события стола --- */
     socket.on('playersUpdate', (players) => {
       app.room.players = players || [];
@@ -1219,6 +1519,11 @@ let chosenSheetId = null;
       renderGameTime();
     });
 
+    socket.on('timerUpdated', (timer) => {
+      app.room.timer = timer || { running: false, endsAt: 0, totalSec: 0, label: '' };
+      renderTimerChip();
+    });
+
     socket.on('calendarMonthsUpdated', (months) => {
       app.room.calendarMonths = Array.isArray(months) ? months : [];
       renderGameTime();
@@ -1250,13 +1555,28 @@ let chosenSheetId = null;
       renderInitiativePanel();
     });
 
+    // Перерисовка после обновления фишек складывается в один кадр: тянущаяся
+    // фишка шлёт обновления чаще, чем нужно перерисовывать панели, и каждая
+    // из них иначе пересобирала DOM по три раза подряд.
+    let tokenRenderScheduled = false;
+    const scheduleTokenRender = () => {
+      if (tokenRenderScheduled) return;
+      tokenRenderScheduled = true;
+      requestAnimationFrame(() => {
+        tokenRenderScheduled = false;
+        mapView.refreshTokens(app.room, viewer());
+        tokenPanel.render(app.room.tokens, app.room.players, viewer());
+        // Список выбора в порядке боя наполняется фишками: без перерисовки новая
+        // фишка появлялась бы там только после следующего события.
+        renderInitiativePanel();
+      });
+    };
+
     socket.on('tokenUpdated', (token) => {
       const index = app.room.tokens.findIndex((item) => item.id === token.id);
       if (index >= 0) app.room.tokens[index] = token;
       else app.room.tokens.push(token);
-      mapView.refreshTokens(app.room, viewer());
-      tokenPanel.render(app.room.tokens, app.room.players, viewer());
-      renderInitiativePanel();
+      scheduleTokenRender();
     });
 
     // Массовая картинка приходит пачкой: перерисовываем всё один раз, а не
@@ -1266,9 +1586,7 @@ let chosenSheetId = null;
       const byId = new Map(app.room.tokens.map((token) => [token.id, token]));
       for (const token of tokens) byId.set(token.id, token);
       app.room.tokens = [...byId.values()];
-      mapView.refreshTokens(app.room, viewer());
-      tokenPanel.render(app.room.tokens, app.room.players, viewer());
-      renderInitiativePanel();
+      scheduleTokenRender();
     });
 
     // Массовая картинка в справочнике: сервер присылает обновлённое приключение,
@@ -1371,6 +1689,20 @@ let chosenSheetId = null;
       }
     });
 
+    // Кю с саундборда: слышат все, кроме автора нажатия — его окно играет
+    // звук сразу по клику, и вторая копия из рассылки удвоила бы его.
+    socket.on('soundCue', (cue) => {
+      if (!window.DnDSound || !cue) return;
+      window.DnDSound.tableCue(cue.ref ? assetUrl(cue.ref) : '', cue.action || 'play');
+    });
+
+    // Список саундборда живёт только у мастера: панель в тулбаре карты
+    // читает его из состояния и перерисовывает следом за загрузкой файла.
+    socket.on('soundboardUpdated', (items) => {
+      app.room.soundboard = Array.isArray(items) ? items : [];
+      if (mapView) mapView.render(app.room, viewer());
+    });
+
     socket.on('diceRollResult', (roll) => {
       app.room.diceHistory.push(roll);
       // Сервер свои пределы держит, а клиент копил историю, пока не кончится
@@ -1380,6 +1712,7 @@ let chosenSheetId = null;
         app.room.diceHistory.splice(0, app.room.diceHistory.length - HISTORY_LIMITS.dice);
       }
       dicePanel.append(roll);
+      if (mapView) mapView.pushCombatLog(roll);
       // Строку о броске в чат добавляет сервер (событие chatMessage),
       // поэтому у всех клиентов история чата совпадает.
     });
@@ -1589,6 +1922,12 @@ let chosenSheetId = null;
           emit('uploadMap', { type, image: result.dataUrl, name: result.name });
         },
         onSelectMap: (type, mapId) => emit('selectMap', { type, mapId }),
+        // Саундборд: окно мастера играет кю само, сразу по нажатию, — это
+        // делает панель карты; сюда доходит только emit на весь стол.
+        onPlaySound: (ref, action) => emit('playSound', { ref, action }),
+        onUploadSound: (name, sound) => emit('uploadSound', { name, sound }),
+        onSetMapAudio: (type, mapId, ref) => emit('setMapAudio', { type, mapId, ref }),
+        onDeleteSound: (id) => emit('deleteSound', { id }),
         onMoveToken: (tokenId, x, y, meta) => emit('moveToken', { tokenId, x, y, ...(meta || {}) }),
         // Атака по возможности: карту ведёт мастер, поэтому и реакцию считает
         // его окно — только оно видит все фишки и размер клетки. Реакцию
@@ -1646,6 +1985,35 @@ let chosenSheetId = null;
         onSetTokenSide: (tokenId, side) => emit('setTokenSide', { tokenId, side }),
         onSetTokenAttackBonus: (tokenId, attackBonus) => emit('setTokenAttackBonus', { tokenId, attackBonus }),
         onSetTokenArmorClass: (tokenId, armorClass) => emit('setTokenArmorClass', { tokenId, armorClass }),
+        onSetTokenConcentration: (tokenId, concentration) => emit('setTokenConcentration', { tokenId, concentration }),
+        onTokenEmote: async (token) => {
+          if (!token || !token.id || app.training) return;
+          if (app.role !== 'dm' && token.assignedPlayerId !== app.playerId) {
+            return toast('Эмоут ставит владелец фишки или мастер', 'error');
+          }
+          const text = await modal({
+            title: 'Эмоут фишки',
+            message: 'Короткая фраза в пузыре над фишкой. Пустое поле убирает пузырь.',
+            input: { placeholder: token.emote ? token.emote.text : '', maxLength: 80 },
+            confirmLabel: 'Показать'
+          });
+          if (text === null) return;
+          emit('setTokenEmote', { tokenId: token.id, text });
+        },
+        // Стабилизация: сервер сам считает мод и создаёт заявку владельцу.
+        onStabilizeToken: (tokenId) => emit('requestStabilize', { tokenId }),
+        // Прицел из листа и от монстра: режим атаки включён на карте, цель
+        // выберет клик. Путь выбирает метка monster на атаке.
+        onFastAttack: (tokenId, attack) => {
+          const payload = { tokenId, name: attack.name, bonus: attack.bonus, damage: attack.damage };
+          emit(attack.monster ? 'monsterAttack' : 'attackToken', payload);
+        },
+        // Групповые операции: карта держит выделение и собирает батч сама.
+        onTokensBatch: ({ kind, value }) => {
+          if (!mapView || !mapView.selectedTokens) return;
+          const actions = [...mapView.selectedTokens].map((tokenId) => ({ tokenId, kind, value }));
+          emit('tokensBatch', { actions });
+        },
         // Меню фишки показывает боевые числа игрока из его листа, а не из токена.
         onSheetStats: sheetCombatStats,
         onDeleteToken: (tokenId) => emit('deleteToken', { tokenId }),
@@ -1656,10 +2024,46 @@ let chosenSheetId = null;
         onSetMapVision: (type, mapId, visionPerPlayer) => emit('setMapVision', { type, mapId, visionPerPlayer }),
         // Освещение: правка только мастерская, сервер проверяет это сам.
         onSetMapDarkness: (type, mapId, darkness) => emit('setMapDarkness', { type, mapId, darkness }),
+        onSetMapAutoLight: (type, mapId, on) => emit('setMapAutoLight', { type, mapId, on }),
         onAddMapWall: (type, mapId, wall) => emit('addMapWall', {
           type, mapId, wallId: wall.id, x1: wall.x1, y1: wall.y1, x2: wall.x2, y2: wall.y2
         }),
         onDeleteMapWall: (type, mapId, wallId) => emit('deleteMapWall', { type, mapId, wallId }),
+        onSetWallDoor: (type, mapId, wallId, patch) => emit('setMapWallDoor', { type, mapId, wallId, ...patch }),
+        // Булавки: правый клик по карте читает текст, клик по булавке правит его.
+        onCreateMapPin: async (type, mapId, x, y) => {
+          if (app.training) return;
+          const answer = await modal({
+            title: 'Булавка',
+            message: 'Короткая подсказка мастера в точке карты. Видит только мастер.',
+            fields: [
+              { key: 'title', label: 'Заголовок', maxLength: 60 },
+              { key: 'text', label: 'Текст', type: 'textarea', maxLength: 2000 }
+            ],
+            confirmLabel: 'Поставить'
+          });
+          if (!answer) return;
+          emit('setMapPin', { type, mapId, pin: { x, y, title: answer.title, text: answer.text } });
+        },
+        onEditMapPin: async (pin) => {
+          if (app.training) return;
+          const answer = await modal({
+            title: 'Булавка',
+            fields: [
+              { key: 'title', label: 'Заголовок', value: pin.title, maxLength: 60 },
+              { key: 'text', label: 'Текст', type: 'textarea', value: pin.text, maxLength: 2000 }
+            ],
+            confirmLabel: 'Сохранить'
+          });
+          if (!answer) return;
+          emit('setMapPin', {
+            type: mapView.viewedMap,
+            mapId: mapView.currentMapId,
+            pinId: pin.id,
+            pin: { x: pin.x, y: pin.y, title: answer.title, text: answer.text }
+          });
+        },
+        onDeleteMapPin: (type, mapId, pinId) => emit('deleteMapPin', { type, mapId, pinId }),
         onClearMapWalls: (type, mapId) => emit('clearMapWalls', { type, mapId }),
         onAddMapTemplate: (type, mapId, template) => emit('addMapTemplate', {
           type,
@@ -1675,6 +2079,7 @@ let chosenSheetId = null;
         onDeleteMapTemplate: (type, mapId, templateId) => emit('deleteMapTemplate', { type, mapId, templateId }),
         onClearMapTemplates: (type, mapId) => emit('clearMapTemplates', { type, mapId }),
         onTemplateDamage: openTemplateDamage,
+        onTemplateAoe: openTemplateAoe,
         onAddMapLight: (type, mapId, light) => emit('addMapLight', {
           type,
           mapId,
@@ -1729,7 +2134,13 @@ let chosenSheetId = null;
     }
     if (!chatPanel) {
       chatPanel = new ChatPanel($('#tab-chat'), {
-        onSend: (text, whisper, to) => emit('chatMessage', { text, whisper, to }),
+        onSend: (text) => {
+          // Слэш-команды едят текст до события: сервер видит уже чистый
+          // результат (бросок, шёпот, правку фишки). «/» в обычном тексте
+          // не съедается: неизвестная команда уходит в чат как есть.
+          if (handleSlashCommand(text)) return;
+          emit('chatMessage', { text });
+        },
         // Шёпот есть и у игрока, и у мастера: игрок пишет ведущему, мастер
         // выбирает игрока. В тренировке ведущего нет.
         canWhisper: () => !app.training,
@@ -1791,6 +2202,23 @@ let chosenSheetId = null;
         onSetTokenSide: (tokenId, side) => emit('setTokenSide', { tokenId, side }),
         onSetTokenAttackBonus: (tokenId, attackBonus) => emit('setTokenAttackBonus', { tokenId, attackBonus }),
         onSetTokenArmorClass: (tokenId, armorClass) => emit('setTokenArmorClass', { tokenId, armorClass }),
+        onSetTokenConcentration: (tokenId, concentration) => emit('setTokenConcentration', { tokenId, concentration }),
+        onTokenEmote: async (token) => {
+          if (!token || !token.id || app.training) return;
+          if (app.role !== 'dm' && token.assignedPlayerId !== app.playerId) {
+            return toast('Эмоут ставит владелец фишки или мастер', 'error');
+          }
+          const text = await modal({
+            title: 'Эмоут фишки',
+            message: 'Короткая фраза в пузыре над фишкой. Пустое поле убирает пузырь.',
+            input: { placeholder: token.emote ? token.emote.text : '', maxLength: 80 },
+            confirmLabel: 'Показать'
+          });
+          if (text === null) return;
+          emit('setTokenEmote', { tokenId: token.id, text });
+        },
+        // Стабилизация: сервер сам считает мод и создаёт заявку владельцу.
+        onStabilizeToken: (tokenId) => emit('requestStabilize', { tokenId }),
         // Меню фишки показывает боевые числа игрока из его листа, а не из токена.
         onSheetStats: sheetCombatStats,
         // Состояния ведёт мастер, но видны они всем.
@@ -1810,6 +2238,38 @@ let chosenSheetId = null;
         // Перенос из списка фишек делает то же, что правый клик по фишке на
         // карте: освобождает заготовку от привязки к старой локации.
         onMoveTokenToActive: (tokenId) => emit('moveTokenToActiveMap', { tokenId }),
+        // Планировщик сцен: все фишки на показанную карту разом, один откат.
+        onMoveAllToActive: async () => {
+          if (app.training) return;
+          const answer = await modal({
+            title: 'Вывести всех на активную карту?',
+            message: 'Фишки с других карт переезжают в центр показанной карты и раскладываются сеткой. Откат одним Ctrl+Z.',
+            confirmLabel: 'Вывести'
+          });
+          if (answer) emit('moveAllTokensToActiveMap', {});
+        },
+        // Снимок и восстановление сцены: раскладка всех фишек одним кликом.
+        onCreateSceneSnapshot: () => {
+          if (app.training) return;
+          emit('setSceneSnapshot', {}, (result) => {
+            if (!result || !result.ok) return toast((result && result.error) || 'Снимок не удался', 'error');
+            toast(`Снимок сделан: ${result.count} фишек`);
+          });
+        },
+        onRestoreSceneSnapshot: async () => {
+          if (app.training) return;
+          const answer = await modal({
+            title: 'Вернуть снимок сцены?',
+            message: 'Фишки вернутся на места из последнего снимка. Откат — Ctrl+Z.',
+            confirmLabel: 'Вернуть'
+          });
+          if (answer) {
+            emit('restoreSceneSnapshot', {}, (result) => {
+              if (!result || !result.ok) return toast((result && result.error) || 'Восстановление не удалось', 'error');
+              toast(`Сцена восстановлена: ${result.count} фишек`);
+            });
+          }
+        },
         activeMapInfo: () => ({ activeMap: app.room.activeMap, activeMapId: app.room.activeMapId }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
@@ -1828,6 +2288,22 @@ let chosenSheetId = null;
         onRollCheck: (formula, label) => {
           emit('rollDice', { formula });
           toast(`${label}: ${formula}`);
+        },
+        // Каст тратит ячейку на сервере: здесь только заявка.
+        onCastSpell: (spellId, slotLevel) => emit('castSpell', { spellId, slotLevel }),
+        onNotice: (message) => toast(message, 'error'),
+        // Быстрая атака: включаем режим прицела на карте, фишку выберет клик.
+        onAttackTarget: (attack) => {
+          if (mapView && typeof mapView.setAttackMode === 'function') {
+            mapView.setAttackMode(attack);
+            toast('Целься: клик по фишке');
+          } else {
+            toast('Откройте карту, чтобы выбрать цель', 'error');
+          }
+        },
+        onFastAttack: (tokenId, attack) => {
+          const payload = { tokenId, name: attack.name, bonus: attack.bonus, damage: attack.damage };
+          emit(attack.monster ? 'monsterAttack' : 'attackToken', payload);
         },
         // Состояния своей фишки дают помеху проверкам, атакам и спасброскам.
         // Источник — токен на карте, а не лист: состояния ставит мастер фишке.
@@ -2046,6 +2522,7 @@ let chosenSheetId = null;
     { key: 'notes', label: 'Заметки', icon: '📜', one: 'заметка', few: 'заметки', many: 'заметок' },
     { key: 'actors', label: 'Персонажи', icon: '🧝', one: 'персонаж', few: 'персонажа', many: 'персонажей' },
     { key: 'items', label: 'Предметы', icon: '🎒', one: 'предмет', few: 'предмета', many: 'предметов' },
+    { key: 'spells', label: 'Заклинания', icon: '✨', one: 'заклинание', few: 'заклинания', many: 'заклинаний' },
     { key: 'tables', label: 'Таблицы', icon: '🎲', one: 'таблица', few: 'таблицы', many: 'таблиц' }
   ];
 
@@ -2162,6 +2639,8 @@ let chosenSheetId = null;
       empty.appendChild(makeAddActorButton());
       const bestiary = makeBestiaryButton();
       if (bestiary) empty.appendChild(bestiary);
+      const spells = makeSpellButton();
+      if (spells) empty.appendChild(spells);
       panel.appendChild(empty);
       adventurePanelStale = false;
       return;
@@ -2207,12 +2686,33 @@ let chosenSheetId = null;
 
     const actions = el('div', 'adv-actions');
     actions.appendChild(makeAddActorButton());
+    actions.appendChild(makeSrdImportButton());
     const bestiary = makeBestiaryButton();
     if (bestiary) actions.appendChild(bestiary);
+    const spells = makeSpellButton();
+    if (spells) actions.appendChild(spells);
     panel.appendChild(actions);
     panel.appendChild(buildEncounterBlock(adventure));
 
     fillAdventureSections(panel, adventure, '');
+  }
+
+  /**
+   * Кнопка компендиума SRD: офлайн-база без сети, за раз добавляется всё новое.
+   */
+  function makeSrdImportButton() {
+    const add = el('button', 'btn btn--tiny', 'Компендиум SRD');
+    add.type = 'button';
+    add.title = 'Добавить базовый набор монстров и заклинаний SRD без сети';
+    add.addEventListener('click', () => {
+      emit('importSrd', {}, (result) => {
+        if (!result || !result.ok) {
+          return toast((result && result.error) || 'Импорт не удался', 'error');
+        }
+        toast(`Добавлено: ${result.actors} монстров, ${result.spells} заклинаний`);
+      });
+    });
+    return add;
   }
 
   /** Кнопка «новый NPC»: работает и без импортированного приключения. */
@@ -2252,6 +2752,167 @@ let chosenSheetId = null;
    * Сеть живёт в main-процессе: окно не должно ходить на произвольные адреса.
    * Здесь только шаги, список находок и карточка, которую можно сохранить.
    */
+  /**
+   * Кнопка импорта заклинаний: как бестиарий, без моста прячется.
+   */
+  function makeSpellButton() {
+    if (typeof desktop === 'undefined' || typeof desktop.searchOpen5eSpells !== 'function') return null;
+    const add = el('button', 'btn btn--tiny', 'Заклинания Open5e');
+    add.type = 'button';
+    add.title = 'Найти заклинание в Open5e и добавить в справочник';
+    add.addEventListener('click', () => openSpellImport());
+    return add;
+  }
+
+  /**
+   * Импорт заклинаний из Open5e.
+   *
+   * То же окно, что у бестиария, но проще: у заклинания нет портрета и
+   * фильтров по CR — только поиск, карточка и кнопка «В справочник».
+   */
+  function openSpellImport() {
+    if (typeof desktop === 'undefined' || typeof desktop.searchOpen5eSpells !== 'function') return;
+
+    const overlay = el('div', 'modal-overlay');
+    const box = el('div', 'modal modal--bestiary');
+    const titleId = `spell-title-${Date.now()}`;
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', titleId);
+    box.tabIndex = -1;
+    const title = el('div', 'modal__title', 'Заклинания из Open5e');
+    title.id = titleId;
+    box.appendChild(title);
+    const release = trapFocus(box);
+
+    const form = el('form', 'bestiary-search');
+    const input = el('input', 'input bestiary-search__input');
+    input.type = 'search';
+    input.placeholder = 'Введите название заклинания (на русском или английском)';
+    input.maxLength = 120;
+    input.setAttribute('aria-label', 'Название заклинания');
+    const find = el('button', 'btn btn--accent bestiary-search__go', 'Найти');
+    find.type = 'submit';
+    form.appendChild(input);
+    form.appendChild(find);
+    box.appendChild(form);
+
+    const status = el('div', 'status bestiary-status');
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    box.appendChild(status);
+
+    const results = el('div', 'bestiary-results');
+    box.appendChild(results);
+    const preview = el('div', 'bestiary-preview');
+    preview.hidden = true;
+    box.appendChild(preview);
+
+    const actions = el('div', 'modal__actions');
+    const save = el('button', 'btn btn--accent', 'В справочник');
+    save.type = 'button';
+    save.disabled = true;
+    const close = el('button', 'btn btn--ghost', 'Закрыть');
+    close.type = 'button';
+    actions.appendChild(save);
+    actions.appendChild(close);
+    box.appendChild(actions);
+
+    const keyHandler = (event) => {
+      if (event.key === 'Escape') closeModal();
+    };
+    const closeModal = () => {
+      document.removeEventListener('keydown', keyHandler);
+      release();
+      overlay.remove();
+    };
+    close.addEventListener('click', closeModal);
+    overlay.addEventListener('pointerdown', (event) => {
+      if (event.target === overlay) closeModal();
+    });
+    document.addEventListener('keydown', keyHandler);
+
+    const showStatus = (message, kind) => {
+      status.textContent = message || '';
+      status.className = `status bestiary-status${kind ? ` status--${kind}` : ''}`;
+    };
+
+    let draftId = '';
+
+    save.addEventListener('click', async () => {
+      if (!draftId) return;
+      save.disabled = true;
+      const answer = await desktop.importOpen5eSpell(draftId);
+      if (answer && answer.ok) {
+        draftId = '';
+        closeModal();
+      } else {
+        showStatus((answer && answer.error) || 'Не удалось сохранить заклинание.', 'error');
+        save.disabled = false;
+      }
+    });
+
+    const drawPreview = (data) => {
+      draftId = data.id;
+      preview.textContent = '';
+      preview.hidden = false;
+      const spell = data.spell || {};
+      preview.appendChild(el('div', 'bestiary-card__head', spell.name || ''));
+      const body = el('div', 'adv-item__text', spell.text || '');
+      body.style.whiteSpace = 'pre-wrap';
+      preview.appendChild(body);
+      save.disabled = false;
+    };
+
+    const drawResults = (items) => {
+      results.textContent = '';
+      if (!items.length) {
+        showStatus('Ничего не нашлось. Попробуйте англоязычное название.');
+        return;
+      }
+      for (const item of items) {
+        const row = el('button', 'bestiary-result');
+        row.type = 'button';
+        row.appendChild(el('span', 'bestiary-result__name', item.name));
+        const bits = [item.level ? `${item.level}-й уровень` : 'Заговор', item.school].filter(Boolean);
+        row.appendChild(el('span', 'bestiary-result__meta', bits.join(' · ')));
+        row.addEventListener('click', async () => {
+          showStatus('Переводим заклинание…');
+          const answer = await desktop.previewOpen5eSpell(item.key);
+          if (!answer || !answer.ok) {
+            showStatus((answer && answer.error) || 'Карточка не загрузилась.', 'error');
+            return;
+          }
+          showStatus('');
+          drawPreview(answer);
+        });
+        results.appendChild(row);
+      }
+    };
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const query = input.value.trim();
+      if (!query) return;
+      showStatus('Ищем заклинание…');
+      results.textContent = '';
+      preview.hidden = true;
+      draftId = '';
+      save.disabled = true;
+      const answer = await desktop.searchOpen5eSpells(query);
+      if (!answer || !answer.ok) {
+        showStatus((answer && answer.error) || 'Поиск не удался.', 'error');
+        return;
+      }
+      showStatus('');
+      drawResults(answer.results || []);
+    });
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    input.focus();
+  }
+
   function openBestiaryImport() {
     if (typeof desktop === 'undefined' || typeof desktop.previewOpen5e !== 'function') return;
 
@@ -3254,12 +3915,47 @@ let chosenSheetId = null;
     }
     card.appendChild(head);
 
+    // Таблица бросков: кнопка уходит к серверу, который и выбирает строку.
+    // Тайный режим держит строку при мастерах, как dmOnly-бросок.
+    if (section.key === 'tables' && app.role === 'dm') {
+      const rolls = el('div', 'adv-item__actions');
+      for (const member of group.members) {
+        const open = el('button', 'btn btn--tiny', 'Бросить');
+        open.type = 'button';
+        open.title = `Строку выберет сервер: ${member.formula || 'по весам'}`;
+        open.addEventListener('click', () => emit('rollTable', { tableId: member.id, hidden: false }));
+        rolls.appendChild(open);
+        const hidden = el('button', 'btn btn--tiny btn--ghost', 'Тайно');
+        hidden.type = 'button';
+        hidden.title = 'Строку увидят только мастера';
+        hidden.addEventListener('click', () => emit('rollTable', { tableId: member.id, hidden: true }));
+        rolls.appendChild(hidden);
+      }
+      card.appendChild(rolls);
+    }
+
     // Картинку массово ставят только тем, у кого это осмысленно: предметам
     // и персонажам. Заметку и таблицу одной картинкой не заменить.
     if (section.key === 'items' || section.key === 'actors') {
       card.appendChild(makeGroupImageButton(group.name, group.members.length, (name, image) => {
         emit('setAdventureGroupImage', { section: section.key, name, image });
       }));
+    }
+
+    // Кинорежим: картинку из справочника можно показать всем сразу.
+    if ((section.key === 'actors' || section.key === 'items') && app.role === 'dm') {
+      const showcaseButton = el('button', 'btn btn--tiny', 'Показать всем');
+      showcaseButton.type = 'button';
+      showcaseButton.title = 'Картинка записи открывается всем участникам поверх стола';
+      showcaseButton.addEventListener('click', () => {
+        const withImage = group.members.find((member) => member.image);
+        if (!withImage) {
+          toast('У записи нет картинки', 'error');
+          return;
+        }
+        emit('setShowcase', { on: true, kind: 'image', ref: withImage.image, title: group.name });
+      });
+      card.appendChild(showcaseButton);
     }
 
     if (section.key === 'actors') {
@@ -3283,6 +3979,24 @@ let chosenSheetId = null;
           dice.appendChild(button);
         }
         card.appendChild(dice);
+      }
+      // Кнопки attacks: следующий клик по фишке на карте бьёт по ней готовой
+      // атакой из статблока (сервер бросает d20 против КД и считает урон).
+      const attacks = monsterAttackOptions(block);
+      if (attacks.length && app.role === 'dm') {
+        const aim = el('div', 'adv-dice');
+        for (const attack of attacks) {
+          const button = el('button', 'btn btn--tiny adv-dice__btn', `Атака: ${attack.name}`);
+          button.type = 'button';
+          button.title = `Бьёт по фишке: d20${attack.bonus >= 0 ? '+' : ''}${attack.bonus} против КД, урон ${attack.damage}`;
+          button.addEventListener('click', () => {
+            if (!mapView) return toast('Откройте карту, чтобы выбрать цель', 'error');
+            mapView.setAttackMode({ ...attack, monster: true });
+            toast('Целься: клик по фишке');
+          });
+          aim.appendChild(button);
+        }
+        card.appendChild(aim);
       }
       const actions = el('div', 'adv-item__actions');
       const edit = el('button', 'btn btn--tiny', 'Статблок');
@@ -3313,6 +4027,25 @@ let chosenSheetId = null;
         });
         if (!confirmed) return;
         emit('deleteAdventureActor', { name: group.name });
+      });
+      actions.appendChild(remove);
+      card.appendChild(actions);
+    }
+
+    if (section.key === 'spells') {
+      const actions = el('div', 'adv-item__actions');
+      const remove = el('button', 'btn btn--tiny btn--danger btn--ghost', 'Удалить');
+      remove.type = 'button';
+      remove.title = 'Убрать заклинание из справочника';
+      remove.addEventListener('click', async () => {
+        const confirmed = await modal({
+          title: 'Удалить заклинание?',
+          message: `«${group.name}» исчезнет из справочника.`,
+          confirmLabel: 'Удалить',
+          danger: true
+        });
+        if (!confirmed) return;
+        emit('deleteAdventureSpell', { name: group.name });
       });
       actions.appendChild(remove);
       card.appendChild(actions);
@@ -3396,6 +4129,29 @@ let chosenSheetId = null;
       if (macros.length >= 8) break;
     }
     return macros.slice(0, 8);
+  }
+
+  /**
+   * Готовые атаки монстра из статблока: пары «атака + урон» из макросов.
+   * bonus берётся из формулы попадания (1d20+5 → 5), damage — формула урона.
+   * @param {object} block
+   * @returns {{name: string, bonus: number, damage: string}[]}
+   */
+  function monsterAttackOptions(block = {}) {
+    const macros = attackMacros(block);
+    const byTitle = new Map();
+    for (const macro of macros) {
+      const title = String(macro.label.split(':')[0] || '').trim();
+      if (!title) continue;
+      const entry = byTitle.get(title) || { name: title, bonus: 0, damage: '' };
+      if (/^1d20[+-]\d+$/.test(macro.formula)) {
+        entry.bonus = Number(macro.formula.slice(4)) || 0;
+      } else if (!entry.damage) {
+        entry.damage = macro.formula;
+      }
+      byTitle.set(title, entry);
+    }
+    return [...byTitle.values()].filter((entry) => entry.damage);
   }
 
   /**
@@ -3526,6 +4282,7 @@ let chosenSheetId = null;
   /** Текст объекта приключения для карточки. */
   function kindText(key, item) {
     if (key === 'notes') return String(item.text || '');
+    if (key === 'spells') return String(item.text || '');
     if (key === 'tables') return String(item.description || '');
     if (key === 'items' || key === 'actors') return String(item.type || '');
     return '';
@@ -3733,7 +4490,74 @@ let chosenSheetId = null;
     if (node) node.textContent = gameTimeLabel(gameTime());
     const rest = $('#btn-game-rest');
     if (rest) rest.hidden = app.role !== 'dm';
+    renderTimerChip();
   }
+
+  /* ------------------------------------------------- бытовой таймер ---- */
+
+  /**
+   * Секунды до конца таймера: -1, когда таймера нет.
+   *
+   * Сервер не тикает: в состоянии лежит endsAt, остаток считает клиент.
+   * Часы машины и стола могут разойтись на секунду — бытовому таймеру это
+   * не вредит. shortcut: без сверки часов с сервером; точный пинг понадобится,
+   * если таймер станет игровым.
+   */
+  function timerLeft() {
+    const timer = app.room && app.room.timer;
+    if (!timer || !timer.running || !timer.endsAt) return -1;
+    return Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 1000));
+  }
+
+  function formatTimerLeft(left) {
+    return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  }
+
+  /** «90» или «1:30» в секунды: не дольше четырёх часов. */
+  function parseTimerInput(text) {
+    const value = String(text || '').trim();
+    const mmss = /^(\d{1,3}):([0-5]?\d)$/.exec(value);
+    const total = mmss ? Number(mmss[1]) * 60 + Number(mmss[2]) : Number(value);
+    if (!Number.isFinite(total) || total <= 0) return 0;
+    return Math.min(4 * 3600, Math.round(total));
+  }
+
+  let timerFiredAt = 0;
+
+  function renderTimerChip() {
+    const chip = $('#timer-chip');
+    if (!chip) return;
+    const left = timerLeft();
+    const dm = app.role === 'dm' && !app.training;
+    // Игроку чип нужен, только когда что-то тикает; мастеру — всегда:
+    // это его кнопка запуска.
+    if (left < 0 && !dm) {
+      chip.hidden = true;
+      return;
+    }
+    chip.hidden = false;
+    if (left < 0) {
+      chip.textContent = '⏱';
+      chip.classList.remove('is-urgent');
+      chip.title = 'Обратный отсчёт: запустить таймер';
+      return;
+    }
+    const timer = app.room.timer;
+    chip.textContent = `⏱ ${formatTimerLeft(left)}`;
+    chip.title = timer.label ? `Таймер: ${timer.label}` : 'Обратный отсчёт';
+    chip.classList.toggle('is-urgent', left <= 10);
+    if (left === 0 && timer.endsAt > timerFiredAt) {
+      timerFiredAt = timer.endsAt;
+      // Три щелчка громче одного и не требуют нового звука в каждом скине.
+      if (window.DnDSound) {
+        window.DnDSound.play('click');
+        setTimeout(() => window.DnDSound.play('click'), 320);
+        setTimeout(() => window.DnDSound.play('click'), 640);
+      }
+    }
+  }
+
+  setInterval(renderTimerChip, 1000);
 
   /** События календаря в порядке дат. */
   function calendarEvents() {
@@ -3913,6 +4737,18 @@ let chosenSheetId = null;
     emit('partyLongRest', {});
   }
 
+  // Техданные шапки (порт, участники, сохранение) больше не висят текстом:
+  // они живут в подсказке бейджа связи, строку под заголовком прячут стили.
+  let connLabel = '';
+  let connDetail = '';
+
+  function refreshConnTooltip() {
+    const badge = $('#conn-badge');
+    if (!badge) return;
+    badge.title = connDetail ? `${connLabel} · ${connDetail}` : connLabel;
+    badge.setAttribute('aria-label', connLabel);
+  }
+
   function updateTableHeader() {
     const campaign = app.campaign || {};
     $('#table-campaign').textContent = campaign.name || 'Кампания';
@@ -3924,7 +4760,9 @@ let chosenSheetId = null;
     parts.push(`участников: ${app.room.players.length} (в сети ${online})`);
     parts.push(`фишек: ${app.room.tokens.length}`);
     if (campaign.updatedAt) parts.push(`сохранено: ${formatDateTime(campaign.updatedAt)}`);
-    $('#table-sub').textContent = parts.join(' · ');
+    connDetail = parts.join(' · ');
+    $('#table-sub').textContent = connDetail;
+    refreshConnTooltip();
   }
 
   function updateConnBadge(online) {
@@ -3932,8 +4770,10 @@ let chosenSheetId = null;
     if (!badge) return;
     // В тренировочном столе связи нет по определению — так и подписываем.
     const training = Boolean(app.training) && online;
-    badge.textContent = training ? 'без сети' : (online ? 'на связи' : 'нет связи');
-    badge.className = `badge ${training ? 'badge--train' : (online ? 'badge--on' : 'badge--off')}`;
+    connLabel = training ? 'без сети' : (online ? 'на связи' : 'нет связи');
+    badge.className = `badge badge--net ${training ? 'badge--train' : (online ? 'badge--on' : 'badge--off')}`;
+    badge.textContent = '';
+    refreshConnTooltip();
   }
 
   /* ------------------------------------------------------------------ *
@@ -5238,6 +6078,23 @@ let chosenSheetId = null;
     dirButton.addEventListener('click', () => desktop.openDataDir());
     appBox.appendChild(dirButton);
 
+    // Скриншот окна сохраняется прямо в журнал кампании: хендауты, тесты
+    // экранов и случайные находки не должны проходить через папку диска.
+    if (typeof desktop.capturePage === 'function') {
+      const shotButton = el('button', 'btn btn--tiny', 'Скриншот в журнал');
+      shotButton.type = 'button';
+      shotButton.title = 'Снимок этого окна падает новой записью в текущий журнал';
+      shotButton.addEventListener('click', async () => {
+        const answer = await desktop.capturePage();
+        if (!answer || !answer.ok) {
+          return toast((answer && answer.error) || 'Снимок не удался', 'error');
+        }
+        emit('journalImage', { image: answer.dataUrl, title: 'Скриншот стола' });
+        toast('Снимок уходит в журнал');
+      });
+      appBox.appendChild(shotButton);
+    }
+
     // Автосохранение кампании. Таймер живёт в main-процессе, здесь только
     // выбор; на Android стола нет, и строки тоже нет.
     if (typeof desktop.setAutosaveInterval === 'function') {
@@ -5533,6 +6390,23 @@ let chosenSheetId = null;
       restParty.type = 'button';
       restParty.title = 'Вылечить всю партию и сдвинуть время на 8 часов';
       restParty.addEventListener('click', () => partyLongRest());
+      // Выдача опыта: сервер сам делит сумму на игроков с листом.
+      const awardXp = el('button', 'btn btn--tiny', 'Выдать XP');
+      awardXp.type = 'button';
+      awardXp.title = 'Сумма делится поровну на всех игроков с листом';
+      awardXp.addEventListener('click', async () => {
+        const values = await modal({
+          title: 'Выдать опыт',
+          message: 'Сумма делится поровну на игроков с листом.',
+          fields: [{ key: 'amount', label: 'XP встречи', type: 'number', min: 0, max: 999999 }],
+          confirmLabel: 'Выдать'
+        });
+        const amount = Math.round(Number(values && values.amount));
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return toast('Нужна сумма опыта', 'error');
+        }
+        emit('awardXp', { amount });
+      });
       const saveTime = el('button', 'btn btn--accent btn--tiny', 'Сохранить');
       saveTime.type = 'button';
       saveTime.addEventListener('click', () => {
@@ -5541,6 +6415,7 @@ let chosenSheetId = null;
       timeActions.appendChild(plusHour);
       timeActions.appendChild(plusRest);
       timeActions.appendChild(restParty);
+      timeActions.appendChild(awardXp);
       timeActions.appendChild(saveTime);
       timeBox.appendChild(timeActions);
       timeBox.appendChild(el('div', 'box__note',
@@ -5830,6 +6705,27 @@ let chosenSheetId = null;
       ambientRow.appendChild(ambientVolume);
       ambientRow.appendChild(ambientVolumeValue);
       soundBox.appendChild(ambientRow);
+
+      // Громкость стола отдельная: саундборд, эмбиент карт и боевой луп
+      // звучат в бою и под диалогами, и подстраивают их независимо от
+      // щелчков интерфейса и домашней атмосферы.
+      const tableRow = el('div', 'settings__row');
+      tableRow.appendChild(el('span', 'settings__label', 'Громкость стола'));
+      const tableVolume = el('input', 'settings__range');
+      tableVolume.type = 'range';
+      tableVolume.min = '0';
+      tableVolume.max = '100';
+      tableVolume.step = '5';
+      tableVolume.value = String(Math.round(sound.tableVolume() * 100));
+      tableVolume.dataset.setting = 'sound-table-volume';
+      const tableVolumeValue = el('span', 'settings__value', `${tableVolume.value}%`);
+      tableVolume.addEventListener('input', () => {
+        sound.setTableVolume(tableVolume.value);
+        tableVolumeValue.textContent = `${tableVolume.value}%`;
+      });
+      tableRow.appendChild(tableVolume);
+      tableRow.appendChild(tableVolumeValue);
+      soundBox.appendChild(tableRow);
       soundBox.appendChild(el('div', 'box__note',
         'Щелчки не привязаны к теме. Атмосфера главного экрана подстраивается: '
         + 'лес шумит ветром и птицами, океан дышит прибоем, магия звенит, '
@@ -5881,6 +6777,12 @@ let chosenSheetId = null;
       window.DnDTheme.colorblindOn(),
       'a11y-colorblind',
       (on) => window.DnDTheme.setColorblind(on)
+    ));
+    a11yBox.appendChild(settingsCheck(
+      'Офисный ПК: без прозрачности и теней, для слабых видеокарт',
+      window.DnDTheme.perfOn(),
+      'a11y-perf',
+      (on) => window.DnDTheme.setPerf(on)
     ));
     // Настройки общие с окном журнала и листа: theme.js там тот же, а значит,
     // масштаб и контраст подхватятся и в них без отдельного кода.
@@ -6209,7 +7111,7 @@ const gridRow = el('div', 'settings__row');
 
     const left = $('#btn-panel-left');
     if (left) {
-      left.textContent = leftCollapsed ? '▶ Участники' : '◀ Участники';
+      left.textContent = leftCollapsed ? '▶' : '◀';
       left.title = leftCollapsed
         ? 'Показать панель участников и адресов'
         : 'Свернуть панель участников и адресов';
@@ -6217,7 +7119,7 @@ const gridRow = el('div', 'settings__row');
     }
     const right = $('#btn-panel-right');
     if (right) {
-      right.textContent = rightCollapsed ? '◂ Панель' : 'Панель ▸';
+      right.textContent = rightCollapsed ? '◂' : '▸';
       right.title = rightCollapsed
         ? 'Развернуть панель чата, кубиков, листа и фишек'
         : 'Свернуть панель до иконок';
@@ -6884,6 +7786,29 @@ const gridRow = el('div', 'settings__row');
     $('#btn-leave').addEventListener('click', leaveTable);
     $('#btn-search').addEventListener('click', openSearch);
     $('#btn-undo').addEventListener('click', undoDmAction);
+    $('#timer-chip').addEventListener('click', async () => {
+      if (app.role !== 'dm' || app.training) return;
+      const left = timerLeft();
+      if (left >= 0) {
+        const stop = await modal({
+          title: 'Таймер',
+          message: `Осталось ${formatTimerLeft(left)}. Остановить?`,
+          confirmLabel: 'Остановить'
+        });
+        if (stop) emit('timerStop', {});
+        return;
+      }
+      const value = await modal({
+        title: 'Обратный отсчёт',
+        message: 'Сколько отсчитывать: секунды или мм:сс.',
+        input: { placeholder: '1:30', maxLength: 6 },
+        confirmLabel: 'Пуск'
+      });
+      const seconds = parseTimerInput(value);
+      if (!seconds) return;
+      emit('timerStart', { seconds });
+    });
+
     $('#btn-game-rest').addEventListener('click', () => {
       partyLongRest();
     });

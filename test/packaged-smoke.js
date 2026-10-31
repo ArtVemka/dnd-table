@@ -47,7 +47,7 @@ const REQUIRED_FILES = [
   'preload-sheet.js',
   'preload-journal.js',
   'renderer/index.html',
-  // Оформление разбито на девять частей и подключается по порядку номеров.
+  // Оформление разбито на части и подключается по порядку номеров.
   // Если хоть одна не попала в пакет, страница откроется без оформления вовсе,
   // и заметить это можно только глазами.
   'renderer/styles/01-tokens.css',
@@ -59,6 +59,7 @@ const REQUIRED_FILES = [
   'renderer/styles/07-sheet.css',
   'renderer/styles/08-theme-layer.css',
   'renderer/styles/09-theme-studio.css',
+  'renderer/styles/10-perf-mode.css',
   'renderer/theme.js',
   // Звуковые скины: без файла настройки звука останутся, а кнопки не зазвучат.
   'renderer/sound.js',

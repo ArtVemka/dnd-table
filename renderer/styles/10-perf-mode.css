@@ -1,0 +1,22 @@
+/* Режим «Офисный ПК» (dnd-table.perf). Слабые iGPU и 8 ГБ памяти: дешёвая
+   прозрачность и мягкие тени переплачивают за поверхность. Здесь они
+   выключаются целиком, как стилистические, а не как функциональные слои.
+   Цветов в файле нет сознательно: части вне палитры не отвечают за палитру. */
+
+html[data-perf='on'] *,
+html[data-perf='on'] *::before,
+html[data-perf='on'] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  transition: none !important;
+  animation: none !important;
+}
+
+/* Декор стола целиком рисуется тенями по градиенту: без теней он проседает,
+   а перерисовка по каждому движению курсора остаётся. Прячем, а не упрощаем. */
+html[data-perf='on'] .map-decor {
+  display: none;
+}

@@ -204,6 +204,15 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // Мёртвый рендерер = чёрное окно без единой зацепки. Пишем причину в лог,
+  // чтобы следующий такой случай был чем диагностировать, а не гадать.
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    console.error('[render-process-gone]', JSON.stringify(details));
+  });
+  mainWindow.on('unresponsive', () => {
+    console.error('[window] unresponsive');
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -1365,6 +1374,63 @@ function registerIpc() {
     }
   });
 
+  /* Заклинания Open5e: текст без портрета, поэтому каналов меньше, чем у бестиария. */
+  ipcMain.handle('spells:search', async (event, query) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    const text = String(query || '').trim().slice(0, 120);
+    if (!text) return { ok: false, error: 'Введите название заклинания.' };
+    try {
+      const result = await open5e.searchSpells(text);
+      return { ok: true, ...result };
+    } catch (error) {
+      console.warn('[open5e] заклинания, поиск:', error.message);
+      return { ok: false, error: bestiaryError(error) };
+    }
+  });
+
+  ipcMain.handle('spells:preview', async (event, key) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    try {
+      const result = await open5e.previewSpell(key);
+      pruneBestiaryDrafts();
+      const id = crypto.randomUUID();
+      bestiaryDrafts.set(id, { at: Date.now(), ...result });
+      return { ok: true, id, ...result };
+    } catch (error) {
+      console.warn('[open5e] заклинания, карточка:', error.message);
+      return { ok: false, error: bestiaryError(error) };
+    }
+  });
+
+  ipcMain.handle('spells:import', async (event, draftId) => {
+    if (!host || !host.room) return { ok: false, error: 'Сначала запустите стол.' };
+    const draft = bestiaryDrafts.get(String(draftId || ''));
+    if (!draft || !draft.spell) return { ok: false, error: 'Карточка устарела. Найдите заклинание заново.' };
+    try {
+      if (!host.room.adventure) {
+        host.room.adventure = normalizeAdventure({ name: 'Бестиарий', source: 'Open5e', actors: [] });
+      }
+      const adventure = host.room.adventure;
+      if (adventure.spells.length >= LIMITS.maxAdventureSpells) {
+        return { ok: false, error: 'В справочнике уже слишком много заклинаний.' };
+      }
+      const clean = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      if (adventure.spells.some((entry) => clean(entry.name) === clean(draft.spell.name))) {
+        return { ok: false, error: `«${draft.spell.name}» уже есть в справочнике.` };
+      }
+      adventure.spells.push({ ...draft.spell, id: `spell-${crypto.randomBytes(4).toString('hex')}` });
+      host.room.adventure = normalizeAdventure(adventure);
+      markDirty();
+      host.server.io.to('dm-sockets').emit('adventureUpdated', host.room.adventure);
+      await persistCampaign({ notify: true });
+      bestiaryDrafts.delete(String(draftId));
+      return { ok: true };
+    } catch (error) {
+      console.warn('[open5e] заклинания, сохранение:', error.message);
+      return { ok: false, error: 'Не удалось сохранить заклинание в кампанию.' };
+    }
+  });
+
   // Ссылки открываем только http(s): renderer не должен уметь запускать что угодно.
   ipcMain.handle('shell:openExternal', async (event, url) => {
     if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
@@ -1372,6 +1438,16 @@ function registerIpc() {
     }
     await shell.openExternal(url);
     return { ok: true };
+  });
+
+  // Скриншот вызвавшего окна для журнала кампании: страница снимает сама
+  // себя, чтобы не выбирать, чей кадр снимать.
+  ipcMain.handle('app:capturePage', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return { ok: false, error: 'Окно не найдено' };
+    const image = await win.webContents.capturePage();
+    if (!image || image.isEmpty()) return { ok: false, error: 'Кадр пуст' };
+    return { ok: true, dataUrl: image.toDataURL() };
   });
 }
 
@@ -1466,6 +1542,19 @@ function setupAutoUpdate() {
 }
 
 app.whenReady().then(() => {
+  // Второй экземпляр поверх работающего стирает данные: у каждого свой
+  // RoomState, и автосейв первого затирает саундборд и карты второго.
+  if (!app.requestSingleInstanceLock()) {
+    console.error('[app] уже запущен, второй экземпляр закрывается');
+    app.quit();
+    return;
+  }
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
   // В собранном приложении socket.io-client уже лежит внутри пакета, а писать
   // в app.asar нельзя — обновляем файл только при запуске из исходников.
   if (!app.isPackaged) {

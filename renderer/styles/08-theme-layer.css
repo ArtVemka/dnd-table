@@ -51,9 +51,11 @@
   50%      { opacity: 0.85; }
 }
 
+/* Шестерня крутится вокруг точки подвеса; наклон от качаний живёт в
+   transform и анимации не мешает. */
 @keyframes decor-gear {
-  from { transform: translateX(-50%) rotate(0deg); }
-  to   { transform: translateX(-50%) rotate(360deg); }
+  from { rotate: 0deg; }
+  to   { rotate: 360deg; }
 }
 
 /* Шестерня в заголовке панели стимпанка. */
@@ -224,9 +226,12 @@ body > * {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: repeating-conic-gradient(from 0deg, var(--gold) 0 12deg, transparent 12deg 30deg);
-  -webkit-mask: radial-gradient(circle, transparent 0 30%, #000 31%);
-  mask: radial-gradient(circle, transparent 0 30%, #000 31%);
+  /* Шестерня, а не лучи: закрытый диск, ось в центре, зубья по ободу. */
+  background:
+    radial-gradient(circle closest-side,
+      color-mix(in srgb, var(--bg-deep) 75%, var(--gold)) 0 18%,
+      var(--gold) 18% 62%, transparent 62.5%),
+    repeating-conic-gradient(from 0deg, var(--gold) 0 15deg, transparent 15deg 30deg);
   animation: control-gear 14s linear infinite;
 }
 
@@ -486,10 +491,12 @@ body > * {
 }
 
 /* Гравировка: тонкая светлая кромка сверху и тень снизу. Панель перестаёт
-   быть плоской заливкой и начинает выглядеть вырезанной из камня. */
+   быть плоской заливкой и начинает выглядеть вырезанной из камня. Сверху
+   панель тёплая, как от свечи: золотной отблеск растворяется к середине. */
 .panel {
   background:
     linear-gradient(180deg, var(--sheen), transparent 46px),
+    radial-gradient(120% 80% at 50% -12%, color-mix(in srgb, var(--gold) 6%, transparent), transparent 62%),
     var(--surface);
   box-shadow:
     var(--frame-inner),
@@ -555,6 +562,20 @@ body > * {
     color var(--dur-fast) var(--ease);
 }
 
+/* Зерно поверхности: косая насечка едва светлее и темнее заливки, чтобы
+   кнопка выглядела резной, а не пластиковой. Псевдоэлемент лежит поверх
+   любого тематического материала и не мешает тексту. */
+.btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.018) 0 2px, transparent 2px 4px),
+    repeating-linear-gradient(-45deg, rgba(0, 0, 0, 0.024) 0 2px, transparent 2px 4px);
+  pointer-events: none;
+}
+
 .btn:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow:
@@ -579,18 +600,18 @@ body > * {
     0 0 14px var(--accent-soft);
 }
 
-/* Ghost-кнопка остаётся вторичной, но больше не притворяется подписью:
-   у неё есть своя поверхность и рамка даже без наведения. */
+/* Второстепенное действие: без пластины — текст прямо на столе, как
+   подпись чернилами. Подложка-полымка проступает только под курсором. */
 .btn--ghost {
-  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
-  border-color: var(--border);
+  background: transparent;
+  border-color: transparent;
   color: var(--text);
-  box-shadow: inset 0 1px 0 var(--sheen);
+  box-shadow: none;
 }
 
 .btn--ghost:hover:not(:disabled) {
-  background: var(--surface-3);
-  border-color: var(--accent);
+  background: var(--hover-wash);
+  border-color: transparent;
   color: var(--text);
 }
 
@@ -675,6 +696,8 @@ body > * {
   --pointer-x: 0.5;
 }
 
+/* Шарнир: сам не красится, только держит три звена и задаёт им узор через
+ * --vine-img / --vine-shadow. Видимая лоза — на .map-decor__seg ниже. */
 .map-decor__strand {
   position: absolute;
   top: 0;
@@ -689,6 +712,40 @@ body > * {
   transition: transform 0.35s ease-out;
 }
 
+/* Звенья лозы. Каждое — треть высоты и свой сустав: изгиб бежит сверху вниз.
+ * Картинка одна на все три (наследует --vine-img от шарнира), а режется
+ * фоном высотой 300% со сдвигом 0/50/100% — так три куска складываются
+ * в непрерывную нить. */
+.map-decor__seg {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 0;
+  background-image: var(--vine-img, none);
+  background-repeat: no-repeat;
+  background-size: 100% 300%;
+  box-shadow: var(--vine-shadow, none);
+  pointer-events: none;
+}
+
+.map-decor__seg--0 {
+  top: 0;
+  height: 33.4%;
+  background-position-y: 0;
+}
+
+.map-decor__seg--1 {
+  background-position-y: 50%;
+  transform: rotate(var(--sway-s1, 0deg));
+}
+
+.map-decor__seg--2 {
+  background-position-y: 100%;
+  transform: rotate(var(--sway-s2, 0deg));
+}
+
 .map-decor__mark {
   position: absolute;
   left: 50%;
@@ -697,12 +754,12 @@ body > * {
   transform: translateX(-50%);
 }
 
-/* Лес: лоза с листьями. Тянется за курсором, но не качается сама. */
+/* Лес: лоза с листьями. Картинку рисуют звенья, шарнир только задаёт узор. */
 [data-theme='les'] .map-decor__strand {
   height: 78px;
   border-radius: 2px;
-  background: linear-gradient(180deg, transparent, var(--accent) 14%, var(--accent));
-  box-shadow: 0 0 8px var(--accent-soft);
+  --vine-img: linear-gradient(180deg, transparent, var(--accent) 14%, var(--accent));
+  --vine-shadow: 0 0 8px var(--accent-soft);
 }
 
 [data-theme='les'] .map-decor__strand::before,
@@ -777,8 +834,8 @@ body > * {
 [data-theme='magiya'] .map-decor__strand {
   width: 1px;
   height: 70px;
-  background: linear-gradient(180deg, transparent, var(--accent));
-  box-shadow: 0 0 8px var(--glow);
+  --vine-img: linear-gradient(180deg, transparent, var(--accent));
+  --vine-shadow: 0 0 8px var(--glow);
 }
 
 [data-theme='magiya'] .map-decor__mark {
@@ -793,8 +850,8 @@ body > * {
 /* Трактир: шнур и фонарь. */
 [data-theme='traktir'] .map-decor__strand {
   height: 52px;
-  background: linear-gradient(180deg, var(--border-strong), var(--gold));
-  box-shadow: 0 0 6px var(--accent-soft);
+  --vine-img: linear-gradient(180deg, var(--border-strong), var(--gold));
+  --vine-shadow: 0 0 6px var(--accent-soft);
 }
 
 [data-theme='traktir'] .map-decor__mark {
@@ -811,11 +868,11 @@ body > * {
   box-shadow: 0 0 12px var(--accent-soft);
 }
 
-/* Стимпанк: цепь и шестерня. */
+/* Стимпанк: цепь и шестерня. Звенья цепи режутся по тому же принципу. */
 [data-theme='par'] .map-decor__strand {
   height: 66px;
-  background: repeating-linear-gradient(180deg, var(--gold) 0 4px, transparent 4px 7px);
-  box-shadow: 0 0 7px var(--accent-soft);
+  --vine-img: repeating-linear-gradient(180deg, var(--gold) 0 4px, transparent 4px 7px);
+  --vine-shadow: 0 0 7px var(--accent-soft);
 }
 
 [data-theme='par'] .map-decor__mark {
@@ -823,9 +880,12 @@ body > * {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: repeating-conic-gradient(var(--gold) 0 14deg, transparent 14deg 30deg);
-  -webkit-mask: radial-gradient(circle, transparent 0 32%, #000 33%);
-  mask: radial-gradient(circle, transparent 0 32%, #000 33%);
+  /* Тот же чертёж, что и у шестерни заголовка: диск, ось, зубья. */
+  background:
+    radial-gradient(circle closest-side,
+      color-mix(in srgb, var(--bg-deep) 75%, var(--gold)) 0 18%,
+      var(--gold) 18% 62%, transparent 62.5%),
+    repeating-conic-gradient(from 0deg, var(--gold) 0 15deg, transparent 15deg 30deg);
   animation: decor-gear 18s linear infinite;
 }
 
@@ -937,17 +997,6 @@ body > * {
   border-radius: 3px;
 }
 
-.home__logo::after {
-  /* Внутренняя грань: та же фигура, меньше и тусклее. */
-  content: '';
-  position: absolute;
-  inset: 21px;
-  border: 1px solid var(--gold);
-  opacity: 0.28;
-  transform: rotate(45deg);
-  border-radius: 2px;
-}
-
 .home__brand:hover .home__logo {
   transform: scale(1.05);
   box-shadow:
@@ -956,18 +1005,12 @@ body > * {
     0 0 34px var(--accent-soft);
 }
 
-/* Медленный золотой отблеск по титулу. */
-@keyframes dnd-title-shine {
-  0%, 100% { background-position: 0% 50%; }
-  50%      { background-position: 100% 50%; }
-}
-
 /*
  * Титул главного экрана.
  *
  * Собственное правило, а не тема: тени анимируют прозрачность, а у титула
- * текст с градиентом, и на такой анимации он гаснет до нечитаемого. Свой
- * отблеск двигает градиент, а буквы остаются светлыми.
+ * текст с градиентом, и на такой анимации он гаснет до нечитаемого. Блеск
+ * теперь статичный: бегущий свет рябил на главном экране сильнее всего.
  *
  * Селектор с двумя классами — чтобы перебить правило темы
  * ([data-theme='…'] .home__title) по порядку, а не по specificity.
@@ -977,12 +1020,12 @@ body > * {
   letter-spacing: 2px;
   background: linear-gradient(100deg, var(--text) 18%, var(--gold) 48%, var(--text) 78%);
   background-size: 250% 100%;
+  background-position: 50% 50%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
   text-shadow: 0 4px 20px rgba(0, 0, 0, 0.65);
-  animation: dnd-title-shine 11s ease-in-out infinite;
 }
 
 /* Карточки главного экрана появляются по очереди: так меню читается как
@@ -1016,17 +1059,17 @@ body > * {
 }
 
 .card:hover::after {
+  /* Блик проходит один раз: бесконечная бегущая полоса и была главной рябью. */
   opacity: 1;
-  animation: dnd-sweep 900ms var(--ease) infinite;
+  animation: dnd-sweep 1.4s var(--ease) 1;
 }
 
 .card:hover {
-  transform: translateY(-4px);
+  transform: translateY(-2px);
   box-shadow:
     var(--frame-inner),
     inset 0 1px 0 var(--sheen),
-    0 12px 26px var(--shadow-press),
-    0 0 22px var(--glow);
+    0 10px 22px var(--shadow-press);
 }
 
 .card__icon {
@@ -1380,9 +1423,10 @@ body > * {
 /* ---------------------------------------------------------------- Прочее */
 
 /*
- * Фактура: мелкая сетка в режим наложения даёт ощущение зерна бумаги.
- * Едва заметная — интерфейс должен оставаться читаемым, а не выглядеть
- * испорченным. Поверх неё лежит атмосфера темы.
+ * Фактура: не цифровая пиксельная сетка, а волокно бумаги — два косых
+ * редких плетения под малой прозрачностью. Едва заметно: интерфейс должен
+ * оставаться читаемым, а не выглядеть испорченным. Поверх неё лежит
+ * атмосфера темы.
  */
 body::after {
   content: '';
@@ -1390,9 +1434,10 @@ body::after {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.028;
-  background-image: repeating-conic-gradient(from 0deg at 50% 50%, #fff 0deg 90deg, #000 90deg 180deg);
-  background-size: 3px 3px;
+  opacity: 0.032;
+  background-image:
+    repeating-linear-gradient(64deg, #fff 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(116deg, #000 0 1px, transparent 1px 5px);
   mix-blend-mode: overlay;
 }
 
@@ -2313,14 +2358,8 @@ body::after {
     );
   -webkit-mask: radial-gradient(circle, transparent 54%, #000 55%, #000 60%, transparent 61%);
   mask: radial-gradient(circle, transparent 54%, #000 55%, #000 60%, transparent 61%);
-  opacity: 0.55;
+  opacity: 0.45;
   pointer-events: none;
-  animation: dnd-compass-breathe 12s ease-in-out infinite;
-}
-
-@keyframes dnd-compass-breathe {
-  0%, 100% { opacity: 0.4; }
-  50%      { opacity: 0.72; }
 }
 
 /* Линии по бокам подзаголовка: тот же приём, что у титульного листа книги. */
@@ -2385,8 +2424,7 @@ body::after {
 .card:hover .card__icon {
   box-shadow:
     inset 0 1px 0 var(--sheen),
-    0 0 0 3px var(--accent-soft),
-    0 0 16px var(--accent-soft);
+    0 0 0 3px var(--accent-soft);
 }
 
 /* --------------------------------------------------------------- Топбар */
@@ -3647,3 +3685,23 @@ body::after {
     display: none !important;
   }
 }
+
+/* Двери и окна на стенах: сервер держит метку на стене, отрисовка показывает
+   то же, что считают свет и зрение. Дверь рисуется цельной линией, открытая
+   дверь и окно — лёгким штрихом, чтобы заметно отличались от массивной стены. */
+.map-walls line.map-wall--door {
+  stroke-dasharray: none;
+  stroke-linecap: butt;
+}
+
+.map-walls line.map-wall--door-open {
+  stroke: var(--muted);
+  stroke-dasharray: 3 5;
+}
+
+.map-walls line.map-wall--window {
+  stroke: var(--muted);
+  stroke-dasharray: 2 6;
+  stroke-linecap: butt;
+}
+

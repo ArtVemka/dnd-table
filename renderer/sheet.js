@@ -463,6 +463,7 @@
       slots.appendChild(slotActions);
       this.slotNode = slots;
       combat.appendChild(slots);
+      combat.appendChild(this.buildSpellsBlock());
 
       col1.appendChild(combat);
       col1.appendChild(this.buildStateBlock());
@@ -886,6 +887,157 @@
       return wrap;
     }
 
+    /**
+     * Диспетчер заклинаний: список листа с уровнем, подготовкой и кастом.
+     * Ячейку тратит сервер: кнопка «Каст» просит у стола, а не правит счётчик
+     * сама, иначе раньше ответа сервера счётчики у окон разошлись бы.
+     */
+    buildSpellsBlock() {
+      const wrap = el('div', 'box box--spells');
+      wrap.appendChild(el('div', 'box__title', 'Заклинания'));
+      wrap.appendChild(el('div', 'box__note',
+        'Уровень 0 — заговор: кастует без ячейки. Каст тратит ячейку уровня.'));
+      this.spellsList = el('div', 'spells-list');
+      this.spellRows = [];
+      wrap.appendChild(this.spellsList);
+      const add = el('button', 'btn btn--tiny spells-list__add', '+ Заклинание');
+      add.type = 'button';
+      add.addEventListener('click', () => {
+        if (this.readOnly || this.spellRows.length >= DnD.LIMITS.maxSheetSpells) return;
+        this.addSpellRow({});
+      });
+      this.spellAdd = add;
+      wrap.appendChild(add);
+      return wrap;
+    }
+
+    /** @param {{id?: string, name?: string, level?: number, prepared?: boolean, note?: string}} spell */
+    addSpellRow(spell = {}) {
+      const row = el('div', 'spells-row');
+      const name = el('input', 'input spells-row__name');
+      name.type = 'text';
+      name.placeholder = 'Название';
+      name.maxLength = 60;
+      name.value = spell.name || '';
+      const level = el('input', 'input spells-row__level');
+      level.type = 'number';
+      level.min = '0';
+      level.max = '9';
+      level.placeholder = '0';
+      level.title = 'Уровень ячейки: 0 — заговор';
+      level.value = spell.level === undefined ? '' : String(spell.level);
+      const prepared = el('input');
+      prepared.type = 'checkbox';
+      prepared.checked = Boolean(spell.prepared);
+      prepared.title = 'Подготовлено: каст по подготовленному заклинанию';
+      prepared.setAttribute('aria-label', 'Подготовлено');
+      const note = el('input', 'input spells-row__note');
+      note.type = 'text';
+      note.placeholder = 'Заметка';
+      note.maxLength = 200;
+      note.value = spell.note || '';
+
+      const cast = el('button', 'btn btn--tiny spells-row__cast', 'Каст');
+      cast.type = 'button';
+      cast.title = 'Кастует заклинание: сервер тратит ячейку и пишет в чат';
+      cast.addEventListener('click', () => {
+        if (this.readOnly) return;
+        if (!this.handlers.onCastSpell) return;
+        if (!prepared.checked) {
+          const sheetSpell = this.sheet
+            && Array.isArray(this.sheet.spells)
+            ? this.sheet.spells.find((item) => item.name === name.value.trim())
+            : null;
+          if (sheetSpell && !sheetSpell.prepared) {
+            if (this.handlers.onNotice) this.handlers.onNotice('Заклинание не подготовлено');
+            return;
+          }
+        }
+        this.handlers.onCastSpell(spell.id || name.value.trim(), Number(level.value) || 0);
+      });
+
+      const remove = el('button', 'btn btn--ghost btn--tiny spells-row__remove', '×');
+      remove.type = 'button';
+      remove.title = 'Убрать заклинание';
+      remove.addEventListener('click', () => {
+        if (this.readOnly) return;
+        const index = this.spellRows.findIndex((item) => item.node === row);
+        if (index >= 0) this.spellRows.splice(index, 1);
+        row.remove();
+        this.refresh();
+      });
+
+      for (const input of [name, level, note]) {
+        input.addEventListener('input', () => this.refresh());
+      }
+      prepared.addEventListener('change', () => this.refresh());
+
+      row.appendChild(name);
+      row.appendChild(level);
+      row.appendChild(prepared);
+      row.appendChild(note);
+      row.appendChild(cast);
+      row.appendChild(remove);
+      this.spellsList.appendChild(row);
+      this.spellRows.push({ node: row, name, level, prepared, note, cast, remove });
+    }
+
+    /**
+     * Обновляет строки заклинаний из листа: логика та же, что у атак.
+     * @param {object[]} list
+     * @param {boolean} sameCharacter
+     */
+    syncSpellRows(list, sameCharacter) {
+      if (!this.spellsList) return;
+      const data = Array.isArray(list) ? list : [];
+      if (!sameCharacter) {
+        this.spellsList.innerHTML = '';
+        this.spellRows = [];
+        for (const spell of data) this.addSpellRow(spell);
+        return;
+      }
+      while (this.spellRows.length > data.length) {
+        const last = this.spellRows[this.spellRows.length - 1];
+        const empty = !last.name.value.trim() && !last.note.value.trim();
+        if (!empty) break;
+        this.spellRows.pop();
+        last.node.remove();
+      }
+      for (let index = 0; index < data.length; index += 1) {
+        if (!this.spellRows[index]) this.addSpellRow(data[index]);
+      }
+      data.forEach((spell, index) => {
+        const row = this.spellRows[index];
+        if (!row) return;
+        if (document.activeElement !== row.name) row.name.value = spell.name || '';
+        if (document.activeElement !== row.level) row.level.value = spell.level === undefined ? '' : String(spell.level);
+        if (document.activeElement !== row.note) row.note.value = spell.note || '';
+        row.prepared.checked = Boolean(spell.prepared);
+      });
+    }
+
+    /** @returns {{id: string, name: string, level: number, prepared: boolean, note: string}[]} */
+    collectSpells() {
+      const list = [];
+      for (const row of this.spellRows || []) {
+        const name = row.name.value.trim().slice(0, 60);
+        const note = row.note.value.trim().slice(0, 200);
+        if (!name && !note) continue;
+        list.push({
+          id: (this.sheet
+            && Array.isArray(this.sheet.spells)
+            && this.sheet.spells[list.length]
+            && this.sheet.spells[list.length].id)
+            || `spell-${list.length}`,
+          name,
+          level: DnD.clampNumber(row.level.value, 0, 9, 0),
+          prepared: Boolean(row.prepared.checked),
+          note
+        });
+      }
+      return list.slice(0, DnD.LIMITS.maxSheetSpells);
+    }
+
     /** @param {{name?: string, bonus?: number, damage?: string}} attack */
     addAttackRow(attack = {}) {
       const row = el('div', 'attack-row');
@@ -928,6 +1080,19 @@
         this.handlers.onRollCheck(formula, 'Урон: ' + (name.value.trim() || 'атака'));
       });
 
+      const aim = el('button', 'btn btn--tiny attack-row__aim', 'Атака');
+      aim.type = 'button';
+      aim.title = 'Бьёт по фишке на карте: бросок, попадание и урон ведёт сервер';
+      aim.addEventListener('click', () => {
+        if (this.readOnly || !this.handlers.onAttackTarget) return;
+        const bonus = this.readOnly ? 0 : DnD.clampNumber(bonus.value, -20, 30, 0);
+        this.handlers.onAttackTarget({
+          name: name.value.trim() || 'Атака',
+          bonus,
+          damage: damage.value.trim()
+        });
+      });
+
       const remove = el('button', 'btn btn--ghost btn--tiny attack-row__remove', '×');
       remove.type = 'button';
       remove.title = 'Убрать атаку';
@@ -948,6 +1113,7 @@
       row.appendChild(damage);
       row.appendChild(hit);
       row.appendChild(dmg);
+      row.appendChild(aim);
       row.appendChild(remove);
       this.attackList.appendChild(row);
       this.attackRows.push({ node: row, name, bonus, damage, hit, dmg, remove });
@@ -1129,6 +1295,7 @@ if (this.stateNodes) {
       // листа класс остаётся в старых полях, и кампании не нужно мигрировать.
       sheet.classes = this.extraRows.length ? this.currentClasses() : [];
       sheet.attackList = this.collectAttackList();
+      sheet.spells = this.collectSpells();
       return sheet;
     }
 
@@ -1484,6 +1651,7 @@ node.max.disabled = this.readOnly;
         && previous.playerName === data.playerName
         && previous.characterName === data.characterName;
       this.syncAttackRows(data.attackList, sameCharacter);
+      this.syncSpellRows(data.spells, sameCharacter);
       this.derived = DnD.computeDerived(data);
       this.paintDerived();
       this.syncHitDie();
@@ -1506,6 +1674,13 @@ node.max.disabled = this.readOnly;
         }
       }
       if (this.attackAdd) this.attackAdd.disabled = this.readOnly;
+      for (const row of this.spellRows || []) {
+        for (const node of [row.name, row.level, row.note, row.cast, row.remove]) {
+          node.disabled = this.readOnly;
+        }
+        row.prepared.disabled = this.readOnly;
+      }
+      if (this.spellAdd) this.spellAdd.disabled = this.readOnly;
       this.updateClassSummary();
 if (this.manualProfCheck) this.manualProfCheck.disabled = this.readOnly;
     if (this.manualProfCheck && !this.manualProfCheck.checked) this.manualProfInput.hidden = true;

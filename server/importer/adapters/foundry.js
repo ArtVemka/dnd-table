@@ -254,6 +254,15 @@ function describeDocument(doc, fallbackKind, resolveAsset) {
       formula: String(raw.formula || ''),
       sceneWidth: Number(raw.width) || 0,
       sceneHeight: Number(raw.height) || 0,
+      // Стены сцены: пиксельные отрезки и метки двери/окна. Всё остальное
+      // (секретность, звуки, пороги) отбрасывается, чтобы отчёт честно
+      // показывал, что сохранилось.
+      walls: kind === 'scene' && Array.isArray(raw.walls) ? raw.walls.map((wall) => ({
+        c: Array.isArray(wall && wall.c) ? wall.c.map(Number) : [0, 0, 0, 0],
+        door: Number(wall && wall.d) === 1,
+        ds: Number(wall && wall.ds) || 0,
+        window: Boolean(wall && wall.window)
+      })) : undefined,
       statblock: kind === 'actor' ? actorStatblock(raw) : undefined
     }
   };

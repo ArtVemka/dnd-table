@@ -392,6 +392,305 @@
   background: var(--danger-hover);
 }
 
+/* Трактир: тёмные дубовые доски с тёплой засветкой сверху. */
+[data-theme='traktir'] .panel,
+[data-theme='traktir'] .home__group,
+[data-theme='traktir'] .sheet .box,
+[data-theme='traktir'] .adv-item,
+[data-theme='traktir'] .chat,
+[data-theme='traktir'] .dice {
+  background-image:
+    repeating-linear-gradient(
+      180deg,
+      transparent 0 44px,
+      color-mix(in srgb, var(--bg-deep) 55%, transparent) 44px 46px
+    ),
+    repeating-linear-gradient(
+      91deg,
+      transparent 0 17px,
+      color-mix(in srgb, var(--gold) 4%, transparent) 17px 18px
+    ),
+    linear-gradient(180deg, color-mix(in srgb, var(--gold) 8%, transparent), transparent 40%);
+}
+
+/* Стандартная тема: кожаный переплёт с гравированным крестом и слепым
+   тиснением по верхней кромке. */
+[data-theme='standart'] .panel,
+[data-theme='standart'] .home__group,
+[data-theme='standart'] .sheet .box,
+[data-theme='standart'] .adv-item,
+[data-theme='standart'] .chat,
+[data-theme='standart'] .dice {
+  background-image:
+    repeating-linear-gradient(45deg, transparent 0 7px, color-mix(in srgb, var(--gold) 3%, transparent) 7px 8px),
+    repeating-linear-gradient(-45deg, transparent 0 7px, color-mix(in srgb, var(--gold) 2%, transparent) 7px 8px),
+    radial-gradient(120% 70% at 50% -10%, color-mix(in srgb, var(--gold) 7%, transparent), transparent 55%);
+}
+
+/* -------------------------------------------------- Кнопки-материалы
+ *
+ * Обычные (не смысловые) кнопки получают материал темы: спил с годовыми
+ * кольцами, отполированный камень, стекло, доска на гвоздях, латунная
+ * пластина на болтах, кожа с золотым тиснением. Всё на background-image,
+ * поэтому в минимализме текстуры гасятся общим правилом, а цвет остаётся.
+ * Пузырьковые мелкие кнопки оставлены чистыми: точки заклёпок на высоте
+ * 22px превратили бы списки в кашу.
+ */
+
+[data-theme='les'] .btn:not(.btn--accent):not(.btn--danger):not(.btn--tiny) {
+  background-image:
+    repeating-radial-gradient(
+      circle at 18% 50%,
+      transparent 0 3px,
+      color-mix(in srgb, var(--gold) 5%, transparent) 3px 4px,
+      transparent 4px 8px
+    ),
+    linear-gradient(0deg, color-mix(in srgb, var(--ok) 16%, transparent), transparent 40%);
+  border-color: color-mix(in srgb, var(--ok) 34%, var(--border-strong));
+}
+
+[data-theme='les'] .btn:not(.btn--accent):not(.btn--danger):hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 3px 10px var(--shadow-press),
+    0 0 16px var(--ok-soft);
+}
+
+/* Океан: отполированный камень с перламутровым блеском. */
+[data-theme='okean'] .btn:not(.btn--accent):not(.btn--danger):not(.btn--tiny) {
+  background-image:
+    radial-gradient(70% 55% at 50% 6%, color-mix(in srgb, var(--sheen) 90%, transparent), transparent 60%),
+    linear-gradient(0deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border-strong));
+}
+
+[data-theme='okean'] .btn:not(.btn--accent):not(.btn--danger):hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    inset 0 -7px 16px color-mix(in srgb, var(--accent) 16%, transparent),
+    0 3px 10px var(--shadow-press),
+    0 0 16px var(--accent-soft);
+}
+
+/* Магия: стекло — полупрозрачная заливка, светлый кант сверху, неон по
+   рамке на наведении. */
+[data-theme='magiya'] .btn:not(.btn--accent):not(.btn--danger) {
+  background-color: color-mix(in srgb, var(--surface) 64%, transparent);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.14),
+    rgba(255, 255, 255, 0.04) 42%,
+    transparent 55%,
+    rgba(255, 255, 255, 0.06)
+  );
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+[data-theme='magiya'] .btn:not(.btn--accent):not(.btn--danger):hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 0 0 1px var(--accent-soft),
+    0 0 18px var(--glow);
+}
+
+/* Трактир: вывеска на досках, прибитая двумя коваными гвоздями. */
+[data-theme='traktir'] .btn:not(.btn--accent):not(.btn--danger):not(.btn--tiny) {
+  background-image:
+    radial-gradient(
+      circle at 8px 50%,
+      color-mix(in srgb, var(--bg-deep) 88%, var(--gold)) 0 1.4px,
+      color-mix(in srgb, var(--sheen) 60%, transparent) 1.4px 2.2px,
+      transparent 2.8px
+    ),
+    radial-gradient(
+      circle at calc(100% - 8px) 50%,
+      color-mix(in srgb, var(--bg-deep) 88%, var(--gold)) 0 1.4px,
+      color-mix(in srgb, var(--sheen) 60%, transparent) 1.4px 2.2px,
+      transparent 2.8px
+    ),
+    repeating-linear-gradient(
+      92deg,
+      transparent 0 13px,
+      color-mix(in srgb, var(--gold) 5%, transparent) 13px 14px
+    );
+}
+
+/* Наведение — вывеска качается на гвоздях: поворот вокруг верха, как у
+   подвешенной доски, а не плоская подсветка. */
+[data-theme='traktir'] .btn:hover:not(:disabled) {
+  transform-origin: 50% 0;
+  transform: translateY(-1px) rotate(0.5deg);
+}
+
+/* Стимпанк: латунная пластина на болтах; при наведении загорается лампа. */
+[data-theme='par'] .btn:not(.btn--accent):not(.btn--danger):not(.btn--tiny) {
+  background-image:
+    radial-gradient(
+      circle at 7px 50%,
+      color-mix(in srgb, var(--bg-deep) 80%, var(--gold)) 0 1.2px,
+      color-mix(in srgb, var(--gold) 70%, transparent) 1.2px 2px,
+      transparent 2.4px
+    ),
+    radial-gradient(
+      circle at calc(100% - 7px) 50%,
+      color-mix(in srgb, var(--bg-deep) 80%, var(--gold)) 0 1.2px,
+      color-mix(in srgb, var(--gold) 70%, transparent) 1.2px 2px,
+      transparent 2.4px
+    ),
+    linear-gradient(180deg, color-mix(in srgb, var(--gold) 12%, transparent), transparent 45%);
+  border-color: color-mix(in srgb, var(--gold) 42%, var(--border-strong));
+}
+
+@keyframes par-bulb {
+  0%   { box-shadow: inset 0 1px 0 var(--sheen), 0 1px 2px rgba(0, 0, 0, 0.35); }
+  30%  { box-shadow: inset 0 1px 0 var(--sheen), 0 0 20px color-mix(in srgb, var(--gold) 48%, transparent); }
+  46%  { box-shadow: inset 0 1px 0 var(--sheen), 0 0 6px color-mix(in srgb, var(--gold) 18%, transparent); }
+  100% { box-shadow: inset 0 1px 0 var(--sheen), 0 0 14px color-mix(in srgb, var(--gold) 32%, transparent); }
+}
+
+[data-theme='par'] .btn:hover:not(:disabled) {
+  animation: par-bulb 0.9s var(--ease-out) both;
+}
+
+/* Стандартная тема: кожа с золотым тиснением — кант и тёплая слепка сверху. */
+[data-theme='standart'] .btn:not(.btn--accent):not(.btn--danger) {
+  border-color: color-mix(in srgb, var(--gold) 30%, var(--border-strong));
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--gold) 9%, transparent), transparent 34%);
+}
+
+[data-theme='standart'] .btn:not(.btn--accent):not(.btn--danger):hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 3px 10px var(--shadow-press),
+    0 0 14px color-mix(in srgb, var(--gold) 22%, transparent);
+}
+
+/* --------------------------------------------------------- Силуэты кнопок
+ *
+ * Одинаковый со всех сторон скруглённый угол читается как браузерный
+ * контрол. У «Леса», «Океана» и «Пара» асимметрия уже живёт в токене
+ * радиуса темы; остальным трём силуэт режут явно: обрывок пергамента,
+ * осколок стекла, доска с отпиленным уголком.
+ */
+[data-theme='standart'] .btn { border-radius: 10px 3px 11px 4px; }
+[data-theme='magiya'] .btn { border-radius: 13px 2px 12px 3px; }
+[data-theme='traktir'] .btn { border-radius: 7px 2px 6px 3px; }
+
+/* Переплётное золото: по кожаной кнопке идёт внутренняя рамка, как тиснение
+   на корешке. На accent и мелких кнопках рамка не нужна — первые и так
+   горят, вторые слишком малы. */
+[data-theme='standart'] .btn:not(.btn--accent):not(.btn--danger):not(.btn--tiny):not(.btn--icon)::before {
+  content: '';
+  position: absolute;
+  inset: 3px 5px;
+  border: 1px solid color-mix(in srgb, var(--gold) 30%, transparent);
+  border-radius: 7px 2px 8px 3px;
+  pointer-events: none;
+}
+
+/* Океан: по краю пластины витой канат. Пунктирная рамка — и есть пряди. */
+[data-theme='okean'] .btn:not(.btn--accent):not(.btn--danger):not(.btn--tiny):not(.btn--icon)::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1px dashed color-mix(in srgb, var(--gold) 40%, transparent);
+  border-radius: 12px 5px 12px 5px;
+  pointer-events: none;
+}
+
+/* Магия: на левом краю стеклянной пластины горит одна руна. */
+[data-theme='magiya'] .btn:not(.btn--accent):not(.btn--danger):not(.btn--tiny):not(.btn--icon)::before {
+  content: '✦';
+  position: absolute;
+  left: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--gold) 75%, transparent);
+  text-shadow: 0 0 6px var(--glow);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------- Главное меню
+ *
+ * Меню получает тот же характер, что кнопки и панели: карточки резаны по
+ * материалу темы, иконки-медальоны имеют свою форму, у заголовков разделов
+ * тематские знаки. Без этого главный экран во всех темах — один и тот же
+ * браузер. Петельных анимаций здесь нет: заголовок не мерцает.
+ */
+[data-theme] .home__title { animation: none; }
+
+.home__group__title::before {
+  color: color-mix(in srgb, var(--gold) 72%, var(--text));
+  opacity: 0.85;
+}
+
+/* Карточки: les/okean/par уже асимметричны токеном --radius темы. */
+[data-theme='standart'] .card { border-radius: 16px 6px 18px 7px; }
+[data-theme='magiya'] .card { border-radius: 20px 5px 19px 6px; }
+[data-theme='traktir'] .card { border-radius: 10px 4px 9px 5px; }
+
+/* Пластина логотипа — не одинаковый скруглённый квадрат. */
+[data-theme='les'] .home__logo { border-radius: 50%; }
+[data-theme='okean'] .home__logo { border-radius: 42% 58% 55% 45% / 55% 45% 58% 42%; }
+[data-theme='par'] .home__logo { border-radius: 12px 4px 12px 4px; }
+[data-theme='traktir'] .home__logo { border-radius: 6px; }
+
+/* Медальоны иконок: срез дерева, галька, стекло, латунь, сургуч, доска. */
+[data-theme='les'] .card__icon {
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--ok) 16%, var(--surface-3)), var(--surface-3));
+}
+[data-theme='okean'] .card__icon {
+  border-radius: 58% 42% 55% 45% / 62% 48% 52% 38%;
+}
+[data-theme='magiya'] .card__icon {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow:
+    inset 0 0 10px var(--accent-soft),
+    0 0 0 3px color-mix(in srgb, var(--border-strong) 38%, transparent);
+}
+[data-theme='traktir'] .card__icon {
+  border-radius: 6px 10px 6px 10px;
+  border-color: color-mix(in srgb, var(--gold) 45%, var(--border-strong));
+}
+[data-theme='par'] .card__icon {
+  background: radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--gold) 20%, var(--surface-3)), var(--surface-3) 72%);
+  border-color: color-mix(in srgb, var(--gold) 45%, var(--border-strong));
+}
+[data-theme='standart'] .card__icon {
+  border-radius: 50% 50% 50% 14px;
+}
+
+/* --------------------------------------------------- Разделители тем
+ *
+ * Ромб перед заголовком панели был один на все темы. Теперь у каждой свой
+ * знак: ветка, волна, звезда, пика, цветочная лилия. В минимализме
+ * заставка прячется общим правилом, как и раньше.
+ */
+
+[data-theme='les'] .panel__title::before,
+[data-theme='les'] .home__group__title::before { content: '❧'; font-size: 9px; }
+[data-theme='okean'] .panel__title::before,
+[data-theme='okean'] .home__group__title::before { content: '≋'; font-size: 10px; }
+[data-theme='magiya'] .panel__title::before,
+[data-theme='magiya'] .home__group__title::before { content: '✦'; font-size: 9px; }
+[data-theme='traktir'] .panel__title::before,
+[data-theme='traktir'] .home__group__title::before { content: '♠'; font-size: 9px; }
+[data-theme='standart'] .panel__title::before,
+[data-theme='standart'] .home__group__title::before { content: '❦'; font-size: 9px; }
+[data-theme='par'] .home__group__title::before { content: '⚙'; font-size: 9px; }
+
+/* Магия: логотип едва заметно парит. */
+@keyframes magiya-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+
+[data-theme='magiya'] .home__logo {
+  animation: magiya-float 6s ease-in-out infinite;
+}
+
 /* ==========================================================================
  * Живой орнамент карты.
  *
@@ -419,8 +718,9 @@
 [data-theme] .map-decor__strand {
   left: 18px;
   transform-origin: 50% 0;
-  transform: rotate(calc((var(--pointer-x) - 0.5) * 19deg));
-  transition: transform 0.55s cubic-bezier(0.2, 0.85, 0.25, 1.1);
+  /* Качание считает физика в table.js, переход здесь только бы отставал. */
+  transform: rotate(var(--sway, 0deg));
+  transition: none;
 }
 
 [data-theme] .map-decor__strand::before,
@@ -430,10 +730,11 @@
 
 [data-theme] .map-decor__mark {
   transform-origin: 50% 0;
+  /* Подвеска отстаёт от шнура: свой угол добавляется к базовому наклону. */
   transform:
     translateX(-50%)
-    rotate(calc(var(--mark-tilt, 0deg) + (var(--pointer-x) - 0.5) * -13deg));
-  transition: transform 0.65s cubic-bezier(0.2, 0.85, 0.25, 1.1);
+    rotate(calc(var(--mark-tilt, 0deg) + var(--sway-mark, 0deg)));
+  transition: none;
 }
 
 [data-theme='les'] .map-decor__mark { --mark-tilt: -14deg; }
@@ -472,7 +773,7 @@
 
 [data-theme='les'] .map-decor__leaf--1 {
   left: 1px;
-  top: 23%;
+  top: 69%;
   --leaf-rot: 20deg;
   animation-delay: -1.1s;
 }
@@ -480,7 +781,7 @@
 [data-theme='les'] .map-decor__leaf--2 {
   right: 1px;
   left: auto;
-  top: 43%;
+  top: 29%;
   --leaf-rot: -24deg;
   transform-origin: 100% 50%;
   animation-delay: -2.8s;
@@ -488,7 +789,7 @@
 
 [data-theme='les'] .map-decor__leaf--3 {
   left: 1px;
-  top: 63%;
+  top: 89%;
   --leaf-rot: 16deg;
   animation-delay: -4.2s;
 }
@@ -500,9 +801,8 @@
   width: 20px;
   height: 108px;
   transform-origin: 50% 0;
-  transform: rotate(calc((0.5 - var(--pointer-x)) * 13deg));
-  transition: transform 0.7s cubic-bezier(0.2, 0.85, 0.25, 1.1);
-  animation: decor-aside-idle 9s ease-in-out infinite;
+  /* Тот же маятник, только короче: второй подвес нервничает чаще. */
+  transform: rotate(var(--sway-aside, 0deg));
   pointer-events: none;
 }
 
@@ -522,7 +822,8 @@
   bottom: 38px;
   width: 11px;
   height: 14px;
-  transform: translateX(-50%);
+  transform: translateX(-50%) rotate(var(--sway-aside-mark, 0deg));
+  transform-origin: 50% 0;
 }
 
 [data-theme='les'] .map-decor__aside-line {
@@ -685,11 +986,6 @@
 @keyframes decor-leaf {
   0%, 100% { transform: rotate(var(--leaf-rot, 0deg)) scale(0.96); }
   50%      { transform: rotate(calc(var(--leaf-rot, 0deg) + 8deg)) scale(1.05); }
-}
-
-@keyframes decor-aside-idle {
-  0%, 100% { rotate: -1.4deg; }
-  50%      { rotate: 1.4deg; }
 }
 
 @keyframes decor-mote-fall {
@@ -888,66 +1184,61 @@
   box-shadow: 0 0 6px var(--accent-soft);
 }
 
-/* Океан: горизонт, три полосы прибоя и поднимающиеся пузыри. */
+/* Океан: глубина. Кольца, похожие на радар, убраны: вместо них световые
+   шахты сверху, силуэт затонувшего корабля на дне и поднимающиеся пузыри. */
 [data-theme='okean'] .home-scene__sky {
   background:
-    radial-gradient(40% 30% at 50% 58%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 70%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 80%, var(--scene-shadow)), color-mix(in srgb, var(--bg) 72%, var(--accent)));
+    radial-gradient(60% 42% at 50% -10%, color-mix(in srgb, var(--scene-glow) 14%, transparent), transparent 72%),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 26%, var(--bg)) 0%,
+      color-mix(in srgb, var(--bg) 70%, var(--accent)) 45%,
+      var(--bg-deep) 100%);
 }
 
 [data-theme='okean'] .home-scene__far {
   background:
-    repeating-radial-gradient(
-      ellipse at 50% 112%,
-      transparent 0 16px,
-      color-mix(in srgb, var(--accent) 14%, transparent) 17px 18px,
-      transparent 19px 32px
+    repeating-linear-gradient(
+      101deg,
+      transparent 0 72px,
+      color-mix(in srgb, var(--scene-glow) 7%, transparent) 72px 90px,
+      transparent 90px 168px
     ),
-    repeating-radial-gradient(
-      ellipse at 22% 118%,
-      transparent 0 22px,
-      color-mix(in srgb, var(--accent) 10%, transparent) 23px 24px,
-      transparent 25px 42px
-    ),
-    repeating-radial-gradient(
-      ellipse at 78% 116%,
-      transparent 0 26px,
-      color-mix(in srgb, var(--scene-glow) 8%, transparent) 27px 28px,
-      transparent 29px 48px
+    repeating-linear-gradient(
+      95deg,
+      transparent 0 120px,
+      color-mix(in srgb, var(--scene-glow) 5%, transparent) 120px 132px,
+      transparent 132px 240px
     );
-  -webkit-mask-image: linear-gradient(180deg, transparent 46%, #000 60%, transparent 84%);
-  mask-image: linear-gradient(180deg, transparent 46%, #000 60%, transparent 84%);
-  animation: home-tide 12s ease-in-out infinite;
+  -webkit-mask-image: linear-gradient(180deg, #000 0 34%, transparent 74%);
+  mask-image: linear-gradient(180deg, #000 0 34%, transparent 74%);
+  animation: home-drift 30s ease-in-out infinite;
 }
 
+/* Затонувший корпус: мачты уходят вверх, бредень лежит на дне. */
 [data-theme='okean'] .home-scene__mid {
   background:
-    repeating-radial-gradient(
-      ellipse at 50% 110%,
-      transparent 0 34px,
-      color-mix(in srgb, var(--accent) 11%, transparent) 35px 36px,
-      transparent 37px 66px
-    ),
-    radial-gradient(90% 26% at 50% 98%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 68%),
-    radial-gradient(70% 20% at 20% 104%, color-mix(in srgb, var(--scene-glow) 12%, transparent), transparent 70%);
-  animation: home-swell 9s ease-in-out infinite;
+    radial-gradient(34% 12% at 62% 98%, color-mix(in srgb, var(--bg-deep) 88%, var(--scene-shadow)), transparent 74%),
+    linear-gradient(94deg, transparent 0 52.8%, color-mix(in srgb, var(--bg-deep) 80%, var(--scene-shadow)) 53% 53.7%, transparent 53.9%),
+    linear-gradient(88deg, transparent 0 61.6%, color-mix(in srgb, var(--bg-deep) 80%, var(--scene-shadow)) 61.8% 62.5%, transparent 62.7%),
+    radial-gradient(90% 26% at 50% 102%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%);
+  opacity: 0.85;
 }
 
 [data-theme='okean'] .home-scene__near {
   background:
     radial-gradient(
       60% 18% at 50% 104%,
-      color-mix(in srgb, var(--scene-glow) 28%, transparent),
+      color-mix(in srgb, var(--scene-glow) 22%, transparent),
       transparent 70%
     ),
     radial-gradient(
-      40% 12% at 30% 108%,
-      color-mix(in srgb, var(--scene-glow) 18%, transparent),
+      40% 12% at 26% 108%,
+      color-mix(in srgb, var(--accent) 16%, transparent),
       transparent 70%
     ),
     radial-gradient(
-      40% 12% at 70% 108%,
-      color-mix(in srgb, var(--scene-glow) 16%, transparent),
+      40% 12% at 76% 108%,
+      color-mix(in srgb, var(--accent) 14%, transparent),
       transparent 70%
     );
   filter: blur(2px);
@@ -1054,13 +1345,17 @@
   content: '';
   position: absolute;
   border-radius: 50%;
-  background: repeating-conic-gradient(
-    from 0deg,
-    color-mix(in srgb, var(--gold) 32%, transparent) 0 8deg,
-    transparent 8deg 22deg
-  );
-  -webkit-mask: radial-gradient(circle, transparent 0 34%, #000 35% 46%, transparent 47%);
-  mask: radial-gradient(circle, transparent 0 34%, #000 35% 46%, transparent 47%);
+  /* Зубчатые колёса механизмов: латунный диск с осью, зубья по ободу. */
+  background:
+    radial-gradient(circle closest-side,
+      color-mix(in srgb, var(--bg-deep) 82%, var(--gold)) 0 17%,
+      color-mix(in srgb, var(--gold) 38%, var(--bg-deep)) 17% 61%, transparent 61.5%),
+    repeating-conic-gradient(
+      from 0deg,
+      color-mix(in srgb, var(--gold) 38%, var(--bg-deep)) 0 15deg,
+      transparent 15deg 30deg
+    );
+  opacity: 0.8;
   animation: home-gear 48s linear infinite;
 }
 
@@ -1196,16 +1491,6 @@
   100% { transform: translate3d(var(--mote-drift, 20px), -112vh, 0) scale(1.3); opacity: 0; }
 }
 
-@keyframes home-tide {
-  0%, 100% { background-position: 0 0; }
-  50%      { background-position: 0 9px; }
-}
-
-@keyframes home-swell {
-  0%, 100% { transform: translateY(0) scaleX(1); }
-  50%      { transform: translateY(-8px) scaleX(1.03); }
-}
-
 @keyframes home-drift {
   0%, 100% { transform: translate3d(-1.5%, 0, 0) scale(1.04); }
   50%      { transform: translate3d(1.5%, 1%, 0) scale(1.08); }
@@ -1248,7 +1533,8 @@
 [data-focus='on'] .map-decor,
 [data-focus='on'] .panel__title::before,
 [data-focus='on'] .panel::before,
-[data-focus='on'] .panel::after {
+[data-focus='on'] .panel::after,
+[data-focus='on'] .home__group__title::before {
   display: none !important;
 }
 
@@ -1263,6 +1549,14 @@
   background-image: none !important;
 }
 
+/* Украшения кнопок (зерно, канат, тиснение, руны) в минимализме гаснут.
+   ::before у btn--icon не трогаем: там не орнамент, а единственный
+   видимый знак кнопок «Отменить» и «Настройки». */
+[data-focus='on'] .btn::after,
+[data-focus='on'] .btn:not(.btn--icon)::before {
+  display: none !important;
+}
+
 [data-focus='on'] .panel,
 [data-focus='on'] .home__group,
 [data-focus='on'] .sheet .box,
@@ -1273,8 +1567,9 @@
 }
 
 [data-focus='on'] .btn:hover:not(:disabled) {
-  transform: none;
-  box-shadow: none;
+  transform: none !important;
+  box-shadow: none !important;
+  animation: none !important;
 }
 
 [data-focus='on'] .card:hover {
@@ -1559,3 +1854,202 @@
     min-width: 90px;
   }
 }
+
+/* ==========================================================================
+ * Разгрузка интерфейса.
+ *
+ * Шапка не показывает техданные текстом: порт, участники и «сохранено»
+ * живут в подсказке значка связи. Левые секции без рамок и уголков —
+ * различаются только заголовками. Акцент остаётся у одного главного
+ * действия на экран, второстепенное уходит в призрачный стиль.
+ * ========================================================================== */
+
+/* Кнопка-иконка: подпись остаётся в DOM для диктора, на экране только знак. */
+.btn--icon {
+  position: relative;
+  min-width: 27px;
+  justify-content: center;
+  padding-inline: 6px;
+}
+
+.btn__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.btn--icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+#btn-undo.btn--icon::before { content: '↺'; }
+#btn-settings-table.btn--icon::before { content: '⚙'; }
+.btn--icon-pen::before { content: '✎'; }
+.btn--icon-x::before { content: '✕'; }
+
+/* Кружок «i»: подсказка про портрет вместо целой строки текста. */
+.players-self__info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-top: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: italic;
+  cursor: help;
+}
+
+/* Бейдж связи: светящаяся точка вместо слова, детали в подсказке. */
+.badge--net {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.badge--net::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+/* Техстрока под заголовком стола больше не грузит шапку. */
+.topbar__sub { display: none; }
+
+.topbar .badge--muted {
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
+/* «Остановить стол» не доминирует: приглушённый красный текст без рамки. */
+.topbar__tools--actions .btn--danger {
+  border-color: transparent;
+  background: transparent;
+  color: var(--danger-text);
+  box-shadow: none;
+}
+
+.topbar__tools--actions .btn--danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: transparent;
+}
+
+/* Левая колонка: секции без обводок, рамка в рамке исчезает. */
+.col--left > .panel {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.col--left > .panel::before,
+.col--left > .panel::after {
+  display: none;
+}
+
+/* Вложенные кнопки секций («Событие» и прочие) — призрачные. */
+.col--left .btn--tiny:not(.btn--accent):not(.btn--danger) {
+  border-color: transparent;
+  background: transparent;
+}
+
+.col--left .btn--tiny:not(.btn--accent):not(.btn--danger):hover:not(:disabled) {
+  background: var(--hover-wash);
+  box-shadow: none;
+}
+
+/* Стрелки аккордеонов меньше и тише. */
+.panel__fold {
+  width: 16px;
+  height: 16px;
+  border: none;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.section__caret {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* Вкладки карт — сегменты одной полосы, без отдельных рамок. */
+.map-tabs {
+  gap: 0;
+  padding: 2px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.map-tab {
+  border-color: transparent;
+  background: transparent;
+  border-radius: 0;
+}
+
+.map-tab:hover {
+  border-color: transparent;
+  background: var(--hover-wash);
+}
+
+.map-tab.is-active {
+  background: var(--accent-soft);
+  border-color: transparent;
+  border-radius: calc(var(--radius-sm) - 2px);
+}
+
+/* Правая колонка: иконки вкладок тоньше, активная светится темой. */
+.tabs__icon svg { stroke-width: 1.2; }
+
+.tabs__btn.is-active { text-shadow: 0 0 10px var(--accent-soft); }
+
+/* Кубики компактнее: грани меньше, поле уже, «тайно» тихое. */
+.dice__quick {
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.dice__quick-btn {
+  font-size: 13px;
+  padding: 7px 2px;
+  border-radius: 8px;
+}
+
+.dice__formula { font-size: 13.5px; }
+
+.dice__hidden {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dice__hidden input {
+  width: 13px;
+  height: 13px;
+}
+
+/* История бросков — служебный раздел, а не вторая громоздкая панель. */
+.dice__history-section .section__head {
+  border: none;
+  background: transparent;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* Чип таймера: последние десять секунд краснеют, остальное время тихо. */
+#timer-chip.is-urgent { color: var(--danger-text); }

@@ -44,8 +44,12 @@ const effectiveMaxHp = fogModel.effectiveMaxHp;
 const hitDicePool = fogModel.hitDicePool;
 /** Цвет света по умолчанию: тёплый, как факел. */
 const DEFAULT_LIGHT_COLOR = '#ffb347';
+// Кривая суток: правило одно с клиентом, сервер красит им карты «авто-света».
+const darknessForHour = fogModel.darknessForHour;
 
 const CAMPAIGN_FORMAT_VERSION = 2;
+// Формулы таблиц бросков разбирает общий модуль сервера и панели кубиков.
+const dice = require('../renderer/dice.js');
 
 const LIMITS = {
   maxNameLength: 40,
@@ -55,6 +59,11 @@ const LIMITS = {
   // Аватар показывается в кружке 30px и ездит вместе с игроком, поэтому он
   // заметно меньше карты. 2 МБ хватает даже для фото с телефона.
   maxAvatarBytes: 2 * 1024 * 1024, // 2 МБ
+  /**
+   * Звук саундборда: кю и эмбиент короче и сжимаются плотнее картинки,
+   * поэтому порог заметно меньше карту: 2 МБ — это минута MP3 на столе.
+   */
+  maxAudioBytes: 2 * 1024 * 1024, // 2 МБ
   maxDiceHistory: 200,
   /** Порядок боя длиннее сорока человек не бывает. */
   maxInitiativeEntries: 40,
@@ -62,6 +71,8 @@ const LIMITS = {
   maxTokens: 200,
   /** Прочность фишки: в кампании панцирь дракона из «Стимпанка» не поместится. */
   maxTokenHp: 9999,
+  // Эмоут фишки: короткая фраза над столом, поэтому лимит мелкий.
+  maxTokenEmoteLength: 80,
   /** Счётчик спасбросков смерти: дальше трёх он не идёт по правилам. */
   maxDeathSaves: 3,
   /** Состояний на одной фишке: столько их есть в правилах 5e. */
@@ -103,13 +114,25 @@ const LIMITS = {
   maxAdventureNotes: 300,
   maxAdventureItems: 500,
   maxAdventureTables: 200,
+  // Строк в таблице бросков: таблицы вех дают двадцатку, драгоценности — сотню.
+  maxAdventureTableRows: 100,
+  // Заклинаний в листе: полный полуразличатель к 20 уровню наберёт полсотни.
+  maxSheetSpells: 60,
   maxAdventureActors: 200,
+  /** Заклинаний импортируют больше всего: у жреца их к сотне к концу уровней. */
+  maxAdventureSpells: 400,
+  // Булавок на карте: подсказок мастера должно быть видно не так много.
+  maxMapPins: 60,
   maxAdventureTitle: 120,
   maxAdventureText: 20000,
   // Ссылка на картинку: /files/<имя> или путь из архива импорта.
   maxAdventureImageRef: 2048,
   // Ссылка на аватар игрока: /files/<имя> либо путь к файлу из поставки.
-  maxAvatarRef: 2048
+  maxAvatarRef: 2048,
+  /** Кнопок на саундборде: больше мастер не различит глазами на панельке. */
+  maxSoundboard: 40,
+  // Ссылка на звук саундборда: только /files/<имя>, выданный сервером.
+  maxAudioRef: 2048
 };
 
 /**
@@ -154,7 +177,9 @@ const TIME_LIMITS = {
   minDay: 1,
   maxDay: 30 * (CALENDAR_CONFIG.maxMonths || 24) * 9999,
   minHour: 0,
-  maxHour: 23
+  maxHour: 23,
+  /** Бытовой таймер: дольше четырёх часов считать нечего. */
+  maxTimerSeconds: 4 * 3600
 };
 const DEFAULT_GAME_TIME = { day: 1, hour: 8 };
 
@@ -176,6 +201,25 @@ function normalizeTime(raw) {
   return {
     day: clampInt(source.day, TIME_LIMITS.minDay, TIME_LIMITS.maxDay, DEFAULT_GAME_TIME.day),
     hour: clampInt(source.hour, TIME_LIMITS.minHour, TIME_LIMITS.maxHour, DEFAULT_GAME_TIME.hour)
+  };
+}
+
+/**
+ * Бытовой таймер обратного отсчёта. Игровое время к нему не относится:
+ * endsAt — абсолютный момент в миллисекундах, и каждый клиент считает
+ * остаток сам. Сервер не тикает.
+ */
+function emptyTimer() {
+  return { running: false, endsAt: 0, totalSec: 0, label: '' };
+}
+
+function normalizeTimer(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    running: Boolean(source.running),
+    endsAt: Math.max(0, Math.round(Number(source.endsAt) || 0)),
+    totalSec: clampInt(source.totalSec, 0, TIME_LIMITS.maxTimerSeconds, 0),
+    label: sanitizeText(source.label, LIMITS.maxNameLength).trim()
   };
 }
 
@@ -347,6 +391,41 @@ function normalizeFog(raw) {
  * @param {unknown} raw
  * @returns {number}
  */
+/**
+ * Эмоут фишки: текст и время истечения в миллисекундах.
+ * Просроченное значение удаляется без запасного пути: кампания остаётся
+ * без пузырей от прошлой сессии.
+ * @param {unknown} raw
+ * @returns {{text: string, until: number}|undefined}
+ */
+function normalizeTokenEmote(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const text = sanitizeText(raw.text, LIMITS.maxTokenEmoteLength).trim();
+  const until = Number(raw.until);
+  if (!text || !Number.isFinite(until) || until <= Date.now()) return undefined;
+  return { text, until: Math.round(until) };
+}
+
+/**
+ * Заметки-булавки карты: только мастера. Игрокам поле вырезает mapSlotForViewer.
+ * @param {unknown} raw
+ * @returns {{id: string, x: number, y: number, title: string, text: string}[]}
+ */
+function normalizePins(raw) {
+  if (!Array.isArray(raw)) return [];
+  const result = [];
+  for (const entry of raw.slice(0, LIMITS.maxMapPins)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const x = clampInt(Math.round(Number(entry.x) * 1000), 0, 1000) / 1000;
+    const y = clampInt(Math.round(Number(entry.y) * 1000), 0, 1000) / 1000;
+    const title = sanitizeText(entry.title, LIMITS.maxNameLength) || 'Пин';
+    const text = sanitizeText(entry.text, LIMITS.maxSheetTextLength);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    result.push({ id: String(entry.id || '').slice(0, 40) || `pin-${result.length}`, x, y, title, text });
+  }
+  return result;
+}
+
 function normalizeDarkness(raw) {
   const value = Number(raw);
   if (!Number.isFinite(value)) return 0;
@@ -713,6 +792,16 @@ function normalizeAdventure(input) {
       name: sanitizeText(item && item.name, LIMITS.maxAdventureTitle) || 'Таблица',
       formula: sanitizeText(item && item.formula, 200),
       description: sanitizeText(item && item.description, LIMITS.maxAdventureText),
+      // Строки таблицы: текст, вес (выбор по весу) и необязательный диапазон
+      // результата формулы. Таблицы до этой функции строк не знают и
+      // продолжают жить без них.
+      rows: list(item && item.rows, LIMITS.maxAdventureTableRows).map((row, rowIndex) => ({
+        id: String((row && row.id) || `row-${rowIndex}`),
+        label: sanitizeText(row && row.label, 200) || 'Строка',
+        weight: clampInt(row && row.weight, 1, 99, 1),
+        min: Number.isFinite(Number(row && row.min)) ? clampInt(Number(row.min), 1, 9999, 1) : undefined,
+        max: Number.isFinite(Number(row && row.max)) ? clampInt(Number(row.max), 1, 9999, 1) : undefined
+      })),
       sourceId: String((item && item.sourceId) || '')
     })),
     actors: list(raw.actors, LIMITS.maxAdventureActors).map((item, index) => ({
@@ -727,6 +816,14 @@ function normalizeAdventure(input) {
       ...normalizeImageCrop(item),
       favorite: Boolean(item && item.favorite),
       statblock: normalizeStatblock(item && item.statblock),
+      sourceId: String((item && item.sourceId) || '')
+    })),
+    spells: list(raw.spells, LIMITS.maxAdventureSpells).map((item, index) => ({
+      id: String((item && item.id) || `spell-${index}`),
+      name: sanitizeText(item && item.name, LIMITS.maxAdventureTitle) || 'Заклинание',
+      level: clampInt(item && item.level, 0, 9, 0),
+      school: sanitizeText(item && item.school, 60),
+      text: sanitizeText(item && item.text, LIMITS.maxAdventureText),
       sourceId: String((item && item.sourceId) || '')
     }))
   };
@@ -778,6 +875,32 @@ function normalizeAttackList(value) {
     const bonus = clampInt(entry.bonus, -20, 30, 0);
     if (!name && !damage && bonus === 0) continue;
     result.push({ name, bonus, damage });
+  }
+  return result;
+}
+
+/**
+ * Заклинания листа: имя, уровень, подготовлено ли, заметка. Пустые строки
+ * выбрасываются, чтобы «+ Заклинание» без текста не жила в кампании.
+ * @param {unknown} value
+ * @returns {{id: string, name: string, level: number, prepared: boolean, note: string}[]}
+ */
+function normalizeSheetSpells(value) {
+  if (!Array.isArray(value)) return [];
+  const result = [];
+  for (const entry of value.slice(0, LIMITS.maxSheetSpells)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const name = sanitizeText(entry.name, 60);
+    const note = sanitizeText(entry.note, 200);
+    if (!name && !note) continue;
+    result.push({
+      id: sanitizeText(entry.id, 40) || `spell-${result.length}`,
+      name,
+      // 0 — заговор: кастуется без ячейки.
+      level: clampInt(entry.level, 0, 9, 0),
+      prepared: Boolean(entry.prepared),
+      note
+    });
   }
   return result;
 }
@@ -840,6 +963,7 @@ function normalizeSheet(input, fallbackPlayerName = '') {
   sheet.speed = clampInt(raw.speed, 0, 999, 30);
 
   sheet.attackList = normalizeAttackList(raw.attackList);
+  sheet.spells = normalizeSheetSpells(raw.spells);
   sheet.attacks = sanitizeText(raw.attacks, LIMITS.maxSheetTextLength);
   sheet.equipment = sanitizeText(raw.equipment, LIMITS.maxSheetTextLength);
   sheet.features = sanitizeText(raw.features, LIMITS.maxSheetTextLength);
@@ -880,6 +1004,7 @@ class RoomState {
     this.grid = { enabled: false, cell: GRID.defaultCell, columns: 0 };
     /** Время в игре: день и час, общее для всего стола. */
     this.gameTime = emptyTime();
+    this.timer = emptyTimer();
     /** @type {string[]} названия месяцев; длина задаёт длину года. */
     this.calendarMonths = DEFAULT_CALENDAR_MONTHS.slice();
     /** @type {object[]} события календаря: абсолютный день и название. */
@@ -921,6 +1046,28 @@ class RoomState {
     this.inventoryCoins = emptyCoins();
     /** @type {object[]} просьбы мастера бросить проверку. */
     this.rollRequests = [];
+    /**
+     * Кинорежим: мастер показывает картинку или текст всем участникам.
+     * Эфемерное состояние стола: в кампанию не сохраняется, после перезапуска
+     * снова выключено.
+     * @type {{on: boolean, kind: string, ref: string, text: string, title: string, watchers: string[]}}
+     */
+    this.showcase = { on: false, kind: '', ref: '', text: '', title: '', watchers: [] };
+    /**
+     * Опрос чата и снимок сцены. Оба эфемерны: в кампанию не сохраняются,
+     * и после перезапуска стола опрос пуст, а снимок надо делать заново.
+     * @type {{question: string, options: string[], votes: Record<string, number>}|null}
+     */
+    this.vote = null;
+    /** @type {{id: string, x: number, y: number, mapType: string, mapId: string}[]|null} */
+    this.sceneSnapshot = null;
+    /**
+     * Саундборд стола: кнопки мастера с загруженными звуками. Каждая запись —
+     * имя и ссылка на файл в папке кампании; сами файлы живут в files/,
+     * кампания несёт только ссылки.
+     * @type {{id: string, name: string, ref: string}[]}
+     */
+    this.soundboard = [];
     /**
      * Неподтверждённые реакции игроков. Живут до конца раунда и переживают
      * переподключение: карточка в памяти клиента пропадала при обрыве связи.
@@ -1006,6 +1153,7 @@ class RoomState {
     this.grid = normalizeGrid(grid);
     // В кампаниях до появления часов поля нет: стол начинает с утра первого дня.
     this.gameTime = normalizeTime(data.gameTime);
+    this.timer = normalizeTimer(data.timer);
     this.calendarMonths = normalizeCalendarMonths(data.calendarMonths);
     this.calendarEvents = normalizeCalendarEvents(data.calendarEvents);
     this.partyNotes = sanitizeText(data.partyNotes, LIMITS.maxPartyNotes);
@@ -1034,6 +1182,7 @@ class RoomState {
     this.inventory = normalizeInventory(data.inventory);
     this.inventoryCoins = normalizeCoins(data.inventoryCoins);
     this.rollRequests = normalizeRollRequests(data.rollRequests);
+    this.soundboard = normalizeSoundboard(data.soundboard);
   }
 
   /* ----------------------------------------------------------- инициатива */
@@ -1381,11 +1530,15 @@ fogMask: normalizeFog(source.fogMask),
           walls: normalizeWalls(source.walls),
           lights: normalizeLights(source.lights),
           templates: normalizeTemplates(source.templates),
+          pins: normalizePins(source.pins),
           darkness: normalizeDarkness(source.darkness),
+          autoLight: source.autoLight === true,
           // Тумблер «открывать туман за фишками игроков». Старые карты
           // открывались только кистью, поэтому по умолчанию выключен.
           fogFollow: source.fogFollow === true,
           visionPerPlayer: source.visionPerPlayer === true,
+          // Кампании до появления звука эмбиента не знают: поле есть, но пусто.
+          audioRef: null,
           uploadedAt: source.uploadedAt || new Date().toISOString()
         });
     } else if (Array.isArray(source.items)) {
@@ -1405,9 +1558,17 @@ fogMask: normalizeFog(source.fogMask),
           walls: normalizeWalls(item.walls),
           lights: normalizeLights(item.lights),
           templates: normalizeTemplates(item.templates),
+          // Заметки-булавки мастера: подсказки на карте, игрокам не уходят.
+          pins: normalizePins(item.pins),
           darkness: normalizeDarkness(item.darkness),
+          // Авто-свет по часу игровых суток. Карты до этой функции не знают
+          // поля: default off, у них всё как раньше — ручной ползунок.
+          autoLight: item.autoLight === true,
           fogFollow: item.fogFollow === true,
           visionPerPlayer: item.visionPerPlayer === true,
+          // Эмбиент карты: ссылка на файл саундборда или null. У карт до
+          // появления звука поля нет — карта играет без эмбиента.
+          audioRef: normalizeAudioRef(item.audioRef),
           uploadedAt: item.uploadedAt || new Date().toISOString()
         });
       }
@@ -1466,7 +1627,8 @@ fogMask: normalizeFog(source.fogMask),
   mapSlotForViewer(type, isDm) {
     const slot = this.maps[type] || { items: [], activeId: null };
     if (isDm) return slot;
-    const items = slot.items.filter((item) => item.published !== false);
+    const items = slot.items.filter((item) => item.published !== false)
+      .map((item) => (item.pins && item.pins.length ? { ...item, pins: undefined } : item));
     let activeId = this.activeMap === type ? this.activeMapId : null;
     if (!items.some((item) => item.id === activeId)) activeId = items.length ? items[0].id : null;
     return { items, activeId };
@@ -1520,6 +1682,10 @@ fogMask: normalizeFog(source.fogMask),
       // Пройденные за текущий ход клетки. Считает сервер, чтобы остаток
       // скорости пережил перезагрузку и совпадал у всех клиентов.
       movedCells: clampInt(token.movedCells, 0, 1000, 0),
+      // Концентрация монстра: название заклинания. Гасится сервером при
+      // провале проверки по урону. Фишка игрока её не хранит — у героя это
+      // поле листа.
+      concentration: sanitizeText(token.concentration, LIMITS.maxConcentrationLength).trim() || undefined,
       // Фишка, выведенная из листа, носит аватар игрока и продолжает следить за
       // ним. Картинку, поставленную руками, помечаем как «свою»: дальше
       // аватар в неё не лезет.
@@ -1538,6 +1704,9 @@ fogMask: normalizeFog(source.fogMask),
       // которое игроки узнать не должны. Само поле уходит всем, но имя мастеру
       // и игрокам разное — см. tokenForViewer.
       hideName: Boolean(token.hideName),
+      // Эмоут фишки: короткий пузырь над ней. until в мс: старый эмоут при
+      // загрузке кампании молча отфильтруется как просроченный.
+      emote: normalizeTokenEmote(token.emote),
       // Подписи под фишкой скрыты всем сразу: мастеру тоже. Это не тайна от
       // игроков, а его способ убрать подписи с нагруженной карты, поэтому поле
       // одинаково у всех и тайны здесь нет.
@@ -1764,7 +1933,12 @@ fogMask: normalizeFog(source.fogMask),
       instantDeath,
       // Проверку концентрации бросает игрок: сервер только готовит СЛ.
       concentration: sheet && !healing && sheet.concentration && amount > 0
-        ? { spell: sheet.concentration, dc: Math.max(10, Math.floor(amount / 2)) }
+        ? { spell: sheet.concentration, dc: Math.max(10, Math.floor(amount / 2)), fromSheet: true }
+        : null,
+      // У монстра концентрацию проверяет сам сервер: бросок за фишку
+      // без листа. DC тот же: чем больнее, тем сложнее держать заклинание.
+      tokenConcentration: !sheet && !healing && Number(token.maxHp) > 0 && token.concentration && amount > 0
+        ? { spell: token.concentration, dc: Math.max(10, Math.floor(amount / 2)) }
         : null
     };
   }
@@ -1843,6 +2017,7 @@ fogMask: normalizeFog(source.fogMask),
       activeMapId: this.activeMapId,
       grid: this.grid,
       gameTime: this.gameTime,
+      timer: this.timer,
       calendarMonths: this.calendarMonths,
       calendarEvents: this.calendarEvents,
       partyNotes: this.partyNotes,
@@ -1858,6 +2033,7 @@ fogMask: normalizeFog(source.fogMask),
       inventory: this.inventory,
       inventoryCoins: this.inventoryCoins,
       rollRequests: this.rollRequests,
+      soundboard: this.soundboard,
       adventure: this.adventure,
       savedAt: new Date().toISOString()
     };
@@ -2112,6 +2288,8 @@ fogMask: normalizeFog(source.fogMask),
       grid: this.grid,
       // Время в игре видят все: по нему мастер объявляет, что стемнело.
       gameTime: this.gameTime,
+      // Таймер обратного отсчёта тоже общий: считать остаток клиенты будут сами.
+      timer: this.timer,
       // Названия месяцев тоже общие: иначе игрок видел бы чужую дату.
       calendarMonths: this.calendarMonths,
       // События календаря и заметки партии общие: их читают все, пишут по роли.
@@ -2152,6 +2330,9 @@ fogMask: normalizeFog(source.fogMask),
       rollRequests: isDm
         ? this.rollRequests
         : this.rollRequests.filter((request) => !request.to || request.to === viewer.playerId),
+      // Саундборд — мастерская панель: игроку список имён не нужен, кю и
+      // эмбиент приходят ему ссылкой в soundCue и mapUpdated.
+      soundboard: isDm ? this.soundboard : [],
       // Реакции: мастер видит все, игрок только свои. Иначе чужой повод
       // раскрыл бы ему статы и положение чужой фишки.
       reactions: isDm
@@ -2358,6 +2539,86 @@ fogMask: normalizeFog(source.fogMask),
     return true;
   }
 
+  /**
+   * Красит карты с флагом «авто-свет» по кривой суток.
+   *
+   * Сервер — единственный источник времени в игре, поэтому излом кривой
+   * здесь: у клиента меняется только отрисовка. Возвращает список вкладок,
+   * чьи карты поправились, чтобы сокет разослал их одним mapUpdated.
+   * @returns {string[]} типы карт, у которых поменялась темнота
+   */
+  applyAutoLight() {
+    const changed = [];
+    const darkness = darknessForHour(this.gameTime.hour);
+    for (const type of MAP_TYPES) {
+      for (const item of (this.maps[type] || { items: [] }).items) {
+        if (!item.autoLight || Math.abs((Number(item.darkness) || 0) - darkness) < 0.001) continue;
+        item.darkness = darkness;
+        if (!changed.includes(type)) changed.push(type);
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Бросок по таблице приключений.
+   *
+   * Два правила в одном: если у всех строк задан диапазон результата, формула
+   * таблицы бросается и результат ищется в диапазоне; иначе строки тянутся по
+   * весам, как мешок фишек.
+   * @param {string} tableId
+   * @param {(min: number, max: number) => number} rng честный бросок сервера
+   * @returns {{table: object, row: object, result: number|null}|null}
+   */
+  rollAdventureTable(tableId, rng) {
+    const table = (this.adventure && Array.isArray(this.adventure.tables))
+      ? this.adventure.tables.find((item) => item.id === String(tableId || ''))
+      : null;
+    if (!table || !Array.isArray(table.rows) || !table.rows.length) return null;
+    const formula = typeof table.formula === 'string' ? table.formula.trim() : '';
+    const ranged = formula
+      && table.rows.length > 1
+      && table.rows.every((row) => Number.isFinite(Number(row.min)) && Number.isFinite(Number(row.max)));
+    if (ranged) {
+      const parsed = dice.parseFormula(formula);
+      if (!parsed.ok) return null;
+      const result = dice.rollFormula(parsed, rng);
+      const value = Math.round(Number(result.result) || 0);
+      const row = table.rows.find((entry) => value >= Number(entry.min) && value <= Number(entry.max))
+        || table.rows[table.rows.length - 1];
+      return { table, row, result: value };
+    }
+    // Выбор по весам: сумма весов строк бросается один раз.
+    const total = table.rows.reduce((sum, row) => sum + (Number(row.weight) || 1), 0);
+    let ticket = Math.max(1, rng(1, total));
+    let row = table.rows[table.rows.length - 1];
+    for (const entry of table.rows) {
+      ticket -= Number(entry.weight) || 1;
+      if (ticket <= 0) { row = entry; break; }
+    }
+    return { table, row, result: null };
+  }
+
+  /**
+   * Запуск бытового таймера. Отмену не предлагаем: таймер не меняет
+   * карты и фишки, а случайный клик останавливается второй кнопкой.
+   * @param {unknown} input
+   * @returns {boolean}
+   */
+  startTimer(input) {
+    const seconds = clampInt(input && input.seconds, 1, TIME_LIMITS.maxTimerSeconds, 0);
+    if (!seconds) return false;
+    const label = sanitizeText(input && input.label, LIMITS.maxNameLength).trim();
+    this.timer = { running: true, endsAt: Date.now() + seconds * 1000, totalSec: seconds, label };
+    return true;
+  }
+
+  stopTimer() {
+    if (!this.timer.running) return false;
+    this.timer = emptyTimer();
+    return true;
+  }
+
   addRollRequest(input) {
     const request = normalizeRollRequest(input);
     if (!request) return null;
@@ -2470,6 +2731,49 @@ function newRollRequestId() {
   return `r-${crypto.randomBytes(6).toString('hex')}`;
 }
 
+function newSoundId() {
+  return `snd-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+/**
+ * Ссылка на звук стола: сервер выдаёт только свои /files/<имя>. Принимать
+ * что-то ещё значило бы позволить кампании указать стол на внешний адрес.
+ * @param {unknown} raw
+ * @returns {string|null}
+ */
+function normalizeAudioRef(raw) {
+  const ref = typeof raw === 'string' ? sanitizeText(raw, LIMITS.maxAudioRef).trim() : '';
+  return /^\/files\/[a-z0-9-]+\.(mp3|ogg|wav)$/i.test(ref) ? ref : null;
+}
+
+/**
+ * Кнопка саундборда: имя и ссылка на файл, который выдал сам сервер.
+ * @param {object} raw
+ * @returns {{id: string, name: string, ref: string}|null}
+ */
+function normalizeSound(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const ref = normalizeAudioRef(raw.ref);
+  if (!ref) return null;
+  const name = sanitizeText(raw.name, LIMITS.maxNameLength).trim() || 'Звук';
+  const id = sanitizeText(raw.id, 40).trim() || newSoundId();
+  return { id, name, ref };
+}
+
+/** @param {unknown} raw @returns {{id: string, name: string, ref: string}[]} */
+function normalizeSoundboard(raw) {
+  const result = [];
+  const seen = new Set();
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const sound = normalizeSound(item);
+    if (!sound || seen.has(sound.id)) continue;
+    seen.add(sound.id);
+    result.push(sound);
+    if (result.length >= LIMITS.maxSoundboard) break;
+  }
+  return result;
+}
+
 function normalizeJournalTags(value) {
   const tags = [];
   const seen = new Set();
@@ -2496,6 +2800,9 @@ function normalizeJournalEntry(entry) {
     kind: JOURNAL_KINDS.includes(entry.kind) ? entry.kind : 'npc',
     title,
     text: sanitizeText(entry.text, LIMITS.maxJournalText),
+    // Картинка записи: скриншот стола или хендаут. Формат тот же, что и у
+    // прочих картинок кампании; пустая строка — картинки нет.
+    image: normalizeAdventureImage(entry.image),
     tags: normalizeJournalTags(entry.tags),
     // По умолчанию запись мастера. Игроку уходят только отмеченные.
     visible: Boolean(entry.visible),
@@ -2601,6 +2908,7 @@ module.exports = {
   emptyTime,
   newMapId,
   newTokenId,
+  newSoundId,
   normalizeSheet,
   normalizeAdventure,
   normalizeCalendarMonths,

@@ -700,6 +700,50 @@
         pushMap(payload.type);
       },
 
+      setMapWallDoor(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        const wall = (DnD.normalizeWalls(item.walls) || []).find((entry) => entry.id === String(payload.wallId || ''));
+        if (!wall) return;
+        if ('door' in payload) {
+          wall.door = payload.door && typeof payload.door === 'object'
+            ? { open: payload.door.open === true, locked: payload.door.locked === true }
+            : undefined;
+        }
+        if ('window' in payload) {
+          wall.window = payload.window === true ? true : undefined;
+        }
+        item.walls = DnD.normalizeWalls(item.walls);
+        pushMap(payload.type);
+      },
+
+      setMapPin(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item) return;
+        const raw = (payload && payload.pin) || {};
+        const pin = {
+          id: String(raw.id || payload.pinId || '').slice(0, 40) || `pin-${Date.now()}${Math.round(Math.random() * 1e6)}`,
+          x: Math.max(0, Math.min(1, Number(raw.x) || 0)),
+          y: Math.max(0, Math.min(1, Number(raw.y) || 0)),
+          title: String(raw.title || '').slice(0, 60).trim() || 'Пин',
+          text: String(raw.text || '').slice(0, 2000)
+        };
+        item.pins = Array.isArray(item.pins) ? item.pins.filter(Boolean) : [];
+        const index = item.pins.findIndex((entry) => entry.id === pin.id);
+        if (index >= 0) item.pins[index] = pin;
+        else if (item.pins.length >= 60) item.pins.shift();
+        item.pins.push(pin);
+        item.pins = DnD.normalizePins(item.pins);
+        pushMap(payload.type);
+      },
+
+      deleteMapPin(payload) {
+        const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
+        if (!item || !Array.isArray(item.pins)) return;
+        item.pins = item.pins.filter((entry) => entry.id !== payload.pinId);
+        pushMap(payload.type);
+      },
+
       clearMapWalls(payload) {
         const item = findMap(state.maps[payload && payload.type], payload && payload.mapId);
         if (!item) return;

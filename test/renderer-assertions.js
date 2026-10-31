@@ -19,6 +19,20 @@
       checks.push({ name, ok: false, error: error.message });
     }
   };
+  /** Вариант check для проверок, где результат приходит не раньше следующего кадра. */
+  const checkAsync = async (name, fn) => {
+    console.log(`ШАГ: ${name}`);
+    try {
+      await fn();
+      checks.push({ name, ok: true });
+    } catch (error) {
+      checks.push({ name, ok: false, error: error.message });
+    }
+  };
+  /** Два кадра rAF: параллакс и коалисинг рисунка сходятся к следующему кадру. */
+  const nextFrames = () => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
   const assert = (condition, message) => {
     if (!condition) throw new Error(message || 'утверждение не выполнено');
   };
@@ -1153,7 +1167,7 @@
       assert(!mapHost.querySelector('.map-empty').hidden, 'заглушка скрыта');
       assert(mapHost.querySelector('.map-surface').hidden, 'поверхность карты видна');
     });
-    check('орнамент карты висит и реагирует на курсор', () => {
+    await checkAsync('орнамент карты висит и реагирует на курсор', async () => {
       const stage = mapHost.querySelector('.map-stage');
       const decor = mapHost.querySelector('.map-decor');
       assert(stage && decor, 'нет подвесного орнамента у карты');
@@ -1164,12 +1178,15 @@
         clientY: rect.top + 20,
         bubbles: true
       }));
+      // Ветка параллакса пишет --pointer-x в rAF: читаем не раньше двух кадров.
+      await nextFrames();
       const x = Number(decor.style.getPropertyValue('--pointer-x'));
       assert(Math.abs(x - 0.8) < 0.05, `курсор не учтён: ${x}`);
       const strand = mapHost.querySelector('.map-decor__strand');
       const transform = getComputedStyle(strand).transform;
       assert(transform && transform !== 'none', 'лоза не отзывается на курсор');
       stage.dispatchEvent(new PointerEvent('pointerleave'));
+      await nextFrames();
       assert(decor.style.getPropertyValue('--pointer-x') === '0.5', 'курсор не отпущен');
     });
 
@@ -1408,13 +1425,15 @@
       assert(!window.DnD5e.fogHasOpenArea(fogMap.fogMask), 'у новой карты что-то открыто');
     });
 
-    check('кисть открывает участок и уходит на сервер', () => {
+    await checkAsync('кисть открывает участок и уходит на сервер', async () => {
       fogView.setFogMode(true);
       assert(fogView.surface.classList.contains('is-fogging'), 'режим кисти не включился');
       const rect = fogView.surface.getBoundingClientRect();
       assert(rect.width > 0, 'поверхность карты нулевой ширины, точку не посчитать');
       const opened = new MapViewEvent(rect);
       fogView.openFogAt(opened);
+      // Слой тумана перерисовывается коалисингом rAF: читаем не раньше двух кадров.
+      await nextFrames();
       assert(!fogView.fogCanvas.hidden, 'слой тумана не показался после кисти');
       assert(window.DnD5e.fogHasOpenArea(fogMap.fogMask), 'кисть ничего не открыла');
       const sent = fogEvents[fogEvents.length - 1];
@@ -1809,32 +1828,34 @@
       assert.strictEqual(deleted, 'm1');
     });
 
-    check('наведение показывает клетку назначения и расстояние', () => {
+    await checkAsync('наведение показывает клетку назначения и расстояние', async () => {
+      let liveRect = null;
       withRealMapSize(() => {
         mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
         mapView.selectCombatToken('t1');
         const surface = mapView.surface;
         const rect = surface.getBoundingClientRect();
+        liveRect = rect;
         assert(rect.width > 0, 'подложка карты без размера');
-        // Проверка обязана быть синхронной: ждать нельзя, все ожидания здесь
-        // выполняются параллельно следующим проверкам.
         surface.dispatchEvent(new PointerEvent('pointermove', new MapViewEvent(
           rect, rect.left + ((5.5 * 46) / 400) * rect.width, rect.top + rect.height / 2
         ).payload()));
-        assert(!mapView.routeLabel.hidden, `подпись расстояния не показана: ${JSON.stringify({
-          enabled: mapView.combat.enabled,
-          token: mapView.combat.tokenId,
-          route: mapView.route,
-          rect: [rect.width, rect.height]
-        })}`);
-        assert(/\d+ шаг/.test(mapView.routeLabel.textContent), `подпись: ${mapView.routeLabel.textContent}`);
-        assert(!mapView.cellMark.hidden, 'клетка назначения не подсвечена');
-        // Линию рисует только протяжка: наведение подсказывает клетку и число
-        // шагов, но не прокладывает путь за игрока.
-        assert(mapView.routeLayer.hidden, 'линия маршрута показана без протяжки');
-        assert(!mapView.routeLine.getAttribute('d'), 'у линии маршрута есть путь без протяжки');
-        mapView.selectCombatToken(null);
       });
+      // Наведение рисуется коалисингом rAF (F01): читаем не раньше двух кадров.
+      await nextFrames();
+      assert(!mapView.routeLabel.hidden, `подпись расстояния не показана: ${JSON.stringify({
+        enabled: mapView.combat.enabled,
+        token: mapView.combat.tokenId,
+        route: mapView.route,
+        rect: liveRect ? [liveRect.width, liveRect.height] : null
+      })}`);
+      assert(/\d+ шаг/.test(mapView.routeLabel.textContent), `подпись: ${mapView.routeLabel.textContent}`);
+      assert(!mapView.cellMark.hidden, 'клетка назначения не подсвечена');
+      // Линию рисует только протяжка: наведение подсказывает клетку и число
+      // шагов, но не прокладывает путь за игрока.
+      assert(mapView.routeLayer.hidden, 'линия маршрута показана без протяжки');
+      assert(!mapView.routeLine.getAttribute('d'), 'у линии маршрута есть путь без протяжки');
+      mapView.selectCombatToken(null);
       mapView.render(MAP_STATE, { role: 'dm', playerId: 'dm' });
     });
 
@@ -2242,10 +2263,10 @@
         'в строке не хватает кнопок');
     });
 
-    check('поверхность рисуется по клеткам и уходит на сервер пачкой', () => {
+    await checkAsync('поверхность рисуется по клеткам и уходит на сервер пачкой', async () => {
       const painted = [];
       mapView.handlers.onPaintSurface = (type, mapId, cells) => painted.push({ type, mapId, cells });
-      withRealMapSize(() => {
+      withRealMapSize(async () => {
         mapView.render(bigMapState(COMBAT_STATE), { role: 'dm', playerId: 'dm' });
         mapView.setSurfaceTool('acid');
         const rect = mapView.surface.getBoundingClientRect();
@@ -2265,6 +2286,8 @@
         const map = mapView.mapOf('world');
         assert(Object.keys(map.surface.cells).length === painted[0].cells.length,
           'на карте столько же клеток, сколько ушло на сервер');
+        // Слой поверхности перерисовывается коалисингом rAF: ждём два кадра.
+        await nextFrames();
         assert(!mapView.surfaceCanvas.hidden, 'слой поверхности не показан');
         // Ластик — это пустая строка, а не null: проверка на falsy съедала его,
         // и ластик молча ничего не делал.
@@ -4063,13 +4086,13 @@
 
     trainingButton.click();
     await waitFor(() => document.querySelector('#screen-table').classList.contains('is-active'), 'экран тренировочного стола');
-    await waitFor(() => document.querySelector('#conn-badge').textContent === 'без сети', 'подпись «без сети»');
+    await waitFor(() => document.querySelector('#conn-badge').title.startsWith('без сети'), 'подпись «без сети»');
     const hostInTraining = await window.desktop.hostStatus();
 
     check('тренировочный стол открывается без сервера и без сети', () => {
       assert(hostInTraining.running === false, 'сервер стола всё-таки поднялся');
       assert(document.querySelector('#role-badge').textContent === 'Игрок', 'роль не игрок');
-      assert(document.querySelector('#conn-badge').textContent === 'без сети', 'нет пометки, что связи нет');
+      assert(document.querySelector('#conn-badge').title.startsWith('без сети'), 'нет пометки, что связи нет');
       assert(document.querySelector('#table-campaign').textContent.includes('Проверка'), 'нет пометки, что это проверка');
       assert(document.querySelector('#table-sub').textContent.includes('проверка без сети'), 'нет пометки в подзаголовке');
       assert(document.querySelector('#btn-save-campaign').hidden, 'у игрока видна кнопка сохранения кампании');
@@ -4360,9 +4383,9 @@
       document.querySelector('.modal-overlay [data-theme-id="par"]').click();
       check('стимпанк включается и вешает свою цепь на карту', () => {
         assert(document.documentElement.dataset.theme === 'par', 'стимпанк не применился');
-        const strand = document.querySelector('.map-decor__strand');
-        assert(strand, 'у карты нет подвесного орнамента');
-        const image = getComputedStyle(strand).backgroundImage;
+        const seg = document.querySelector('.map-decor__strand .map-decor__seg--2');
+        assert(seg, 'у цепи нет звеньев');
+        const image = getComputedStyle(seg).backgroundImage;
         assert(image && image !== 'none', 'орнамент не получил оформление');
       });
 
@@ -4580,7 +4603,7 @@
 
     check('ДМ попал на экран стола, сервер поднялся, роль определена', () => {
       assert(document.querySelector('#role-badge').textContent === 'ДМ', 'роль не ДМ');
-      assert(document.querySelector('#conn-badge').textContent === 'на связи', 'нет связи с сервером');
+      assert(document.querySelector('#conn-badge').title.startsWith('на связи'), 'нет связи с сервером');
       assert(document.querySelector('#table-campaign').textContent === 'Смоук-кампания', 'название кампании');
       assert(document.querySelector('#table-sub').textContent.includes('порт'), 'нет порта в подзаголовке');
     });
@@ -5612,11 +5635,13 @@
       const canvas = lightHost().querySelector('.map-light');
       assert(canvas.hidden, 'слой света виден на дневной карте');
     });
-    check('ползунок темноты затемняет карту и уходит на сервер', () => {
+    await checkAsync('ползунок темноты затемняет карту и уходит на сервер', async () => {
       const slider = [...document.querySelectorAll('#map-root .map-lightbar input')]
         .find((node) => node.getAttribute('aria-label') === 'Темнота карты');
       slider.value = '70';
       slider.dispatchEvent(new Event('input', { bubbles: true }));
+      // Слой света перекрашивается коалисингом rAF: ждём два кадра.
+      await nextFrames();
       const canvas = lightHost().querySelector('.map-light');
       assert(!canvas.hidden, 'слой света не появился при темноте 70%');
       assert(canvas.width > 0 && canvas.height > 0, `холст света пуст: ${canvas.width}x${canvas.height}`);
@@ -5686,13 +5711,19 @@
     check('стена сохранилась на сервере', () => {
       assert(wallArrived, 'стена не доехала до стола и не вернулась на карту');
     });
-    check('правый клик по стене убирает её', () => {
+    check('правый клик по стене открывает меню и убирает её', () => {
       const surface = document.querySelector('#map-root .map-surface');
       const box = surface.getBoundingClientRect();
       surface.dispatchEvent(new MouseEvent('contextmenu', {
         bubbles: true, cancelable: true,
         clientX: box.left + box.width * 0.5, clientY: box.top + box.height * 0.5
       }));
+      // С 1.12.0 стена правым кликом открывает меню (дверь/окно/удаление),
+      // а не удаляется сразу: выбираем пункт вручную.
+      const item = [...document.querySelectorAll('.token-menu .token-menu__item')]
+        .find((node) => node.textContent === 'Удалить стену');
+      assert(item, 'в меню стены нет пункта «Удалить стену»');
+      item.click();
     });
     const wallGone = await softWait(
       () => document.querySelectorAll('#map-root .map-walls line').length === 0,
@@ -6518,6 +6549,45 @@
     });
     byText(bestiary, 'Закрыть').click();
     await waitFor(() => !document.querySelector('.modal--bestiary'), 'закрытие окна Open5e');
+
+    const spellButton = byText(document.querySelector('#tab-adventure'), 'Заклинания Open5e');
+    check('в справочнике есть кнопка заклинаний', () => assert(spellButton, 'кнопки «Заклинания Open5e» нет'));
+    spellButton.click();
+    const spellModal = await waitFor(
+      () => document.querySelector('.modal--bestiary'),
+      'окно заклинаний'
+    );
+    check('окно заклинаний ищет по названию', () => {
+      assert(spellModal.querySelector('.modal__title').textContent.includes('Заклинания'),
+        `заголовок: ${spellModal.querySelector('.modal__title').textContent}`);
+      const field = spellModal.querySelector('.bestiary-search__input');
+      assert(field && field.placeholder.includes('русском или английском'), 'нет поля поиска');
+      assert(byText(spellModal, 'В справочник').disabled, 'сохранение активно без карточки');
+    });
+    byText(spellModal, 'Закрыть').click();
+    await waitFor(() => !document.querySelector('.modal--bestiary'), 'закрытие окна заклинаний');
+
+    // Бытовой таймер: мастер запускает и останавливает его прямо из шапки.
+    const chip = await waitFor(() => {
+      const node = document.querySelector('#timer-chip');
+      return node && !node.hidden ? node : null;
+    }, 'чип таймера виден мастеру');
+    chip.click();
+    const timerTitle = await waitFor(() => {
+      const node = document.querySelector('.modal .modal__title');
+      return node && node.textContent === 'Обратный отсчёт' ? node : null;
+    }, 'окно запуска таймера');
+    document.querySelector('.modal .input').value = '1:30';
+    byText(timerTitle.parentElement, 'Пуск').click();
+    await waitFor(() => /^⏱ 1:\d\d$/.test(chip.textContent.trim()), 'таймер тикает');
+    chip.click();
+    const stopTitle = await waitFor(() => {
+      const node = document.querySelector('.modal .modal__title');
+      return node && node.textContent === 'Таймер' ? node : null;
+    }, 'окно остановки таймера');
+    byText(stopTitle.parentElement, 'Остановить').click();
+    await waitFor(() => chip.textContent.trim() === '⏱', 'таймер остановлен');
+    await waitFor(() => !document.querySelector('.modal'), 'окна таймера закрыты');
 
     document.querySelector('#btn-search').click();
     const advSearch = await waitFor(

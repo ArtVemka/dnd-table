@@ -20,6 +20,8 @@ const path = require('path');
 const { CAMPAIGN_FORMAT_VERSION, emptyMaps, sanitizeText } = require('./state');
 
 const IMAGE_EXTENSIONS = { png: 'png', jpg: 'jpg', jpeg: 'jpg', webp: 'webp' };
+/** Звук саундборда: те же файлы в папке кампании, но свои расширения. */
+const AUDIO_EXTENSIONS = { mp3: 'mp3', mpeg: 'mp3', ogg: 'ogg', wav: 'wav', 'x-wav': 'wav' };
 
 /** Потолок на объём папки files одной кампании. Карты и портреты вместе. */
 const MAX_FILES_BYTES = 512 * 1024 * 1024;
@@ -53,8 +55,12 @@ function collectFileRefs(state) {
   for (const slot of Object.values(maps)) {
     if (!slot || typeof slot !== 'object') continue;
     add(slot.url);
-    for (const item of Array.isArray(slot.items) ? slot.items : []) add(item && item.url);
+    for (const item of Array.isArray(slot.items) ? slot.items : []) {
+      add(item && item.url);
+      add(item && item.audioRef);
+    }
   }
+  for (const sound of Array.isArray(state && state.soundboard) ? state.soundboard : []) add(sound && sound.ref);
   for (const token of Array.isArray(state && state.tokens) ? state.tokens : []) add(token && token.imageUrl);
   for (const player of Array.isArray(state && state.players) ? state.players : []) add(player && player.avatar);
   // Картинки-хендауты живут в истории чата, но файл у них тот же, что у карт
@@ -423,7 +429,32 @@ class CampaignStore {
    * @returns {Promise<string>}
    */
   async saveImage(campaignId, buffer, ext) {
-    const safeExt = IMAGE_EXTENSIONS[String(ext).toLowerCase()] || 'png';
+    return this.saveFile(campaignId, buffer, ext, IMAGE_EXTENSIONS, 'png');
+  }
+
+  /**
+   * Сохраняет звук в ту же папку кампании: саундборд и эмбиент карт ездят
+   * по тем же /files/, что карты и аватары, и тратят ту же квоту.
+   * @param {string} campaignId
+   * @param {Buffer} buffer
+   * @param {string} ext
+   * @returns {Promise<string>}
+   */
+  async saveAudio(campaignId, buffer, ext) {
+    return this.saveFile(campaignId, buffer, ext, AUDIO_EXTENSIONS, 'mp3');
+  }
+
+  /**
+   * Запись файла в папку кампании с проверкой квоты на весь каталог.
+   * @param {string} campaignId
+   * @param {Buffer} buffer
+   * @param {string} ext
+   * @param {Record<string, string>} whitelist
+   * @param {string} fallbackExt
+   * @returns {Promise<string>}
+   */
+  async saveFile(campaignId, buffer, ext, whitelist, fallbackExt) {
+    const safeExt = whitelist[String(ext).toLowerCase()] || fallbackExt;
     const fileName = `${Date.now().toString(36)}-${crypto.randomBytes(6).toString('hex')}.${safeExt}`;
     await fsp.mkdir(this.filesDir(campaignId), { recursive: true });
     const used = await this.filesBytes(campaignId);

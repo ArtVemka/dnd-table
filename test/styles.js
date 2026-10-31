@@ -28,7 +28,7 @@ check('части идут в порядке номеров', () => {
   const expected = [
     '01-tokens.css', '02-screens.css', '03-controls.css', '04-layout.css',
     '05-map.css', '06-panels.css', '07-sheet.css', '08-theme-layer.css',
-    '09-theme-studio.css'
+    '09-theme-studio.css', '10-perf-mode.css'
   ];
   if (JSON.stringify(order) !== JSON.stringify(expected)) {
     throw new Error(`на диске: ${order.join(', ')}`);

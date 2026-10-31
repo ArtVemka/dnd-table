@@ -41,7 +41,7 @@
 }
 
 .btn--accent:hover:not(:disabled) {
-  background: linear-gradient(180deg, #e59a74, var(--accent-hover));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-hover) 78%, var(--gold)), var(--accent-hover));
 }
 
 .btn--ghost {
@@ -93,24 +93,27 @@
 }
 
 .field__label {
-  font-size: 11.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
+  font-size: 12px;
+  font-style: italic;
+  letter-spacing: 0.15px;
   color: var(--muted);
 }
 
+/* Поле — не наклейка сверху, а желобок, вдавленный в стол: темный уклон
+   внутри сверху и светлая кромка внизу. */
 .field__input,
 .input,
 .textarea,
 .select {
   width: 100%;
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 86%, #000), var(--bg-deep));
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   color: var(--text);
   padding: 8px 10px;
   font: inherit;
   font-size: 13.5px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35), inset 0 -1px 0 var(--hairline);
 }
 
 .field__input:focus,
@@ -119,7 +122,7 @@
 .select:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 3px var(--accent-soft);
 }
 
 .field__input:disabled,
@@ -219,14 +222,17 @@
 
 /* ---------------------------------------------------------------- Бейджи */
 
+/* Бейдж — не аптечный пилюль-овал, а штампированная бирка: свой радиус темы
+   и тиснёный блик. */
 .badge {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.3px;
-  background: var(--surface-3);
+  background: linear-gradient(180deg, var(--surface-3), color-mix(in srgb, var(--surface-3) 82%, #000));
+  box-shadow: inset 0 1px 0 var(--hairline);
   color: var(--text-dim);
   border: 1px solid var(--border);
   white-space: nowrap;

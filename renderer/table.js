@@ -14,6 +14,7 @@
     lightGrid,
     lightPolygon,
     normalizeLights,
+    normalizePins,
     normalizeWalls,
     wallsInCells
   } = DnD;
@@ -239,6 +240,27 @@
   function buildTokenMenu(token, players, handlers, close, options = {}) {
     const menu = el('div', 'token-menu');
 
+    // Выделено несколько фишек (Shift+клик): сначала идут действия над всеми
+    // сразу, одним батчем сервера. Обычные пункты ниже действуют на фишку,
+    // по которой открыли меню.
+    if (options.selectedCount > 1) {
+      const batch = (label, kind, value) => {
+        const item = el('button', 'token-menu__item', `${label} (${options.selectedCount})`);
+        item.type = 'button';
+        item.addEventListener('click', () => {
+          close();
+          if (handlers.onTokensBatch) handlers.onTokensBatch({ kind, value });
+          if (options.clearSelection) options.clearSelection();
+        });
+        menu.appendChild(item);
+      };
+      batch('Скрыть выбранные', 'hidden', true);
+      batch('Показать выбранные', 'hidden', false);
+      batch('Сделать союзниками', 'side', 'ally');
+      batch('Сделать врагами', 'side', 'enemy');
+      batch('Удалить выбранные', 'delete');
+    }
+
     const rename = el('button', 'token-menu__item', 'Переименовать');
     rename.type = 'button';
     rename.addEventListener('click', () => {
@@ -246,6 +268,15 @@
       if (handlers.onRenameToken) handlers.onRenameToken(token);
     });
     menu.appendChild(rename);
+
+    // Эмоут: короткий пузырь над фишкой с TTL, ставят мастер или владелец.
+    const emote = el('button', 'token-menu__item', 'Эмоут…');
+    emote.type = 'button';
+    emote.addEventListener('click', () => {
+      close();
+      if (handlers.onTokenEmote) handlers.onTokenEmote(token);
+    });
+    menu.appendChild(emote);
 
     // Скрытое имя — отдельный пункт, а не галочка: мастер решает по одной фишке,
     // и галочка в меню пришла бы с состоянием по умолчанию «показывать».
@@ -394,6 +425,43 @@
       acBox.appendChild(acInput);
     }
     menu.appendChild(acBox);
+
+    // Концентрация монстра: сервер сам проверяет её по урону и гасит на
+    // провале. У героя поле живёт в листе, поэтому его меню здесь молчит.
+    const concentrationBox = el('div', 'token-menu__section');
+    concentrationBox.appendChild(el('div', 'token-menu__title', 'Концентрация'));
+    if (isPlayerToken) {
+      concentrationBox.appendChild(el('div', 'token-menu__note',
+        'Концентрация героя учитывается в его листе'));
+    } else {
+      const concentrationInput = el('input', 'input');
+      concentrationInput.type = 'text';
+      concentrationInput.placeholder = 'нет';
+      concentrationInput.value = token.concentration || '';
+      // Мастер знает механику: сервер бросает за монстра против СЛ max(10, урон/2).
+      concentrationInput.title = 'Заклинание сбивается сервером при провале проверки от урона';
+      concentrationInput.addEventListener('change', () => {
+        close();
+        if (handlers.onSetTokenConcentration) {
+          handlers.onSetTokenConcentration(token.id, concentrationInput.value.trim() || null);
+        }
+      });
+      concentrationBox.appendChild(concentrationInput);
+    }
+    menu.appendChild(concentrationBox);
+
+    // Стабилизация лежащего героя: мастер правым кликом просит владельца
+    // бросить Медицину против СЛ 10. Успех применяет сам ДМ, как раньше.
+    if (isPlayerToken && playerStats && playerStats.down && handlers.onStabilizeToken) {
+      const stabilize = el('button', 'token-menu__item', 'Медицина: стабилизировать');
+      stabilize.type = 'button';
+      stabilize.title = 'Владелец получает заявку на бросок Медицины против СЛ 10';
+      stabilize.addEventListener('click', () => {
+        close();
+        handlers.onStabilizeToken(token.id);
+      });
+      menu.appendChild(stabilize);
+    }
 
     // Защиты от урона: строки через запятую. Список типов общий с окном урона,
     // сервер отбросит всё неизвестное и сохранит только русские названия.
@@ -1161,6 +1229,18 @@
        */
       this.routeDragging = false;
       this.lastEmit = 0;
+      // Режим атаки из листа: следующей фишка станет целью. null — режима нет.
+      this.attackMode = null;
+      // Мультивыбор: Shift+клик по фишкам, групповые операции одним батчем.
+      /** @type {Set<string>} */
+      this.selectedTokens = new Set();
+      // Коалисинг перерисовок: несколько синхронных paint* за кадр сходятся
+      // в один rAF-проход в каноничном порядке слоёв.
+      /** @type {Set<string>} */
+      this.pendingPaints = new Set();
+      this.paintScheduled = false;
+      this.pendingRouteCell = null;
+      this.routeScheduled = false;
       /**
        * Режим тумана: мастер рисует открытые участки мышью по карте.
        * По умолчанию выключен, иначе первое же движение мыши съедало бы
@@ -1462,6 +1542,26 @@
         this.templateMenu.hidden = true;
       });
 
+      // Саундборд: мастер загружает звуки, играет кю всему столу и назначает
+      // эмбиент карте. Содержимое меню рисунок пересобирает на каждом
+      // открытии: список живёт в кампании и меняется между открытиями.
+      const soundMenu = el('div', 'map-grid-menu map-sound-menu');
+      soundMenu.hidden = true;
+      this.soundMenu = soundMenu;
+      this.root.appendChild(soundMenu);
+      const soundFile = el('input');
+      soundFile.type = 'file';
+      soundFile.accept = '.mp3,.ogg,.wav,audio/*';
+      soundFile.hidden = true;
+      soundFile.addEventListener('change', () => this.uploadSoundFile(soundFile));
+      this.soundFile = soundFile;
+      this.root.appendChild(soundFile);
+      this.root.addEventListener('pointerdown', (event) => {
+        if (this.soundMenu.hidden) return;
+        if (event.target.closest('.map-sound-menu') || event.target.closest('.map-sound__toggle')) return;
+        this.soundMenu.hidden = true;
+      });
+
       // Панель освещения: своя вкладка вместо тесного тулбара.
       const lightPanel = el('div', 'map-lightbar');
       lightPanel.hidden = true;
@@ -1627,10 +1727,19 @@
       decor.setAttribute('aria-hidden', 'true');
       const wind = el('span', 'map-decor__wind');
       const strand = el('span', 'map-decor__strand');
-      for (let i = 1; i <= 3; i += 1) {
-        strand.appendChild(el('span', `map-decor__leaf map-decor__leaf--${i}`));
+      // Лоза режется на три звена: шарнир-шнур невидим, каждое звено рисует
+      // свою треть узора и крутится на свой угол. Изгиб бежит по ните сверху
+      // вниз, как у настоящей лианы, а не поворачивается палкой.
+      const segs = [];
+      for (let i = 0; i < 3; i += 1) {
+        const seg = el('span', `map-decor__seg map-decor__seg--${i}`);
+        (segs[i - 1] || strand).appendChild(seg);
+        segs.push(seg);
       }
-      strand.appendChild(el('span', 'map-decor__mark'));
+      segs[0].appendChild(el('span', 'map-decor__leaf map-decor__leaf--1'));
+      segs[1].appendChild(el('span', 'map-decor__leaf map-decor__leaf--2'));
+      segs[1].appendChild(el('span', 'map-decor__leaf map-decor__leaf--3'));
+      segs[2].appendChild(el('span', 'map-decor__mark'));
       wind.appendChild(strand);
       decor.appendChild(wind);
       const aside = el('span', 'map-decor__aside');
@@ -1660,14 +1769,134 @@
         window.addEventListener('resize', refreshDecorRect, { passive: true });
       }
       stage.addEventListener('pointerenter', refreshDecorRect, { passive: true });
+
+      /* --------------------------------------------- физика качаний ----
+       * Нить, два сустава лозы, груз, второй подвес и его груз — шесть
+       * маятников с инерцией. Курсор не тянет орнамент за собой, как раньше,
+       * а бьёт по нему: импульс пропорционален скорости курсора и тому,
+       * насколько близко он прошёл. Каждое звено догоняет предыдущее с
+       * задержкой — по лиане бежит волна изгиба. Дальше орнамент живёт сам:
+       * качается на своей частоте и постепенно затухает, а лёгкий сквозняк
+       * поддерживает в нём жизнь. У каждой темы своя длина и вязкость:
+       * трактирная цепь дёргается и замирает, магическая нить качается
+       * долго, под водой всё ходит как в киселе.
+       * Параметры: [частота рад/с, коэффициент затухания от критического].
+       */
+      const SWAY = {
+        standart: { cord: [3.0, 0.05], bob: [2.2, 0.045], aside: [3.9, 0.07], push: 9.0, breeze: 1.0 },
+        les: { cord: [2.4, 0.04], bob: [1.8, 0.035], aside: [3.4, 0.05], push: 7.5, breeze: 1.4 },
+        magiya: { cord: [3.4, 0.022], bob: [2.6, 0.02], aside: [4.3, 0.03], push: 11, breeze: 1.0 },
+        okean: { cord: [1.7, 0.16], bob: [1.3, 0.14], aside: [2.3, 0.2], push: 5, breeze: 0.9 },
+        traktir: { cord: [2.8, 0.09], bob: [2.1, 0.08], aside: [3.6, 0.1], push: 7, breeze: 0.7 },
+        par: { cord: [2.3, 0.12], bob: [1.7, 0.12], aside: [3.0, 0.14], push: 6, breeze: 0.5 }
+      };
+      const swayOf = () => SWAY[document.documentElement.dataset.theme] || SWAY.standart;
+      // Точки подвеса внутри сцены в пикселях: шнур у левого края, суставы
+      // лозы по её длине, груз на конце, второй подвес правее и короче.
+      const sway = {
+        cord: { a: 0, v: 0, x: 19, y: 8, limit: 13 },
+        seg1: { a: 0, v: 0, x: 19, y: 30, limit: 11 },
+        seg2: { a: 0, v: 0, x: 19, y: 52, limit: 11 },
+        bob: { a: 0, v: 0, x: 19, y: 80, limit: 20 },
+        aside: { a: 0, v: 0, x: 59, y: 26, limit: 10 },
+        asideBob: { a: 0, v: 0, x: 59, y: 60, limit: 16 }
+      };
+      let swayLastX = 0.5;
+      let swayLastAt = 0;
+      let swayLastFrame = 0;
+      let swayTime = 0;
+      let swayCalm = false;
+      // Параллакс декора тоже идёт через rAF: pointermove не трогает стили.
+      let decorPointerX = 0.5;
+      let decorPointerApplied = 0.5;
+      const motionCalm = () => (
+        document.documentElement.dataset.motion === 'off'
+        || document.documentElement.dataset.perf === 'on'
+        || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      );
+      const stepOsc = (osc, k, zeta, target, force, dt) => {
+        osc.v += (-k * k * (osc.a - target) - 2 * zeta * k * osc.v + force) * dt;
+        osc.a += osc.v * dt;
+        if (osc.a > osc.limit) { osc.a = osc.limit; osc.v *= -0.3; }
+        else if (osc.a < -osc.limit) { osc.a = -osc.limit; osc.v *= -0.3; }
+      };
+      const swayFrame = (now) => {
+        // Стол разобрали и нода осиротела: гасим цикл вместе с ней.
+        if (!decor.isConnected) return;
+        requestAnimationFrame(swayFrame);
+        if (decorPointerX !== decorPointerApplied) {
+          decorPointerApplied = decorPointerX;
+          decor.style.setProperty('--pointer-x', decorPointerApplied.toFixed(3));
+        }
+        const dt = Math.min(0.05, Math.max(0.001, (now - swayLastFrame) / 1000 || 0.016));
+        swayLastFrame = now;
+        if (motionCalm()) {
+          if (!swayCalm) {
+            swayCalm = true;
+            for (const osc of Object.values(sway)) { osc.a = 0; osc.v = 0; }
+            decor.style.setProperty('--sway', '0deg');
+            decor.style.setProperty('--sway-s1', '0deg');
+            decor.style.setProperty('--sway-s2', '0deg');
+            decor.style.setProperty('--sway-mark', '0deg');
+            decor.style.setProperty('--sway-aside', '0deg');
+            decor.style.setProperty('--sway-aside-mark', '0deg');
+          }
+          return;
+        }
+        swayCalm = false;
+        const p = swayOf();
+        swayTime += dt;
+        // Сквозняк из трёх несоизмеримых волн: цикла не заметно глазу.
+        const wind = p.breeze * (Math.sin(swayTime * 0.21)
+          + 0.5 * Math.sin(swayTime * 0.13 + 2.1)
+          + 0.3 * Math.sin(swayTime * 0.37 + 0.6));
+        stepOsc(sway.cord, p.cord[0], p.cord[1], 0, wind, dt);
+        // Суставы догоняют вышестоящий с задержкой: волна изгиба бежит вниз.
+        stepOsc(sway.seg1, p.cord[0] * 1.35, p.cord[1] * 1.4, sway.cord.a * 0.72, wind * 0.5, dt);
+        stepOsc(sway.seg2, p.cord[0] * 1.65, p.cord[1] * 1.7, sway.seg1.a * 0.72, wind * 0.4, dt);
+        // Груз целься в кончик лозы, но отстаёт и перелетает через него.
+        stepOsc(sway.bob, p.bob[0], p.bob[1], sway.seg2.a * 0.55, wind * 0.3, dt);
+        stepOsc(sway.aside, p.aside[0], p.aside[1], 0, wind * 0.8, dt);
+        stepOsc(sway.asideBob, p.aside[0] * 1.3, p.aside[1] * 1.5, sway.aside.a * 0.6, wind * 0.5, dt);
+        decor.style.setProperty('--sway', `${sway.cord.a.toFixed(2)}deg`);
+        decor.style.setProperty('--sway-s1', `${sway.seg1.a.toFixed(2)}deg`);
+        decor.style.setProperty('--sway-s2', `${sway.seg2.a.toFixed(2)}deg`);
+        decor.style.setProperty('--sway-mark', `${sway.bob.a.toFixed(2)}deg`);
+        decor.style.setProperty('--sway-aside', `${sway.aside.a.toFixed(2)}deg`);
+        decor.style.setProperty('--sway-aside-mark', `${sway.asideBob.a.toFixed(2)}deg`);
+      };
+      requestAnimationFrame(swayFrame);
+
       stage.addEventListener('pointermove', (event) => {
+        if (document.documentElement.dataset.perf === 'on') return;
         if (!decorRect || !decorRect.width || !decorRect.height) refreshDecorRect();
         if (!decorRect || !decorRect.width || !decorRect.height) return;
         const x = Math.max(0, Math.min(1, (event.clientX - decorRect.left) / decorRect.width));
-        decor.style.setProperty('--pointer-x', x.toFixed(3));
+        // Стиль не трогаем здесь: значение сходит в rAF одним кадром на курсор.
+        decorPointerX = x;
+        const now = performance.now();
+        const dtMs = now - swayLastAt;
+        const prev = swayLastX;
+        swayLastX = x;
+        swayLastAt = now;
+        // Первый вход и залипшие окна: скорость считать не с чего.
+        if (dtMs < 8 || dtMs > 600) return;
+        const vx = Math.max(-2600, Math.min(2600, ((x - prev) * decorRect.width) / (dtMs / 1000)));
+        const y = event.clientY - decorRect.top;
+        const px = x * decorRect.width;
+        const impulse = swayOf().push * (vx / 1000);
+        for (const osc of Object.values(sway)) {
+          const dx = (px - osc.x) / 80;
+          const dy = (y - osc.y) / 130;
+          osc.v += impulse / (1 + dx * dx + dy * dy);
+        }
       }, { passive: true });
       stage.addEventListener('pointerleave', () => {
         decorRect = null;
+        swayLastAt = 0;
+        swayLastX = 0.5;
+        decorPointerX = 0.5;
+        decorPointerApplied = 0.5;
         decor.style.setProperty('--pointer-x', '0.5');
       }, { passive: true });
 
@@ -1752,6 +1981,20 @@
       zoomBar.appendChild(pingButton);
       stage.appendChild(zoomBar);
 
+      // Режим атаки из листа: клик по фишке бьёт по ней готовой атакой.
+      // Подсказка живёт рядом с зумом, крестик и Esc cancel.
+      const attackHint = el('div', 'map-attack');
+      attackHint.hidden = true;
+      attackHint.appendChild(el('span', 'map-attack__label', 'Кликните по цели'));
+      const attackCancel = el('button', 'map-attack__close', '×');
+      attackCancel.type = 'button';
+      attackCancel.title = 'Отменить атаку (Esc)';
+      attackCancel.addEventListener('click', () => this.cancelAttackMode());
+      attackHint.appendChild(attackCancel);
+      this.attackHint = attackHint;
+      attackHint.addEventListener('pointerdown', (event) => event.stopPropagation());
+      stage.appendChild(attackHint);
+
       stage.addEventListener('pointerdown', (event) => this.startPan(event));
       // Монстра из справочника можно перетащить прямо на карту. Координаты
       // считаем по подложке: фишка встанет туда, где отпустили мышь.
@@ -1788,17 +2031,23 @@
       this.badge.hidden = true;
       this.root.appendChild(this.badge);
 
+      // Полоски партии поверх стола: мастер видит всех игроков, игрок —
+      // только свою строку. Содержимое обновляется в renderBody.
+      this.partyHud = el('div', 'party-hud');
+      this.root.appendChild(this.partyHud);
+
+      // Мини-лог последних бросков: у карты он читается быстрее, чем полная
+      // история на вкладке кубиков. Пишет сюда любой приходящий результат.
+      this.combatLog = el('div', 'map-log');
+      this.combatLogItems = [];
+      this.root.appendChild(this.combatLog);
+
       this.image.addEventListener('load', () => {
         this.layoutSurface();
         // После загрузки картинки меняется размер подложки, а с ним и холсты
         // тумана и света: без перерисовки туман лёг бы на прошлую карту, а
         // свет посчитался бы по чужим пропорциям.
-        const map = this.mapOf(this.viewedMap);
-        this.paintFog(map);
-        this.paintLight(map);
-        this.paintWallOverlay(map);
-        this.paintSurface(map);
-        this.paintTemplates(map);
+        this.schedulePaint('fog', 'light', 'walls', 'surface', 'templates');
       });
 
       // Линейка перехватывает нажатие раньше кистей: пока она включена, движение
@@ -1832,11 +2081,11 @@
         const start = this.mapPoint(event);
         let current = start;
         this.templatePreview = this.makeTemplate(start, current);
-        this.paintTemplates(this.mapOf(this.viewedMap));
+        this.schedulePaint('templates');
         const move = (moveEvent) => {
           current = this.mapPoint(moveEvent);
           this.templatePreview = this.makeTemplate(start, current);
-          this.paintTemplates(this.mapOf(this.viewedMap));
+          this.schedulePaint('templates');
         };
         const up = () => {
           window.removeEventListener('pointermove', move);
@@ -1887,6 +2136,7 @@
         if (event.key !== 'Escape') return;
         if (this.pingMode) this.setPingMode(false);
         if (this.measureMode) this.toggleMeasure();
+        if (this.attackMode) this.cancelAttackMode();
       });
 
       // Кисть тумана живёт на самой подложке: в режиме тумана указатель
@@ -1953,9 +2203,7 @@
         if (wall) {
           event.preventDefault();
           event.stopPropagation();
-          if (this.handlers.onDeleteMapWall) {
-            this.handlers.onDeleteMapWall(this.viewedMap, this.currentMapId, wall.id);
-          }
+          this.showWallMenu(wall, event.clientX, event.clientY);
           return;
         }
         // Шаблон убирается тем же правым кликом: держать для него отдельную
@@ -1965,6 +2213,14 @@
           event.preventDefault();
           event.stopPropagation();
           this.showTemplateMenu(template, event.clientX, event.clientY);
+          return;
+        }
+        // Пустое место карты: правый клик ставит булавку-подсказку мастеру.
+        if (this.mapOf(this.viewedMap) && this.handlers.onCreateMapPin) {
+          event.preventDefault();
+          event.stopPropagation();
+          const point = this.mapPoint(event);
+          this.handlers.onCreateMapPin(this.viewedMap, this.currentMapId, point.x, point.y);
         }
       });
       // Режим боя: короткое нажатие по клетке отправляет выбранную фишку туда.
@@ -2015,7 +2271,7 @@
       this.surface.addEventListener('pointermove', (event) => {
         if (!this.combat.enabled || this.editing || this.routeDragging || !this.combatToken()) return;
         if (this.fogMode || this.drawMode) return;
-        this.paintRoute(this.cellAtClient(event.clientX, event.clientY));
+        this.scheduleRoutePaint(this.cellAtClient(event.clientX, event.clientY));
       });
       // Увелили карту под маршрутом — перерисовываем его на новом месте.
       this.surface.addEventListener('pointerleave', () => {
@@ -2026,20 +2282,14 @@
           this.layoutSurface();
           if (this.editing && this.editor) this.editor.layout();
           // Свет считается в размерах подложки, а она меняется вместе с окном.
-          const map = this.mapOf(this.viewedMap);
-          this.paintLight(map);
-          this.paintFog(map);
-          this.paintSurface(map);
+          this.schedulePaint('light', 'fog', 'surface');
         });
         this.resizeObserver.observe(stage);
       }
       window.addEventListener('resize', () => {
         this.layoutSurface();
         if (this.editing && this.editor) this.editor.layout();
-        const map = this.mapOf(this.viewedMap);
-        this.paintLight(map);
-        this.paintFog(map);
-        this.paintSurface(map);
+        this.schedulePaint('light', 'fog', 'surface');
       });
     }
 
@@ -2165,6 +2415,54 @@
       this.zoom = 1;
       this.pan = { x: 0, y: 0 };
       this.applyZoom();
+    }
+
+    /**
+     * Откладывает перерисовку слоёв до следующего кадра. Слои всегда
+     * сходятся в каноничном порядке: light → fog → walls → surface →
+     * templates. Ничего не ждать таймером: rAF и есть метроном.
+     */
+    schedulePaint(...layers) {
+      for (const layer of layers) this.pendingPaints.add(layer);
+      if (this.paintScheduled) return;
+      this.paintScheduled = true;
+      requestAnimationFrame(() => {
+        this.paintScheduled = false;
+        const map = this.mapOf(this.viewedMap);
+        const pending = [...this.pendingPaints];
+        this.pendingPaints.clear();
+        for (const layer of pending) {
+          if (layer === 'light') this.paintLight(map);
+          if (layer === 'fog') this.paintFog(map);
+          if (layer === 'walls') this.paintWallOverlay(map);
+          if (layer === 'surface') this.paintSurface(map);
+          if (layer === 'templates') this.paintTemplates(map);
+        }
+      });
+    }
+
+    /** Наведение на Combat-клетку идёт через rAF: несколько move за кадр → одна отрисовка. */
+    scheduleRoutePaint(cell) {
+      this.pendingRouteCell = cell;
+      if (this.routeScheduled) return;
+      this.routeScheduled = true;
+      requestAnimationFrame(() => {
+        this.routeScheduled = false;
+        const cell = this.pendingRouteCell;
+        this.pendingRouteCell = null;
+        this.paintRoute(cell);
+      });
+    }
+
+    /** Режим атаки: следующий клик по фишке бьёт по ней. */
+    setAttackMode(attack) {
+      this.attackMode = attack || null;
+      if (this.attackHint) this.attackHint.hidden = !this.attackMode;
+      this.stage.classList.toggle('is-attacking', Boolean(this.attackMode));
+    }
+
+    cancelAttackMode() {
+      this.setAttackMode(null);
     }
 
     /** Таскание карты мышью: приблизил — можно посмотреть другой угол. */
@@ -2340,7 +2638,7 @@
         // видеть темноту так же, как игрок её увидит.
         map.darkness = value;
         darknessValue.textContent = `${darknessInput.value}%`;
-        this.paintLight(map);
+        this.schedulePaint('light');
       });
       darknessInput.addEventListener('change', () => {
         if (this.handlers.onSetMapDarkness) {
@@ -2351,6 +2649,24 @@
       const darknessField = slider('Темнота карты', 'Ноль это дневной свет', darknessInput);
       darknessField.appendChild(darknessValue);
       tools.appendChild(darknessField);
+      darknessInput.disabled = map.autoLight === true;
+
+      // Авто-свет: темноту считает сервер по часу игровых суток, кривая живёт
+      // в dnd5e.js. Ручной ползунок на работающем авто-свете недоступен.
+      const autoLightInput = el('input');
+      autoLightInput.type = 'checkbox';
+      autoLightInput.checked = map.autoLight === true;
+      autoLightInput.title = 'Темноту задаёт сервер по часу игровых суток: рассвет, день, закат, ночь';
+      autoLightInput.setAttribute('aria-label', 'Авто-свет по времени суток');
+      autoLightInput.addEventListener('change', () => {
+        if (this.handlers.onSetMapAutoLight) {
+          this.handlers.onSetMapAutoLight(type, map.id, autoLightInput.checked);
+        }
+      });
+      const autoLightField = el('label', 'light-panel__field');
+      autoLightField.appendChild(el('span', 'light-panel__label', 'Авто-свет по времени суток'));
+      autoLightField.appendChild(autoLightInput);
+      tools.appendChild(autoLightField);
 
       const radius = el('input', 'light-panel__slider');
       radius.type = 'range';
@@ -2658,7 +2974,7 @@
         if (type) map.surface.cells[`${col},${row}`] = type;
         else delete map.surface.cells[`${col},${row}`];
       }
-      this.paintSurface(map);
+      this.schedulePaint('surface');
     }
 
     /** Отправляет накопленный мазок и очищает его. */
@@ -2762,6 +3078,11 @@
      * Свет: темнота карты и пятна от источников
      * ------------------------------------------------------------------ */
 
+    /** Режим «Офисный ПК» режет лучи полигона света вдвое. */
+    lightRayOptions() {
+      return document.documentElement.dataset.perf === 'on' ? { rays: 32 } : undefined;
+    }
+
     /**
      * Темнота вне зрения своей фишки.
      *
@@ -2802,10 +3123,16 @@
       ctx.fillRect(0, 0, width, height);
 
       const grid = this.lightMapGrid(map, width, height);
-      const cells = wallsInCells(normalizeWalls(map.walls), grid);
+      // Зрение: про окна не ищешь глазами, а открытая дверь не держит.
+      const cells = wallsInCells(normalizeWalls(map.walls), grid, 'vision');
       ctx.globalCompositeOperation = 'destination-out';
       for (const source of sources) {
-        const polygon = lightPolygon({ x: source.x, y: source.y, radius: source.vision }, cells, grid);
+        const polygon = lightPolygon(
+          { x: source.x, y: source.y, radius: source.vision },
+          cells,
+          grid,
+          this.lightRayOptions()
+        );
         ctx.beginPath();
         for (let i = 0; i < polygon.points.length; i += 1) {
           const [x, y] = polygon.points[i];
@@ -2866,7 +3193,8 @@
       const smallWidth = Math.max(1, Math.round(width * LIGHT_RENDER_SCALE));
       const smallHeight = Math.max(1, Math.round(height * LIGHT_RENDER_SCALE));
       const grid = this.lightMapGrid(map, width, height);
-      const cells = wallsInCells(normalizeWalls(map.walls), grid);
+      // Свет: окна и открытые двери пропускают его, закрытые двери держат.
+      const cells = wallsInCells(normalizeWalls(map.walls), grid, 'light');
 
       // Пятна не пересчитываются, пока не сдвинулась стена, не горит или не
       // погас источник и не изменился размер карты. Пересчёт всех полигонов на
@@ -2946,7 +3274,7 @@
         // Тусклый свет светит вдвое меньше и выедает темноту не до конца: в нём
         // видно силуэты, но не детали. Дальность берёт на себя модель света,
         // здесь остаётся только приглушить само пятно.
-        const polygon = lightPolygon(light, cells, grid);
+        const polygon = lightPolygon(light, cells, grid, this.lightRayOptions());
         // Пик яркого света не единица: при перекрытии двух факелов единицы
         // складываются в пересвет, и комната пропадает.
         const peak = light.dim ? 0.45 : 0.85;
@@ -3121,6 +3449,54 @@
       for (const wall of normalizeWalls(map.walls)) {
         overlay.appendChild(this.wallNode(wall, false));
       }
+      // Булавки живут в том же мастер-слое: у игрока их нет даже в payload.
+      const pinsLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      pinsLayer.setAttribute('class', 'map-pins');
+      for (const pin of normalizePins(map.pins)) {
+        pinsLayer.appendChild(this.pinNode(pin));
+      }
+      overlay.appendChild(pinsLayer);
+    }
+
+    /**
+     * Булавка на карте: кружок с подписью, клик откроет меню мастера.
+     * @param {{id: string, x: number, y: number, title: string, text: string}} pin
+     * @returns {SVGCircleElement}
+     */
+    pinNode(pin) {
+      const node = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      node.setAttribute('cx', String(pin.x * 1000));
+      node.setAttribute('cy', String(pin.y * 1000));
+      node.setAttribute('r', '6');
+      node.setAttribute('class', 'map-pin');
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = `${pin.title}${pin.text ? ': ' + pin.text : ''}`;
+      node.appendChild(title);
+      node.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.showPinMenu(pin, event.clientX, event.clientY);
+      });
+      return node;
+    }
+
+    /** Меню булавки: правка текста и удаление. */
+    showPinMenu(pin, clientX, clientY) {
+      const menu = el('div', 'token-menu');
+      const edit = el('button', 'token-menu__item', 'Изменить булавку');
+      edit.type = 'button';
+      edit.addEventListener('click', () => {
+        this.closeMenu();
+        if (this.handlers.onEditMapPin) this.handlers.onEditMapPin(pin);
+      });
+      const remove = el('button', 'token-menu__item token-menu__item--danger', 'Удалить булавку');
+      remove.type = 'button';
+      remove.addEventListener('click', () => {
+        this.closeMenu();
+        if (this.handlers.onDeleteMapPin) this.handlers.onDeleteMapPin(this.viewedMap, this.currentMapId, pin.id);
+      });
+      menu.appendChild(edit);
+      menu.appendChild(remove);
+      placeTokenMenu(menu, clientX, clientY, this);
     }
 
     /**
@@ -3135,13 +3511,72 @@
       node.setAttribute('y1', String(wall.y1 * 1000));
       node.setAttribute('x2', String(wall.x2 * 1000));
       node.setAttribute('y2', String(wall.y2 * 1000));
-      if (draft) node.setAttribute('class', 'map-wall--draft');
-      if (!draft) {
+      if (draft) {
+        node.setAttribute('class', 'map-wall--draft');
+      } else {
+        // Окно и открытая дверь рисуются иначе: мастер должен видеть на карте
+        // то же, что получится в расчёте света и зрения.
+        const classes = [];
+        if (wall.door) classes.push(`map-wall--door${wall.door.open ? ' map-wall--door-open' : ''}`);
+        if (wall.window) classes.push('map-wall--window');
+        if (classes.length) node.setAttribute('class', classes.join(' '));
         const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-        title.textContent = 'Стена: держит свет. Правый клик по ней убирает.';
+        title.textContent = wall.door
+          ? 'Дверь (стена: закрытая держит свет и зрение). Правый клик — меню.'
+          : wall.window
+            ? 'Окно (стена: держит зрение, свет пропускает). Правый клик — меню.'
+            : 'Стена: держит свет и зрение. Правый клик — меню.';
         node.appendChild(title);
       }
       return node;
+    }
+
+    /**
+     * Меню стены: дверь, окно или удаление.
+     *
+     * Стены через меню сервера: дверные метки переживают перерисовку, как-то
+     * иначе локально они бы разошлись с расчётом света у остальных.
+     * @param {object} wall
+     * @param {number} clientX
+     * @param {number} clientY
+     */
+    showWallMenu(wall, clientX, clientY) {
+      const menu = el('div', 'token-menu');
+      const door = wall.door || null;
+      const sendPatch = (patch) => {
+        this.closeMenu();
+        if (this.handlers.onSetWallDoor) {
+          this.handlers.onSetWallDoor(this.viewedMap, this.currentMapId, wall.id, patch);
+        }
+      };
+      const add = (label, action) => {
+        const item = el('button', 'token-menu__item', label);
+        item.type = 'button';
+        item.addEventListener('click', action);
+        menu.appendChild(item);
+      };
+      if (!door) {
+        add('Дверь', () => sendPatch({ door: { open: false, locked: false } }));
+      } else {
+        add(door.open ? 'Закрыть дверь' : 'Открыть дверь', () => sendPatch({ door: { ...door, open: !door.open } }));
+        add(door.locked ? 'Отпереть' : 'Запереть', () => sendPatch({ door: { ...door, locked: !door.locked } }));
+        add('Убрать дверь', () => sendPatch({ door: null }));
+      }
+      if (wall.window) {
+        add('Убрать окно', () => sendPatch({ window: null }));
+      } else {
+        add('Окно', () => sendPatch({ window: true }));
+      }
+      const remove = el('button', 'token-menu__item token-menu__item--danger', 'Удалить стену');
+      remove.type = 'button';
+      remove.addEventListener('click', () => {
+        this.closeMenu();
+        if (this.handlers.onDeleteMapWall) {
+          this.handlers.onDeleteMapWall(this.viewedMap, this.currentMapId, wall.id);
+        }
+      });
+      menu.appendChild(remove);
+      placeTokenMenu(menu, clientX, clientY, this);
     }
 
     /**
@@ -3159,7 +3594,7 @@
       if (!map) return;
       const point = this.mapPoint(event);
       map.fogMask = DnD.openFogAt(map.fogMask, point.x, point.y, this.fogBrush);
-      this.paintFog(map);
+      this.schedulePaint('fog');
       if (this.handlers.onOpenMapFog) {
         this.handlers.onOpenMapFog(type, map.id, point.x, point.y, this.fogBrush);
       }
@@ -3232,7 +3667,7 @@
         node.setAttribute('x2', String(draft.x2 * 1000));
         node.setAttribute('y2', String(draft.y2 * 1000));
       }
-      this.paintLight(this.mapOf(this.viewedMap));
+      this.schedulePaint('light');
     }
 
     /**
@@ -3431,6 +3866,10 @@
       this.renderToolbar();
       this.renderBody();
       this.updatePingAvailability();
+      this.syncAudio();
+      // Открытую панель пересобираем: список саундборда мог измениться,
+      // пока меню было на экране.
+      if (this.soundMenu && !this.soundMenu.hidden) this.renderSoundMenu();
     }
 
     /**
@@ -3481,6 +3920,8 @@
       }
       this.renderToolbar();
       this.renderTokens();
+      // Бой меняет звуковой слой: эмбиент карты уступает место боевому лупу.
+      this.syncAudio();
     }
 
     /** Применяет настройки сетки стола к карте. */
@@ -3578,6 +4019,135 @@
       set(fields.offsetX, grid.offsetX || 0);
       set(fields.offsetY, grid.offsetY || 0);
       set(fields.feetPerCell, grid.feetPerCell || DnD.GRID.defaultFeetPerCell);
+    }
+
+    /** Открывает панель саундборда под кнопкой, как меню сетки. */
+    toggleSoundMenu() {
+      if (!this.soundMenu || !this.soundButton) return;
+      const open = this.soundMenu.hidden;
+      if (this.gridMenu) this.gridMenu.hidden = true;
+      if (this.templateMenu) this.templateMenu.hidden = true;
+      this.soundMenu.hidden = !open;
+      this.soundButton.classList.toggle('is-on', open);
+      if (!open) return;
+      this.renderSoundMenu();
+      const rootRect = this.root.getBoundingClientRect();
+      const buttonRect = this.soundButton.getBoundingClientRect();
+      const menuWidth = this.soundMenu.offsetWidth || 240;
+      const left = Math.max(0, Math.min(
+        buttonRect.left - rootRect.left,
+        rootRect.width - menuWidth - 4
+      ));
+      this.soundMenu.style.top = `${buttonRect.bottom - rootRect.top + 6}px`;
+      this.soundMenu.style.left = `${left}px`;
+    }
+
+    /**
+     * Рисует панель: у каждой кнопки саундборда — играть, зациклить, сделать
+     * эмбиентом карты и убрать; внизу — загрузка файла и кнопка тишины.
+     */
+    renderSoundMenu() {
+      const menu = this.soundMenu;
+      if (!menu) return;
+      menu.innerHTML = '';
+      const map = this.mapOf(this.viewedMap);
+      const board = (this.lastState && this.lastState.soundboard) || [];
+      if (!board.length) {
+        menu.appendChild(el('div', 'map-grid-menu__note',
+          'Саундборд пуст: загрузите MP3, OGG или WAV не больше 2 МБ.'));
+      }
+      for (const item of board) {
+        const row = el('div', 'map-grid-menu__row map-sound-menu__row');
+        row.appendChild(el('span', 'map-grid-menu__label', item.name));
+        const ambient = Boolean(map && map.audioRef === item.ref);
+        const play = el('button', 'btn btn--tiny', 'Играть');
+        play.type = 'button';
+        play.title = 'Кю услышит весь стол';
+        play.addEventListener('click', () => this.playSoundCue(item.ref, 'play'));
+        row.appendChild(play);
+        const loop = el('button', 'btn btn--tiny', 'Петля');
+        loop.type = 'button';
+        loop.title = 'Зациклить: играет, пока мастер не остановит';
+        loop.addEventListener('click', () => this.playSoundCue(item.ref, 'loop'));
+        row.appendChild(loop);
+        const ambience = el('button', 'btn btn--tiny', ambient ? 'Эмбиент: да' : 'Эмбиент');
+        ambience.type = 'button';
+        ambience.title = 'Зациклить как фон этой карты (игрокам — только показанной)';
+        ambience.disabled = !map;
+        ambience.addEventListener('click', () => {
+          if (this.handlers.onSetMapAudio && map) {
+            this.handlers.onSetMapAudio(this.viewedMap, map.id, ambient ? '' : item.ref);
+          }
+        });
+        row.appendChild(ambience);
+        const remove = el('button', 'btn btn--tiny btn--danger', '✕');
+        remove.type = 'button';
+        remove.title = 'Убрать с саундборда';
+        remove.addEventListener('click', () => {
+          if (this.handlers.onDeleteSound) this.handlers.onDeleteSound(item.id);
+        });
+        row.appendChild(remove);
+        menu.appendChild(row);
+      }
+      const stopAll = el('button', 'btn btn--tiny', 'Остановить петли');
+      stopAll.type = 'button';
+      stopAll.title = 'Заглушить зацикленные кю на всём столе';
+      stopAll.addEventListener('click', () => this.playSoundCue('', 'stop'));
+      menu.appendChild(stopAll);
+      const upload = el('button', 'btn btn--accent btn--tiny', 'Загрузить звук…');
+      upload.type = 'button';
+      upload.title = 'MP3, OGG или WAV не больше 2 МБ';
+      upload.addEventListener('click', () => this.soundFile.click());
+      menu.appendChild(upload);
+      menu.appendChild(el('div', 'map-grid-menu__note',
+        'В бою фон карты уступает место боевому лупу — с кроссфейдом.'));
+    }
+
+    /** Кю из панели: нажал мастер — играет его окно сразу, стол получает ссылку. */
+    playSoundCue(ref, action) {
+      if (this.handlers.onPlaySound) this.handlers.onPlaySound(ref, action);
+      if (window.DnDSound) {
+        window.DnDSound.tableCue(ref ? this.handlers.resolveUrl(ref) : '', action);
+      }
+    }
+
+    /**
+     * Загрузка звука на саундборд: тем же путём, что карта, — data URL на
+     * сервер, а размер режем заранее, чтобы не гонять заведомо лишний файл.
+     * @param {HTMLInputElement} input
+     */
+    uploadSoundFile(input) {
+      const file = input.files && input.files[0];
+      input.value = '';
+      if (!file) return;
+      const notice = (text) => {
+        if (this.handlers.onNotice) this.handlers.onNotice(text);
+      };
+      const maxBytes = DnD.LIMITS.maxAudioBytes;
+      if (!file.size) return notice(`Файл «${file.name}» пустой`);
+      if (file.size > maxBytes) {
+        return notice(`Файл «${file.name}» весит ${(file.size / 1024 / 1024).toFixed(1)} МБ, `
+          + `а можно не больше ${Math.round(maxBytes / 1024 / 1024)} МБ`);
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (this.handlers.onUploadSound) this.handlers.onUploadSound(file.name, String(reader.result));
+      };
+      reader.onerror = () => notice(`Не удалось прочитать файл «${file.name}»`);
+      reader.readAsDataURL(file);
+    }
+
+    /**
+     * Звуковой слой стола: эмбиент просматриваемой карты и реакция на режим
+     * боя. Вызывается на каждой перерисовке — DnDSound сам решает, что гасить
+     * и что поднимать, поэтому повтор того же состояния молчит.
+     */
+    syncAudio() {
+      if (!window.DnDSound) return;
+      const map = this.mapOf(this.viewedMap);
+      const url = map && map.audioRef ? this.handlers.resolveUrl(map.audioRef) : '';
+      window.DnDSound.setTableAmbient(url);
+      window.DnDSound.setTableCombat(Boolean(this.combat && this.combat.enabled));
     }
 
     /**
@@ -4142,6 +4712,14 @@
         if (this.handlers.onTemplateDamage) this.handlers.onTemplateDamage(template);
       });
       menu.appendChild(damage);
+      const auto = el('button', 'token-menu__item', 'Автоспасброски');
+      auto.type = 'button';
+      auto.title = 'Тот же шаблон, но броски и урон ведёт стол: игрокам уходит заявка, монстрам бросок делает сервер';
+      auto.addEventListener('click', () => {
+        this.closeMenu();
+        if (this.handlers.onTemplateAoe) this.handlers.onTemplateAoe(template);
+      });
+      menu.appendChild(auto);
       const remove = el('button', 'token-menu__item token-menu__item--danger', 'Удалить шаблон');
       remove.type = 'button';
       remove.addEventListener('click', () => {
@@ -4766,6 +5344,26 @@
         this.templateButton = null;
       }
 
+      // Саундборд: кю слышит весь стол, эмбиент зацикливается на карте.
+      // Кнопка рядом с шаблонами: звуком пользуются в бою так же, как ими.
+      if (this.role === 'dm') {
+        const soundButton = mapTool(
+          map && map.audioRef ? 'Звук карты: есть' : 'Звук',
+          'Саундборд, эмбиент этой карты и боевой луп',
+          ['M2.5 6.5h2.5L8.5 3v10L5 9.5H2.5z', 'M11 6a3.2 3.2 0 0 1 0 4']
+        );
+        soundButton.classList.add('map-sound__toggle');
+        soundButton.classList.toggle('is-on', Boolean(this.soundMenu && !this.soundMenu.hidden));
+        soundButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this.toggleSoundMenu();
+        });
+        this.soundButton = soundButton;
+        this.toolbar.appendChild(soundButton);
+      } else {
+        this.soundButton = null;
+      }
+
       if (map && this.role === 'dm') {
         const shown = this.activeMap === this.viewedMap && this.activeMapId === map.id;
         const activate = mapTool(
@@ -4795,8 +5393,79 @@
       }
     }
 
+    /**
+     * Полоски партии поверх стола.
+     *
+     * Мастер видит всех игроков, игрок — только свою строку. Филька фишки
+     * чей лист синхронизирует сервер: hp и maxHp на фишке уже актуальны.
+     */
+    renderPartyHud() {
+      const hud = this.partyHud;
+      if (!hud) return;
+      hud.replaceChildren();
+      const tokens = this.tokens || [];
+      let rows = 0;
+      for (const player of this.players || []) {
+        if (!player || player.role === 'dm') continue;
+        const mine = player.playerId === this.myPlayerId;
+        // Игрок видит только свою строку; она нужна ему даже при пустом
+        // списке фишек: фишки ещё могли не завестись.
+        if (this.role !== 'dm' && !mine) continue;
+        const token = tokens.find((item) => item.assignedPlayerId === player.playerId
+          && item.mapType === this.viewedMap
+          && (!item.mapId || item.mapId === this.currentMapId)
+          && !item.hidden);
+        const row = el('div', 'party-hud__row');
+        if (mine) row.classList.add('is-mine');
+        row.appendChild(el('span', 'party-hud__name', player.name || 'Игрок'));
+        const conditions = token && Array.isArray(token.conditions) ? token.conditions : [];
+        if (token && Number(token.maxHp) > 0) {
+          const max = Number(token.maxHp);
+          const hp = Math.max(0, Math.min(max, Number(token.hp) || 0));
+          const share = Math.round((hp / max) * 100);
+          const bar = el('div', 'party-hud__bar');
+          const fill = el('div', 'party-hud__fill');
+          fill.style.width = `${share}%`;
+          bar.appendChild(fill);
+          row.appendChild(bar);
+          row.appendChild(el('span', 'party-hud__hp', `${hp}/${max}`));
+          // Лежащий герой заметен сразу: класс меняет и полоску, и подпись.
+          if (hp <= 0) row.classList.add('is-down');
+          else if (share <= 50) row.classList.add('is-low');
+        }
+        if (conditions.length) {
+          const note = el('span', 'party-hud__conditions', `×${conditions.length}`);
+          note.title = conditions.join(', ');
+          row.appendChild(note);
+        }
+        hud.appendChild(row);
+        rows += 1;
+      }
+      hud.hidden = rows === 0;
+    }
+
+    /**
+     * Строка последнего результата броска поверх карты: без DOM-драматики,
+     * только последние шесть входов, новейший внизу.
+     * @param {object} roll событие diceRollResult
+     */
+    pushCombatLog(roll) {
+      if (!this.combatLog || !roll) return;
+      const name = roll.playerName || 'Стол';
+      const verdict = Number.isFinite(Number(roll.result)) && roll.result !== null
+        ? `= ${roll.result}`
+        : '';
+      this.combatLogItems.push(`${name} ${roll.formula}: ${verdict}`);
+      this.combatLogItems = this.combatLogItems.slice(-6);
+      this.combatLog.replaceChildren();
+      for (const line of this.combatLogItems) {
+        this.combatLog.appendChild(el('div', 'map-log__line', line));
+      }
+    }
+
     renderBody() {
       if (this.editing) return;
+      this.renderPartyHud();
       const type = this.viewedMap;
       const map = this.mapOf(type);
 
@@ -4879,7 +5548,8 @@
           (token.conditions || []).join(','),
           token.conditionDurations ? JSON.stringify(token.conditionDurations) : '',
           token.conditionDurationUnits ? JSON.stringify(token.conditionDurationUnits) : '',
-          token.aura ? `${token.aura.feet}:${token.aura.color}` : ''
+          token.aura ? `${token.aura.feet}:${token.aura.color}` : '',
+          token.emote ? `${token.emote.text}@${token.emote.until}` : ''
         );
       }
       for (const player of this.players) parts.push(player.playerId, player.name || '');
@@ -4977,6 +5647,7 @@
       const movable = this.canMove(token);
       node.classList.toggle('token--movable', movable);
       node.classList.toggle('token--mine', Boolean(token.assignedPlayerId) && token.assignedPlayerId === this.myPlayerId);
+      node.classList.toggle('is-selected', this.selectedTokens.has(token.id));
       // Скрытая фишка видна мастеру полупрозрачной с пунктиром: иначе он
       // забудет, что она заготовка, и начнёт бой с монстрами, которых никто
       // из игроков не видит.
@@ -5121,6 +5792,12 @@
       }
       if (info.childNodes.length) node.appendChild(info);
 
+      // Пузырь эмоута с TTL: сервер гасит его сам и присылает обновление,
+      // здесь только рисуем то, что действительно живо.
+      if (token.emote && Number(token.emote.until) > Date.now()) {
+        node.appendChild(el('div', 'token__emote', token.emote.text));
+      }
+
       node.addEventListener('contextmenu', (event) => {
         if (this.role !== 'dm') return;
         event.preventDefault();
@@ -5141,6 +5818,22 @@
           // В бою фишку не таскают: нажатие выбирает её, а ход идёт по клеткам.
           node.classList.add('token--selectable');
           node.addEventListener('pointerdown', (event) => {
+            if (this.attackMode) {
+              event.preventDefault();
+              event.stopPropagation();
+              const attack = this.attackMode;
+              this.cancelAttackMode();
+              if (this.handlers.onFastAttack) this.handlers.onFastAttack(token.id, attack);
+              return;
+            }
+            // Shift+клик ставит фишку в выделение: групповые скрытия, удаления
+            // и стороны идут одним батчем на сервер.
+            if (event.shiftKey && event.button === 0 && this.role === 'dm') {
+              event.preventDefault();
+              event.stopPropagation();
+              this.toggleTokenSelect(token);
+              return;
+            }
             event.preventDefault();
             event.stopPropagation();
             const wasSelected = this.combat.tokenId === token.id;
@@ -5149,12 +5842,27 @@
           });
         } else {
           node.addEventListener('pointerdown', (event) => {
+            if (this.attackMode) {
+              event.preventDefault();
+              event.stopPropagation();
+              const attack = this.attackMode;
+              this.cancelAttackMode();
+              if (this.handlers.onFastAttack) this.handlers.onFastAttack(token.id, attack);
+              return;
+            }
+            // Shift+клик ставит фишку в выделение: групповые скрытия, удаления
+            // и стороны идут одним батчем на сервер.
+            if (event.shiftKey && event.button === 0 && this.role === 'dm') {
+              event.preventDefault();
+              event.stopPropagation();
+              this.toggleTokenSelect(token);
+              return;
+            }
         // Пока включена линейка, фишка не хватает фишку за клик: он мерит.
         if (this.measureMode) return;
         this.startDrag(event, token);
       });
-        }
-      } else if (this.role !== 'dm') {
+        }      } else if (this.role !== 'dm') {
         node.addEventListener('click', () => {
           const blocker = this.moveBlocker(token);
           if (blocker) {
@@ -5171,12 +5879,24 @@
       return node;
     }
 
+    /** Shift-клик фишки: ставит её в выделение или убирает. */
+    toggleTokenSelect(token) {
+      if (this.selectedTokens.has(token.id)) this.selectedTokens.delete(token.id);
+      else this.selectedTokens.add(token.id);
+      this.renderTokens();
+    }
+
     showTokenMenu(token, clientX, clientY) {
       placeTokenMenu(
         buildTokenMenu(token, this.players, this.handlers, () => this.closeMenu(), {
           activeMap: this.activeMap,
           activeMapId: this.activeMapId,
-          canTransfer: this.role === 'dm'
+          canTransfer: this.role === 'dm',
+          selectedCount: this.selectedTokens.size,
+          clearSelection: () => {
+            this.selectedTokens.clear();
+            this.renderTokens();
+          }
         }),
         clientX,
         clientY,
@@ -5502,20 +6222,27 @@
         if (file && this.handlers.onAvatarPick) this.handlers.onAvatarPick(file);
       });
       side.appendChild(input);
-      const pick = el('button', 'btn btn--tiny', self.avatarUrl ? 'Заменить' : 'Поставить портрет');
+      // Кнопки-иконки: подпись остаётся в DOM для диктора и теста, на
+      // экране только знак (стиль .btn--icon).
+      const pick = el('button', 'btn btn--tiny btn--icon btn--icon-pen');
       pick.type = 'button';
+      pick.appendChild(el('span', 'btn__label', self.avatarUrl ? 'Заменить' : 'Поставить портрет'));
+      pick.title = 'Сменить портрет';
       pick.addEventListener('click', () => input.click());
       side.appendChild(pick);
       if (self.avatarUrl && this.handlers.onAvatarClear) {
-        const clear = el('button', 'btn btn--ghost btn--tiny', 'Убрать');
+        const clear = el('button', 'btn btn--ghost btn--tiny btn--icon btn--icon-x');
         clear.type = 'button';
+        clear.appendChild(el('span', 'btn__label', 'Убрать'));
+        clear.title = 'Убрать портрет';
         clear.addEventListener('click', () => this.handlers.onAvatarClear());
         side.appendChild(clear);
       }
       row.appendChild(side);
       this.selfNode.appendChild(row);
-      this.selfNode.appendChild(el('div', 'muted',
-        'Виден игрокам в списке участников и рядом с вашими бросками в чате.'));
+      const info = el('span', 'players-self__info', 'i');
+      info.title = 'Виден игрокам в списке участников и рядом с вашими бросками в чате.';
+      this.selfNode.appendChild(info);
     }
 
     render(players, ctx) {
@@ -5717,6 +6444,19 @@
       });
       this.clearButton = wipe;
       search.appendChild(wipe);
+
+      // Фильтр «только броски»: скрывает разговоры через CSS-класс лога,
+      // поэтому перерисовка истории не нужна и живые сообщения тоже работают.
+      const filter = el('button', 'btn btn--ghost btn--tiny chat__filter', 'Только броски');
+      filter.type = 'button';
+      filter.title = 'Показывать в ленте одни броски: разговоры прячутся';
+      filter.addEventListener('click', () => {
+        this.filterRolls = !this.filterRolls;
+        filter.classList.toggle('is-active', this.filterRolls);
+        this.log.classList.toggle('is-rolls-only', this.filterRolls);
+      });
+      this.filterButton = filter;
+      search.appendChild(filter);
       this.root.appendChild(search);
 
       const log = el('div', 'chat__log');
@@ -6300,6 +7040,10 @@
         if (Date.now() - this.rollStartedAt >= this.minRollMs) this.finishRolling();
         return;
       }
+      // Чужой бросок прилетел уже результатом: своя анимация со звуком
+      // была только у бросавшего. Звук кубика здесь локальный: событие
+      // броска общее, а щелчки костей каждый стол синтезирует у себя.
+      if (window.DnDSound) window.DnDSound.play('dice');
       this.showLast(roll);
     }
 
@@ -6997,6 +7741,40 @@
       // создаёт союзника и замечает это только по готовой фишке.
       this.updateCreateLabel();
 
+      // Планировщик сцен: вывести все фишки (и скрытые заготовки) на карту,
+      // которую видят игроки. Мастеру видна кнопка всегда, сервер проверит,
+      // показана ли карта.
+      const moveAll = el('button', 'btn btn--ghost btn--tiny', 'Все на активную карту');
+      moveAll.type = 'button';
+      moveAll.title = 'Фишки с других карт разом выходят на карту, которую видят игроки';
+      moveAll.hidden = true;
+      moveAll.addEventListener('click', () => {
+        if (this.handlers.onMoveAllToActive) this.handlers.onMoveAllToActive();
+      });
+      this.moveAllButton = moveAll;
+      this.root.appendChild(moveAll);
+
+      // Снимок сцены: сохранить раскладку и один кликом вернуть её назад.
+      // Эфемерные события, но откат через Ctrl+Z сцена восстановит дёшево.
+      const snapshot = el('button', 'btn btn--ghost btn--tiny', 'Снимок сцены');
+      snapshot.type = 'button';
+      snapshot.title = 'Запомнить раскладку всех фишек: откуда, на какой карте';
+      snapshot.hidden = true;
+      snapshot.addEventListener('click', () => {
+        if (this.handlers.onCreateSceneSnapshot) this.handlers.onCreateSceneSnapshot();
+      });
+      this.snapshotButton = snapshot;
+      this.root.appendChild(snapshot);
+      const restore = el('button', 'btn btn--ghost btn--tiny', 'Вернуть снимок');
+      restore.type = 'button';
+      restore.title = 'Вернуть фишки на сохранённые места одним Ctrl+Z назад';
+      restore.hidden = true;
+      restore.addEventListener('click', () => {
+        if (this.handlers.onRestoreSceneSnapshot) this.handlers.onRestoreSceneSnapshot();
+      });
+      this.restoreButton = restore;
+      this.root.appendChild(restore);
+
       this.note = el('div', 'muted', 'Правый клик по фишке на карте или по строке ниже — переименовать, назначить игроку, задать изображение или удалить.');
       this.root.appendChild(this.note);
 
@@ -7132,6 +7910,11 @@
       this.searchBox.dataset.dm = isDm ? '1' : '0';
       this.form.hidden = !isDm && !training;
       this.note.hidden = !isDm && !training;
+      // Кнопка массового вывода сцен: только мастеру и только при показанной
+      // карте, иначе сервер всё равно откажет.
+      this.moveAllButton.hidden = !isDm || training;
+      this.snapshotButton.hidden = !isDm || training;
+      this.restoreButton.hidden = !isDm || training;
       this.note.textContent = isDm
         ? 'Вкладки «Союзники» и «Враги» делят стол: сторона задаёт, кто по кому бьёт реакцией. Новая фишка появляется скрытой: расставьте её и нажмите «Видна». Правый клик по фишке — переименовать, назначить, сменить сторону, изображение, скрыть или удалить.'
         : 'Проверка без сети: созданная фишка сразу ваша — её можно двигать по карте и задать картинку.';

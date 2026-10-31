@@ -14,6 +14,7 @@
   const SKIN_KEY = 'dnd-table.sound.skin';
   const AMBIENT_KEY = 'dnd-table.sound.ambient';
   const AMBIENT_VOLUME_KEY = 'dnd-table.sound.ambientVolume';
+  const TABLE_VOLUME_KEY = 'dnd-table.sound.tableVolume';
 
   const SKINS = [
     { id: 'standart', label: 'Щелчок', note: 'сухой деревянный щелчок' },
@@ -99,6 +100,9 @@
         context.onstatechange = () => {
           if (context.state !== 'running' || previewTimer) return;
           if (ambientScene === 'home' && ambientEnabled() && !ambient) startAmbient();
+          // Стол тоже мог попросить эмбиент до первого жеста: контекст ожил,
+          // и applyTableAmbience() решает сам, играть ли и что именно.
+          if (tableAmbientUrl || tableCombatOn) applyTableAmbience();
         };
       }
       if (context.state === 'suspended') context.resume().catch(() => {});
@@ -560,8 +564,13 @@
   function setScene(scene) {
     cancelPreview();
     ambientScene = scene === 'home' ? 'home' : '';
-    if (ambientScene === 'home') startAmbient();
-    else stopAmbient();
+    if (ambientScene === 'home') {
+      startAmbient();
+      // Домашняя атмосфера и стол не звучат вместе: уход со стола гасит слои.
+      leaveTable();
+    } else {
+      stopAmbient();
+    }
   }
 
   /** @param {boolean} on */
@@ -662,6 +671,7 @@
   function setEnabled(on) {
     write(ENABLED_KEY, on ? 'on' : 'off');
     if (on) ensure();
+    else stopTableLayers();
   }
 
   /** @param {number} value 0..100 */
@@ -686,6 +696,331 @@
     write(SKIN_KEY, KNOWN.includes(id) ? id : 'standart');
   }
 
+  /* ------------------------------------------------------------------ *
+   * Звук стола: саундборд, эмбиент карт, боевой луп.
+   *
+   * Стол играет файлы, которые сохранил сервер: ссылка на /files/<имя>
+   * уникальна на каждый загруженный файл. Файловые слои идут через <audio>
+   * и медиа-пайплайн: decodeAudioData на mp3 валит рендерер (нативный
+   * краш декодера в этой сборке Chromium), а через <audio> тот же кодек
+   * звучит. Громкость стола отдельная: под бой барабанов интерфейс можно
+   * оставить тихим, и наоборот.
+   * ------------------------------------------------------------------ */
+
+  const TABLE_XFADE = 1.4; // секунды: столько длится переход между слоями
+
+  /** @type {Map<string, object>} зацикленные кю: ref -> слой */
+  const tableCueLoops = new Map();
+  /** @type {Map<string, object>} одиночные кю: ref -> слой (последний на этом ref) */
+  const tableSingles = new Map();
+  let tableOut = null;
+  let tableBg = null;
+  let tableFocus = 0;
+  let tableAmbientUrl = '';
+  let tableCombatOn = false;
+  /** @type {{ctx: AudioContext, source: MediaElementAudioSourceNode, gain: GainNode, el: HTMLAudioElement, url: string}|null} */
+  let tableFileLoop = null;
+  /** @type {object|null} синтезированный боевой луп, тот же формат bag, что у атмосфер */
+  let tableCombatScene = null;
+
+  /** @returns {number} 0..1 */
+  function tableVolume() {
+    const value = Number(read(TABLE_VOLUME_KEY, '80'));
+    return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) / 100 : 0.8;
+  }
+
+  /** @param {number} value 0..100 */
+  function setTableVolume(value) {
+    const next = Math.min(100, Math.max(0, Number(value) || 0));
+    write(TABLE_VOLUME_KEY, String(Math.round(next)));
+    if (!tableOut) return;
+    const now = tableOut.context.currentTime;
+    tableOut.gain.cancelScheduledValues(now);
+    tableOut.gain.setValueAtTime(tableOut.gain.value, now);
+    tableOut.gain.linearRampToValueAtTime(Math.max(0.0001, next / 100), now + 0.2);
+  }
+
+  /** @returns {GainNode|null} усилитель всего звука стола */
+  function tableOutput() {
+    const ctx = ensure();
+    if (!ctx) return null;
+    if (!tableOut) {
+      tableOut = ctx.createGain();
+      tableOut.gain.value = tableVolume();
+      tableOut.connect(ctx.destination);
+    }
+    return tableOut;
+  }
+
+  /** @returns {GainNode|null} шина фона стола: эмбиент карты и боевой луп.
+   *  Кю саундборда идут мимо неё: звучащую музыку фон приглушает. */
+  function tableBackOut() {
+    const master = tableOutput();
+    if (!master) return null;
+    if (!tableBg) {
+      const ctx = master.context;
+      tableBg = ctx.createGain();
+      tableBg.gain.value = 1;
+      tableBg.connect(master);
+    }
+    return tableBg;
+  }
+
+  /** Музыка звучит — фон прижимается к 15%, стихла — возвращается. */
+  function tableDuck(delta) {
+    tableFocus = Math.max(0, tableFocus + delta);
+    const bg = tableBackOut();
+    if (!bg) return;
+    const now = bg.context.currentTime;
+    const target = tableFocus > 0 ? 0.15 : 1;
+    bg.gain.cancelScheduledValues(now);
+    bg.gain.setValueAtTime(bg.gain.value, now);
+    bg.gain.linearRampToValueAtTime(target, now + 0.5);
+  }
+
+  /**
+   * Радио-слой таблицы: воспроизводит файл через <audio> и WebAudio.
+   * @param {string} url
+   * @param {boolean} loop
+   * @param {number} level стартовая громкость слоя (кроссфейд поедет снизу)
+   * @param {boolean} [bg] фон стола (эмбиент карты) или кю саундборда
+   * @returns {object|null} {ctx, source, gain, el, url}; null — контекста нет
+   */
+  function tableLayer(url, loop, level, bg = false) {
+    const ctx = ensure();
+    const dest = bg ? tableBackOut() : tableOutput();
+    if (!ctx || !dest) return null;
+    try {
+      const el = new Audio(url);
+      el.loop = loop;
+      const source = ctx.createMediaElementSource(el);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(level, ctx.currentTime);
+      source.connect(gain).connect(dest);
+      el.play().catch(() => { /* декодер ещё шуршит: не страшно */ });
+      return { ctx, source, gain, el, url };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Останавливает медиа-элемент слоя: то, что раньше делал source.stop(). */
+  function stopLayer(layer) {
+    if (!layer) return;
+    try { layer.el.pause(); } catch { /* уже остановлен */ }
+    try { layer.el.removeAttribute('src'); } catch { /* уже чисто */ }
+    try { layer.source.disconnect(); } catch { /* уже отключён */ }
+  }
+
+  /**
+   * Плавное погашение слоя: сначала тишина, потом остановка.
+   * @param {AudioContext} ctx
+   * @param {GainNode} gain
+   * @param {Function} stop
+   */
+  function fadeOut(ctx, gain, stop) {
+    const now = ctx.currentTime;
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(gain.gain.value, now);
+    gain.gain.linearRampToValueAtTime(0, now + TABLE_XFADE);
+    setTimeout(() => {
+      try { stop(); } catch { /* уже остановлен */ }
+      try { gain.disconnect(); } catch { /* уже отключён */ }
+    }, TABLE_XFADE * 1000 + 150);
+  }
+
+  /**
+   * Зациклить файл с плавным входом.
+   * @param {string} url
+   * @returns {object|null}
+   */
+  function fadeInLoop(url) {
+    const layer = tableLayer(url, true, 0, true);
+    if (!layer) return null;
+    const now = layer.ctx.currentTime;
+    layer.gain.gain.linearRampToValueAtTime(0.9, now + TABLE_XFADE);
+    return layer;
+  }
+
+  /**
+   * Боевой луп синтезируется, как атмосферы главного экрана: файла для него
+   * не нужно, а переход «бой вкл/выкл» делает его с кроссфейдом эмбиенту
+   * карты. Низкий гул, удар каждые ~0.9 секунды и клёкот между долями.
+   * @param {AudioContext} ctx @param {GainNode} master @param {object} bag
+   */
+  function buildBoy(ctx, master, bag) {
+    const growl = ambientSource(ctx);
+    const growlFilter = ctx.createBiquadFilter();
+    growlFilter.type = 'lowpass';
+    growlFilter.frequency.value = 95;
+    const growlGain = ctx.createGain();
+    growlGain.gain.value = 0.16;
+    growl.connect(growlFilter).connect(growlGain).connect(master);
+    growl.start();
+    bag.sources.push(growl);
+    bag.oscs.push(ambientLfo(ctx, 0.09, 0.05, growlGain.gain));
+
+    const beat = () => {
+      if (!bag.alive) return;
+      ambientTone(ctx, master, 72, 0.3, 0.34, 'sine', 44);
+      ambientLater(bag, 420, 480, () => {
+        if (bag.alive) ambientHiss(ctx, master, 0.09, 0.05, 2600, 1.2, 'highpass');
+      });
+      ambientLater(bag, 800, 1000, beat);
+    };
+    beat();
+  }
+
+  function startCombatScene() {
+    if (tableCombatScene || !enabled()) return;
+    const dest = tableBackOut();
+    if (!dest) return;
+    const ctx = ensure();
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, ctx.currentTime);
+    master.gain.linearRampToValueAtTime(0.5, ctx.currentTime + TABLE_XFADE);
+    master.connect(tableBackOut());
+    const bag = { ctx, master, sources: [], oscs: [], timers: [], alive: true };
+    tableCombatScene = bag;
+    buildBoy(ctx, master, bag);
+  }
+
+  function stopCombatScene() {
+    if (!tableCombatScene) return;
+    const old = tableCombatScene;
+    tableCombatScene = null;
+    old.alive = false;
+    for (const timer of old.timers) clearTimeout(timer);
+    fadeOut(old.ctx, old.master, () => {
+      for (const source of old.sources) {
+        try { source.stop(); } catch { /* уже остановлен */ }
+      }
+      for (const osc of old.oscs) {
+        try { osc.stop(); } catch { /* уже остановлен */ }
+      }
+    });
+  }
+
+  /** Что стол должен играть прямо сейчас: 'combat' | 'file' | 'none'. */
+  function tableScene() {
+    if (!enabled()) return 'none';
+    return tableCombatOn ? 'combat' : (tableAmbientUrl ? 'file' : 'none');
+  }
+
+  /**
+   * Приводит слои стола к сцене: в бою — синтезированный луп, вне боя —
+   * файл-эмбиент карты. Пересечение слоёв и есть кроссфейд: один гаснет,
+   * другой набирает громкость одновременно.
+   */
+  function applyTableAmbience() {
+    const want = tableScene();
+    if (want === 'combat') startCombatScene();
+    else stopCombatScene();
+    const fileWanted = want === 'file' ? tableAmbientUrl : '';
+    if ((tableFileLoop ? tableFileLoop.url : '') === fileWanted) return;
+    if (tableFileLoop) {
+      const loop = tableFileLoop;
+      tableFileLoop = null;
+      fadeOut(loop.ctx, loop.gain, () => stopLayer(loop));
+    }
+    if (!fileWanted) return;
+    const layer = fadeInLoop(fileWanted);
+    if (!layer) return;
+    // Пока файл качался, сцена могла смениться: лишний слой гасим сразу.
+    if (tableScene() !== 'file' || tableAmbientUrl !== fileWanted) {
+      fadeOut(layer.ctx, layer.gain, () => stopLayer(layer));
+      return;
+    }
+    tableFileLoop = layer;
+  }
+
+  /** Гасит слои стола: эмбиент-файл, боевой луп и зацикленные кю. */
+  function stopTableLayers() {
+    if (tableFileLoop) {
+      const loop = tableFileLoop;
+      tableFileLoop = null;
+      fadeOut(loop.ctx, loop.gain, () => stopLayer(loop));
+    }
+    stopCombatScene();
+    stopAllCues();
+  }
+
+  /** Гасит и снимает с учёта все кю: петли и одиночные. */
+  function stopAllCues() {
+    const all = [...tableCueLoops.values(), ...tableSingles.values()];
+    for (const loop of all) {
+      fadeOut(loop.ctx, loop.gain, () => stopLayer(loop));
+    }
+    tableCueLoops.clear();
+    tableSingles.clear();
+    tableDuck(-tableFocus);
+  }
+
+  /** На главном экране звук стола молчит: он не должен тонуть в атмосфере. */
+  function leaveTable() {
+    stopTableLayers();
+    tableAmbientUrl = '';
+    tableCombatOn = false;
+  }
+
+  /**
+   * Кю с саундборда. 'play' — один раз, 'loop' — зациклить, 'stop' — снять
+   * зацикленное: по ссылке — одно, без ссылки — все петли разом.
+   * @param {string} url
+   * @param {'play'|'loop'|'stop'} [action]
+   */
+  function tableCue(url, action = 'play') {
+    if (!enabled()) return;
+    if (action === 'stop') {
+      const loops = url ? [tableCueLoops.get(url)] : [...tableCueLoops.values()];
+      const singles = url ? [tableSingles.get(url)] : [...tableSingles.values()];
+      for (const loop of [...loops, ...singles]) {
+        if (loop) fadeOut(loop.ctx, loop.gain, () => stopLayer(loop));
+      }
+      if (url) { tableCueLoops.delete(url); tableSingles.delete(url); }
+      else { tableCueLoops.clear(); tableSingles.clear(); }
+      tableDuck(-(loops.length + singles.length));
+      return;
+    }
+    if (!url) return;
+    const layer = tableLayer(url, action === 'loop', 0.9);
+    if (!layer) return;
+    tableDuck(1);
+    const finish = () => stopLayer(layer);
+    if (action === 'loop') {
+      const old = tableCueLoops.get(url);
+      if (old) fadeOut(old.ctx, old.gain, () => stopLayer(old));
+      const oldSingle = tableSingles.get(url);
+      if (oldSingle) { fadeOut(oldSingle.ctx, oldSingle.gain, () => stopLayer(oldSingle)); tableDuck(-1); }
+      tableSingles.delete(url);
+      tableCueLoops.set(url, layer);
+    } else {
+      const oldSingle = tableSingles.get(url);
+      if (oldSingle) { tableSingles.delete(url); tableDuck(-1); fadeOut(oldSingle.ctx, oldSingle.gain, () => stopLayer(oldSingle)); }
+      layer.el.onended = () => { finish(); tableDuck(-1); };
+      tableSingles.set(url, layer);
+    }
+  }
+
+  /**
+   * Эмбиент карты: зацикленный файл. Пустая ссылка — без эмбиента.
+   * @param {string} url уже полный адрес стола, не /files/...
+   */
+  function setTableAmbient(url) {
+    const next = url || '';
+    if (next === tableAmbientUrl) return;
+    tableAmbientUrl = next;
+    applyTableAmbience();
+  }
+
+  /** Реакция на режим боя: лупы меняются местами с кроссфейдом. @param {boolean} on */
+  function setTableCombat(on) {
+    const next = Boolean(on);
+    if (next === tableCombatOn) return;
+    tableCombatOn = next;
+    applyTableAmbience();
+  }
+
   // Атмосфера могла не подняться, пока звук был запрещён до жеста. Первый
   // клик или клавиша оживляют контекст, и старт повторяется. Дублирующий
   // вызов безопасен: сцена уже играет — она не пересоздаётся.
@@ -693,6 +1028,7 @@
     if (ambientUnlocked) return;
     ambientUnlocked = true;
     startAmbient();
+    applyTableAmbience();
   };
   document.addEventListener('pointerdown', unlock, { once: true, capture: true });
   document.addEventListener('keydown', unlock, { once: true, capture: true });
@@ -702,10 +1038,14 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       stopAmbient();
+      // Свёрнутый стол тоже не должен шуметь: слои гаснем, ссылки помним —
+      // и на возврате applyTableAmbience() поднимет их заново.
+      stopTableLayers();
       return;
     }
     if (previewTimer) startAmbient(true);
     else if (ambientScene === 'home') startAmbient();
+    if (ambientScene !== 'home') applyTableAmbience();
   });
 
   // Тема сменилась на главном экране: старую атмосферу гасим, новую
@@ -722,6 +1062,7 @@
     SKIN_KEY,
     AMBIENT_KEY,
     AMBIENT_VOLUME_KEY,
+    TABLE_VOLUME_KEY,
     SKINS,
     enabled,
     ambientEnabled,
@@ -736,6 +1077,11 @@
     setScene,
     setVolume,
     setAmbientVolume,
-    setSkin
+    setSkin,
+    tableVolume,
+    setTableVolume,
+    tableCue,
+    setTableAmbient,
+    setTableCombat
   };
 }(window));

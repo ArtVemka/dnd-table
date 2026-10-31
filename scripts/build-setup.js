@@ -27,5 +27,8 @@ childProcess.execFile = function (file, args, options, callback) {
   return execFile.call(this, file, args, options, callback);
 };
 
-process.argv = [process.argv[0], cli, '--win', 'nsis', '--publish', 'never'];
+// electronDist зеркалит портбл: Electron 45 ставится в окружении только
+// через ELECTRON_MIRROR, и GitHub-закачка electron-builder отсюда падает.
+process.argv = [process.argv[0], cli, '--win', 'nsis', '--publish', 'never',
+  '--config.electronDist=' + path.join(__dirname, '..', 'node_modules', 'electron', 'dist')];
 require(cli);

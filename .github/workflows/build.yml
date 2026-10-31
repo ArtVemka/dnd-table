@@ -48,6 +48,14 @@ jobs:
       - name: Установить зависимости
         run: npm ci
 
+      - name: Доставить дистрибутив Electron
+        # У Electron 45 postinstall-скачивание dist не всегда проходит
+        # (сеть/отказ опасных скриптов), а dist:portable ждёт
+        # node_modules/electron/dist. Догоняем сами, через зеркало.
+        run: node node_modules/electron/install.js
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
       - name: Проверить оформление
         run: node test/styles.js
 

@@ -60,6 +60,7 @@ const REQUIRED_FILES = [
   'renderer/styles/08-theme-layer.css',
   'renderer/styles/09-theme-studio.css',
   'renderer/styles/10-perf-mode.css',
+  'renderer/styles/11-authentic.css',
   'renderer/theme.js',
   // Звуковые скины: без файла настройки звука останутся, а кнопки не зазвучат.
   'renderer/sound.js',
@@ -85,6 +86,7 @@ const REQUIRED_FILES = [
   'renderer/journal-window.html',
   'renderer/journal-window.js',
   'renderer/table.js',
+  'renderer/icons.js',
   'renderer/local-table.js',
   // Справочник предметов для ссылок на dnd.su. Без него панель импортированного
   // приключения открывается, но названия перестают быть кликабельными.

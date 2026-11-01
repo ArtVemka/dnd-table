@@ -26,6 +26,7 @@
     <link rel="stylesheet" href="styles/08-theme-layer.css" />
     <link rel="stylesheet" href="styles/09-theme-studio.css" />
     <link rel="stylesheet" href="styles/10-perf-mode.css" />
+    <link rel="stylesheet" href="styles/11-authentic.css" />
   </head>
   <body>
     <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
@@ -55,13 +56,13 @@
             <h2 class="home__group__title">Мастеру</h2>
             <div class="home__cards">
               <button id="btn-go-create" class="card card--primary" type="button">
-                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="4" cy="3.2" r="1.3"/><path d="M4 4.5v9.3"/><circle cx="12" cy="3.2" r="1.3"/><path d="M12 4.5v9.3"/><path d="M5.3 6.2h5.4M5.3 8.4h5.4M5.3 10.6h3.4"/></svg></span>
+                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-tome"/></svg></span>
                 <span class="card__title">Создать новую кампанию</span>
                 <span class="card__text">Стать ДМ и поднять стол на этом компьютере</span>
               </button>
 
               <button id="btn-go-load" class="card" type="button">
-                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M4 2.5h8.5v11H4A1.5 1.5 0 0 1 2.5 12V4A1.5 1.5 0 0 1 4 2.5Z"/><path d="M4.3 2.5v11"/><path d="M9.8 6.6h2.7v2.6H9.8z"/><path d="M11.1 7.4v1"/></svg></span>
+                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-chest"/></svg></span>
                 <span class="card__title">Загрузить кампанию</span>
                 <span class="card__text">Продолжить сохранённую игру</span>
               </button>
@@ -72,13 +73,13 @@
             <h2 class="home__group__title">Игроку</h2>
             <div class="home__cards">
               <button id="btn-go-join" class="card card--primary" type="button">
-                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.8"/><path d="m11 5-2.1 3.9L5 11l2.1-3.9z"/><path d="M8 2.2v1.1M8 12.7v1.1M2.2 8h1.1M12.7 8h1.1"/></svg></span>
+                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-portal"/></svg></span>
                 <span class="card__title">Подключиться к столу</span>
                 <span class="card__text">Войти по P2P-билету, который прислал мастер</span>
               </button>
 
               <button id="btn-go-sheet" class="card" type="button">
-                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M13.2 2.4c-4.8.4-8.5 2.9-9.9 7L2.6 12.9l3.4-.7c3.7-1.6 6-5 6.4-9Z"/><path d="M3.6 11.9c1.5-3.2 4.1-5.9 7.4-7.1"/></svg></span>
+                <span class="card__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-quill"/></svg></span>
                 <span class="card__title">Создать лист персонажа</span>
                 <span class="card__text">Заранее, до стола. Потом выберете его при подключении</span>
               </button>
@@ -224,7 +225,7 @@
           <span id="role-badge" class="badge">—</span>
           <div class="topbar__tools" role="group" aria-label="Инструменты стола">
             <button id="btn-search" class="btn btn--ghost btn--tiny btn--icon" type="button"
-                    title="Поиск по кампании (Ctrl+K)" aria-label="Поиск"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.2"/><path d="m10.4 10.4 3 3"/></svg><span class="btn__label">Поиск</span></button>
+                    title="Поиск по кампании (Ctrl+K)" aria-label="Поиск"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-magnifier"/></svg><span class="btn__label">Поиск</span></button>
             <button id="btn-undo" class="btn btn--ghost btn--tiny btn--icon" type="button"
                     title="Отменить последнее действие мастера" aria-label="Отменить" hidden><span class="btn__label">Отменить</span></button>
             <button id="btn-panel-right" class="btn btn--ghost btn--tiny" type="button"
@@ -336,38 +337,38 @@
             <button class="tabs__btn is-active" data-tab="chat" type="button" role="tab"
                     id="tabbtn-chat" aria-controls="tab-chat" aria-selected="true" tabindex="0"
                     aria-label="Чат" title="Чат">
-              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 3.5h10V10H7.5L4.5 13v-3H3z"/></svg></span><span class="tabs__label">Чат</span>
+              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-chat"/></svg></span><span class="tabs__label">Чат</span>
             </button>
             <button class="tabs__btn" data-tab="dice" type="button" role="tab"
                     id="tabbtn-dice" aria-controls="tab-dice" aria-selected="false" tabindex="-1"
                     aria-label="Кубики" title="Кубики">
-              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 1.8 13.4 4.9v6.2L8 14.2 2.6 11.1V4.9z"/><path d="M8 4.6 10.7 9H5.3z"/></svg></span><span class="tabs__label">Кубики</span>
+              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-d20"/></svg></span><span class="tabs__label">Кубики</span>
             </button>
             <button class="tabs__btn tabs__btn--gap" data-tab="sheet" type="button" role="tab"
                     id="tabbtn-sheet" aria-controls="tab-sheet" aria-selected="false" tabindex="-1"
                     aria-label="Лист" title="Лист">
-              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M4.5 2.5h5.7L12.5 5v8.5h-8z"/><path d="M10 2.8V5h2.2"/><path d="M6.2 7.2h4.6M6.2 9.4h4.6M6.2 11.6h3"/></svg></span><span class="tabs__label">Лист</span>
+              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-scroll"/></svg></span><span class="tabs__label">Лист</span>
             </button>
             <button class="tabs__btn tabs__btn--gap" data-tab="tokens" type="button" role="tab"
                     id="tabbtn-tokens" aria-controls="tab-tokens" aria-selected="false" tabindex="-1"
                     aria-label="Фишки" title="Фишки">
-              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="8" cy="5.2" r="2.1"/><path d="M5 13.2c0-2.2 1.3-3.6 3-3.6s3 1.4 3 3.6z"/></svg></span><span class="tabs__label">Фишки</span>
+              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-helm"/></svg></span><span class="tabs__label">Фишки</span>
             </button>
             <button class="tabs__btn" data-tab="initiative" type="button" role="tab"
                     id="tabbtn-initiative" aria-controls="tab-initiative" aria-selected="false" tabindex="-1"
                     aria-label="Порядок боя" title="Порядок боя">
-              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 1.5 10 3.5v6.2L8 11.7 6 9.7V3.5z"/><path d="M5 11.7h6"/><path d="M8 11.7v2.8"/></svg></span><span class="tabs__label">Бой</span>
+              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-swords"/></svg></span><span class="tabs__label">Бой</span>
             </button>
             <button class="tabs__btn tabs__btn--dm tabs__btn--gap" data-tab="surface" type="button" role="tab"
                     id="tabbtn-surface" aria-controls="tab-surface" aria-selected="false" tabindex="-1"
                     hidden aria-label="Поверхность карты" title="Поверхность карты (только ДМ)">
-              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 1.8c2.2 2.6 3.4 4.2 3.4 6.4a3.4 3.4 0 0 1-6.8 0c0-1.2.5-2.2 1.4-3.3.3 1 .9 1.6 1.7 1.9.1-1.6.1-3 .3-5z"/></svg></span><span class="tabs__label">Поверхность</span>
+              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-flame"/></svg></span><span class="tabs__label">Поверхность</span>
             </button>
             <button class="tabs__btn tabs__btn--compact tabs__btn--dm tabs__btn--gap" data-tab="adventure"
                     type="button" role="tab" id="tabbtn-adventure" aria-controls="tab-adventure"
                     aria-selected="false" tabindex="-1" hidden
                     aria-label="Приключение" title="Приключение (только ДМ)">
-              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 3.6C6.7 2.6 5 2.4 3.2 2.6v9.2c1.8-.2 3.5 0 4.8 1 1.3-1 3-1.2 4.8-1V2.6c-1.8-.2-3.5 0-4.8 1z"/><path d="M8 3.6v9.2"/></svg></span><span class="tabs__label">Приключение</span>
+              <span class="tabs__icon" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-map"/></svg></span><span class="tabs__label">Приключение</span>
             </button>
           </div>
           <div class="panel panel--tab is-active" id="tab-chat" role="tabpanel"
@@ -409,6 +410,7 @@
 <script src="dnd5e.js"></script>
 <script src="dice.js"></script>
 <script src="sheet.js"></script>
+    <script src="icons.js"></script>
     <script src="table.js"></script>
     <script src="local-table.js"></script>
     <script src="app.js"></script>

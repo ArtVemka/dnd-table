@@ -35,6 +35,7 @@ const {
   clampInt,
   clampNumber,
   newMapId,
+  newSceneId,
   newTokenId,
   newSoundId,
   normalizeAdventure,
@@ -350,6 +351,11 @@ async function createTableServer(options) {
     }
   };
 
+  /** Список сцен видят только мастерские сокеты. */
+  const emitScenes = () => {
+    io.to('dm-sockets').emit('scenesUpdated', room.scenes.map((scene) => room.sceneSummary(scene)));
+  };
+
   /**
    * Находит карту среди вкладок стола.
    *
@@ -468,6 +474,36 @@ async function createTableServer(options) {
       whisper: Boolean(message.whisper)
     });
     return message;
+  };
+
+  /**
+   * Бросок для ленты кубиков.
+   *
+   * В чат броски больше не пишутся: там место разговору, а числа живут в
+   * панели кубиков и её истории. Возвращает готовый объект для события
+   * `diceRollResult`.
+   * @param {{playerId?: string, playerName?: string, role?: string}} actor
+   * @param {{formula: string, result: number, note?: string, die?: number}} data
+   * @returns {object}
+   */
+  const rollFeed = (actor, data) => {
+    const die = Number.isFinite(data.die) ? data.die : null;
+    return {
+      playerId: actor.playerId || '',
+      playerName: actor.playerName || 'Стол',
+      role: actor.role || ROLE_DM,
+      formula: data.formula,
+      count: 1,
+      sides: die === null ? 0 : 20,
+      values: die === null ? [] : [die],
+      keptValues: die === null ? [] : [die],
+      droppedValues: [],
+      modifier: 0,
+      result: data.result,
+      note: data.note || '',
+      hidden: false,
+      time: new Date().toISOString()
+    };
   };
 
   /**
@@ -840,6 +876,7 @@ async function createTableServer(options) {
         modifier: 0,
         result: die,
         isDeathSave: true,
+        note: outcome,
         hidden: false,
         time: new Date().toISOString()
       };
@@ -848,21 +885,6 @@ async function createTableServer(options) {
         room.diceHistory = room.diceHistory.slice(-LIMITS.maxDiceHistory);
       }
       io.emit('diceRollResult', roll);
-
-      const note = sheet.hp > 0 && die === 20
-        ? ` (${outcome})`
-        : ` — ${outcome}`;
-      const announcement = {
-        from: sheet.playerName || player?.name || 'Игрок',
-        playerId,
-        role: socket.data.role,
-        avatar: player?.avatar || null,
-        text: `спасбросок смерти: d20 ${die}${note}`,
-        isRoll: true,
-        time: roll.time
-      };
-      pushChat(announcement);
-      io.emit('chatMessage', announcement);
     });
 
     /** Сбрасывает счётчики спасбросков вручную: лечение уже подняло героя. */
@@ -1087,6 +1109,12 @@ async function createTableServer(options) {
 
       room.pushUndo();
       slot.items.splice(index, 1);
+      // Сцена без карты бесполезна и не должна висеть в списке.
+      const scenesBefore = room.scenes.length;
+      room.scenes = room.scenes.filter(
+        (scene) => !(scene.mapType === type && scene.mapId === requested)
+      );
+      if (room.scenes.length !== scenesBefore) emitScenes();
       if (slot.activeId === requested) {
         // Соседняя карта становится выбором мастера. Показывать её игрокам
         // сразу не нужно: если это была открытая карта, будет отдельная ветка.
@@ -2256,16 +2284,15 @@ socket.on('addMapWall', (payload) => {
         const hiddenName = room.isTokenVisibleToPlayers(token) && !token.hideName
           ? `«${token.name}»`
           : 'скрытый монстр';
-        const notice = pushChat({
-          from: 'Стол',
-          playerId: '',
-          role: ROLE_DM,
-          avatar: DEFAULT_DM_AVATAR,
-          text: `${hiddenName}: концентрация «${spell}» — проверка (СЛ ${dc}): ${rollResult} ${success ? 'успех' : 'провал, заклинание сбито'}`,
-          isRoll: true,
-          time: new Date().toISOString()
-        });
-        io.emit('chatMessage', notice);
+        io.emit('diceRollResult', rollFeed(
+          { playerName: 'Стол', role: ROLE_DM },
+          {
+            formula: `Концентрация «${spell}»`,
+            result: rollResult,
+            die: rollResult,
+            note: `${hiddenName}: ${success ? 'успех' : 'провал, заклинание сбито'} (СЛ ${dc})`
+          }
+        ));
         if (!success) {
           token.concentration = undefined;
           emitToken('tokenUpdated', token);
@@ -2357,16 +2384,15 @@ socket.on('addMapWall', (payload) => {
       const visibleName = room.isTokenVisibleToPlayers(token) && !token.hideName
         ? `«${token.name}»`
         : 'скрытый монстр';
-      const message = pushChat({
-        from: socket.data.name,
-        playerId: socket.data.playerId,
-        role: socket.data.role,
-        avatar: room.players.get(socket.data.playerId)?.avatar || null,
-        text: `${attackName} по ${visibleName} — ${roll.rollText}: ${roll.verdict}${roll.hit ? `, урон ${roll.total}` : ''}`,
-        isRoll: true,
-        time: new Date().toISOString()
-      });
-      io.emit('chatMessage', message);
+      io.emit('diceRollResult', rollFeed(
+        { playerId: socket.data.playerId, playerName: socket.data.name, role: socket.data.role },
+        {
+          formula: attackName,
+          result: roll.d20,
+          die: roll.d20,
+          note: `${roll.verdict} по ${visibleName}${roll.hit ? `, урон ${roll.total}` : ''}`
+        }
+      ));
       if (!roll.hit || !roll.total) return;
       const before = token.assignedPlayerId
         ? (room.sheets.get(token.assignedPlayerId)?.hp ?? token.hp)
@@ -2400,16 +2426,15 @@ socket.on('addMapWall', (payload) => {
       const visibleName = room.isTokenVisibleToPlayers(token) && !token.hideName
         ? `«${token.name}»`
         : 'скрытый монстр';
-      const message = pushChat({
-        from: socket.data.name,
-        playerId: socket.data.playerId,
-        role: socket.data.role,
-        avatar: room.players.get(socket.data.playerId)?.avatar || null,
-        text: `${attackName} по ${visibleName} — ${roll.rollText}: ${roll.verdict}${roll.hit ? `, урон ${roll.total}` : ''}`,
-        isRoll: true,
-        time: new Date().toISOString()
-      });
-      io.emit('chatMessage', message);
+      io.emit('diceRollResult', rollFeed(
+        { playerId: socket.data.playerId, playerName: socket.data.name, role: socket.data.role },
+        {
+          formula: attackName,
+          result: roll.d20,
+          die: roll.d20,
+          note: `${roll.verdict} по ${visibleName}${roll.hit ? `, урон ${roll.total}` : ''}`
+        }
+      ));
       if (!roll.hit || !roll.total) return;
       const before = token.assignedPlayerId
         ? (room.sheets.get(token.assignedPlayerId)?.hp ?? token.hp)
@@ -2524,16 +2549,16 @@ const SAVE_LABELS = {
         const visibleName = room.isTokenVisibleToPlayers(token) && !token.hideName
           ? `«${token.name}»`
           : 'скрытый монстр';
-        const message = pushChat({
-          from: 'Стол',
-          playerId: '',
-          role: ROLE_DM,
-          avatar: DEFAULT_DM_AVATAR,
-          text: `${spellName || 'Область эффекта'}: ${visibleName} — спасбросок ${saveLabel} (СЛ ${dc}): ${roll.result} ${success ? 'успех' : 'провал'}${result.damage ? `, урон ${result.damage}` : ', урон без эффекта'}`,
-          isRoll: true,
-          time: new Date().toISOString()
-        });
-        io.emit('chatMessage', message);
+        io.emit('diceRollResult', rollFeed(
+          { playerName: 'Стол', role: ROLE_DM },
+          {
+            formula: `${spellName || 'Область эффекта'}: ${saveLabel}`,
+            result: Number(roll.result) || 0,
+            die: Number(roll.result) || 0,
+            note: `${visibleName}: ${success ? 'успех' : 'провал'} (СЛ ${dc})`
+              + (result.damage ? `, урон ${result.damage}` : ', урон без эффекта')
+          }
+        ));
       }
       // Урон игрокам применяет ДМ по итогам их бросков (ручной «Урон по области»):
       // автозаявка только просит бросок, не наказывает без ответа.
@@ -3517,6 +3542,11 @@ socket.on('rollDice', (payload) => {
         roll.targetAc = targetAc;
         roll.hit = roll.result >= targetAc;
       }
+      // Подпись и исход едут вместе с броском: в чат строка не пишется, и
+      // лента кубиков должна сама объяснить, что это был за d20.
+      if (label) roll.label = label;
+      if (roll.hit === true) roll.note = `попадание по КД ${roll.targetAc}`;
+      else if (roll.hit === false) roll.note = `промах по КД ${roll.targetAc}`;
       if (dmOnly) {
         // Приватный бросок не попадает ни в общий чат, ни в историю кампании:
         // иначе формула утекла бы игрокам при следующем снимке стола.
@@ -3529,34 +3559,11 @@ socket.on('rollDice', (payload) => {
         room.diceHistory = room.diceHistory.slice(-LIMITS.maxDiceHistory);
       }
 
-      // Бросок попадает и в общий чат: так его видят все, включая тех,
-      // кто подключится позже и получит историю чата со стола. Для тайного
-      // броска строка собирается без числа, поэтому в истории чата его тоже
-      // нет — утекать нечему.
-      const announcement = {
-        from: socket.data.name,
-        playerId: socket.data.playerId,
-        role: socket.data.role,
-        // Аватар пишем в само сообщение, а не подтягиваем на отрисовке:
-        // портрет мог смениться уже после броска, и в истории он должен
-        // остаться тем, каким был в момент броска.
-        avatar: room.players.get(socket.data.playerId)?.avatar
-          || (socket.data.role === ROLE_DM ? DEFAULT_DM_AVATAR : null),
-        text: (label ? `${label} — ${dice.describeRoll(roll)}` : dice.describeRoll(roll))
-          + (roll.hit === true
-            ? `, попадание по КД ${roll.targetAc}`
-            : roll.hit === false ? `, промах по КД ${roll.targetAc}` : ''),
-        isRoll: true,
-        hidden,
-        time: roll.time
-      };
-      pushChat(announcement);
       // Число тайного броска уходит только мастерам, игрокам достаётся тот же
       // бросок без результата: рассылать всем одно и то же нельзя.
       const forPlayers = dice.hideRollResult(roll);
       io.to('table').except('dm-sockets').emit('diceRollResult', forPlayers);
       io.to('dm-sockets').emit('diceRollResult', roll);
-      io.emit('chatMessage', announcement);
 
       // Провал спасброска концентрации снимает заклинание. Связь броска с
       // заявкой держится на подписи: игрок бросает по заявке со своей СЛ и
@@ -3625,17 +3632,10 @@ socket.on('rollDice', (payload) => {
         });
         return;
       }
-      const message = pushChat({
-        from: socket.data.name,
-        playerId: socket.data.playerId,
-        role: socket.data.role,
-        avatar: room.players.get(socket.data.playerId)?.avatar
-          || (socket.data.role === ROLE_DM ? DEFAULT_DM_AVATAR : null),
-        text,
-        isRoll: true,
-        time: new Date().toISOString()
-      });
-      io.emit('chatMessage', message);
+      io.emit('diceRollResult', rollFeed(
+        { playerId: socket.data.playerId, playerName: socket.data.name, role: socket.data.role },
+        { formula: `Таблица «${table.name}»`, result, note: row.label }
+      ));
     });
 
     /* ------------------------------------------------------------------ *
@@ -3715,9 +3715,9 @@ socket.on('rollDice', (payload) => {
         if (typeof ack === 'function') ack({ ok: false, error: 'Сообщение не найдено' });
         return;
       }
-      if (message.system || message.isRoll) {
-        emitError(socket, 'Системные сообщения и броски не редактируются');
-        if (typeof ack === 'function') ack({ ok: false, error: 'Системные сообщения и броски не редактируются' });
+      if (message.system) {
+        emitError(socket, 'Системные сообщения не редактируются');
+        if (typeof ack === 'function') ack({ ok: false, error: 'Системные сообщения не редактируются' });
         return;
       }
       const text = sanitizeText(payload && payload.text, LIMITS.maxChatLength).trim();
@@ -3938,52 +3938,143 @@ socket.on('rollDice', (payload) => {
     });
 
     /**
-     * Снимок сцены: мастер сохраняет раскладку всех фишек и может вернуть её.
-     * Эфемерно: переживает только до перезапуска стола.
+     * Сцены подготовки поля: именованные наборы карты, атмосферы, сетки и
+     * фишек. В отличие от старого снимка, сохраняются в кампании.
      */
-    socket.on('setSceneSnapshot', (_payload, ack) => {
+    socket.on('saveScene', (payload, ack) => {
       if (!requireDm(socket)) {
         if (typeof ack === 'function') ack({ ok: false, error: 'Только ДМ' });
         return;
       }
-      room.sceneSnapshot = room.tokens.map((token) => ({
-        id: token.id,
-        x: token.x,
-        y: token.y,
-        mapType: token.mapType,
-        mapId: token.mapId
-      }));
+      const sceneId = payload && payload.sceneId ? String(payload.sceneId) : '';
+      const captured = room.captureScene({
+        name: payload && payload.name,
+        mapType: payload && payload.mapType,
+        mapId: payload && payload.mapId
+      });
+      if (!captured) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Карта не найдена' });
+        return;
+      }
+      if (sceneId) {
+        const index = room.scenes.findIndex((scene) => scene.id === sceneId);
+        if (index < 0) {
+          if (typeof ack === 'function') ack({ ok: false, error: 'Сцена не найдена' });
+          return;
+        }
+        captured.id = sceneId;
+        captured.createdAt = room.scenes[index].createdAt;
+        room.scenes[index] = captured;
+      } else {
+        if (room.scenes.length >= LIMITS.maxScenes) {
+          if (typeof ack === 'function') {
+            ack({ ok: false, error: `Больше ${LIMITS.maxScenes} сцен не сохраняется` });
+          }
+          return;
+        }
+        room.scenes.unshift(captured);
+      }
       markDirty();
-      if (typeof ack === 'function') ack({ ok: true, count: room.sceneSnapshot.length });
-      onLog('Сделан снимок сцены');
+      emitScenes();
+      if (typeof ack === 'function') ack({ ok: true, scene: room.sceneSummary(captured) });
+      onLog(`${sceneId ? 'Сцена обновлена' : 'Сцена сохранена'}: ${captured.name}`);
     });
 
-    socket.on('restoreSceneSnapshot', (_payload, ack) => {
+    socket.on('loadScene', (payload, ack) => {
       if (!requireDm(socket)) {
         if (typeof ack === 'function') ack({ ok: false, error: 'Только ДМ' });
         return;
       }
-      const snapshot = Array.isArray(room.sceneSnapshot) ? room.sceneSnapshot : [];
-      if (!snapshot.length) {
-        emitError(socket, 'Снимок сцены ещё не сделан');
-        if (typeof ack === 'function') ack({ ok: false, error: 'Снимок сцены ещё не сделан' });
+      const scene = room.scenes.find((item) => item.id === String(payload && payload.sceneId));
+      if (!scene) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Сцена не найдена' });
         return;
       }
-      room.pushUndo();
-      let restored = 0;
-      for (const entry of snapshot) {
-        const token = findToken(entry.id);
-        if (!token) continue;
-        token.x = entry.x;
-        token.y = entry.y;
-        token.mapType = entry.mapType;
-        token.mapId = entry.mapId;
-        emitToken('tokenUpdated', token);
-        restored += 1;
+      const show = Boolean(payload && payload.show);
+      const result = room.applyScene(scene, { show });
+      if (!result.ok) {
+        if (typeof ack === 'function') ack({ ok: false, error: result.error });
+        return;
       }
       markDirty();
-      if (typeof ack === 'function') ack({ ok: true, count: restored });
-      onLog(`Сцена восстановлена: ${restored} фишек`);
+      broadcastSnapshot();
+      io.to('dm-sockets').emit('sceneLoaded', {
+        sceneId: scene.id,
+        mapType: scene.mapType,
+        mapId: scene.mapId,
+        show
+      });
+      if (typeof ack === 'function') ack({ ok: true, scene: room.sceneSummary(scene) });
+      onLog(`${show ? 'Сцена показана' : 'Сцена открыта'}: ${scene.name}`);
+    });
+
+    socket.on('renameScene', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Только ДМ' });
+        return;
+      }
+      const scene = room.scenes.find((item) => item.id === String(payload && payload.sceneId));
+      if (!scene) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Сцена не найдена' });
+        return;
+      }
+      const name = sanitizeText(payload && payload.name, LIMITS.maxSceneName).trim();
+      if (!name) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Пустое имя сцены' });
+        return;
+      }
+      scene.name = name;
+      scene.updatedAt = new Date().toISOString();
+      markDirty();
+      emitScenes();
+      if (typeof ack === 'function') ack({ ok: true, scene: room.sceneSummary(scene) });
+    });
+
+    socket.on('duplicateScene', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Только ДМ' });
+        return;
+      }
+      const source = room.scenes.find((item) => item.id === String(payload && payload.sceneId));
+      if (!source) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Сцена не найдена' });
+        return;
+      }
+      if (room.scenes.length >= LIMITS.maxScenes) {
+        if (typeof ack === 'function') {
+          ack({ ok: false, error: `Больше ${LIMITS.maxScenes} сцен не сохраняется` });
+        }
+        return;
+      }
+      const now = new Date().toISOString();
+      const copy = JSON.parse(JSON.stringify(source));
+      copy.id = newSceneId();
+      copy.name = sanitizeText(`${source.name} (копия)`, LIMITS.maxSceneName).trim();
+      copy.createdAt = now;
+      copy.updatedAt = now;
+      room.scenes.unshift(copy);
+      markDirty();
+      emitScenes();
+      if (typeof ack === 'function') ack({ ok: true, scene: room.sceneSummary(copy) });
+      onLog(`Сцена скопирована: ${copy.name}`);
+    });
+
+    socket.on('deleteScene', (payload, ack) => {
+      if (!requireDm(socket)) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Только ДМ' });
+        return;
+      }
+      const sceneId = String(payload && payload.sceneId);
+      const before = room.scenes.length;
+      room.scenes = room.scenes.filter((item) => item.id !== sceneId);
+      if (room.scenes.length === before) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Сцена не найдена' });
+        return;
+      }
+      markDirty();
+      emitScenes();
+      if (typeof ack === 'function') ack({ ok: true });
+      onLog('Сцена удалена');
     });
 
     socket.on('journalImage', (payload, ack) => {

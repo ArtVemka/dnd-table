@@ -943,11 +943,6 @@
   border-left-color: var(--gold);
 }
 
-.chat__msg--roll {
-  border-left-color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .chat__msg--whisper {
   border-left-color: var(--info);
   background: var(--info-soft);
@@ -1000,12 +995,6 @@
   color: var(--text-dim);
   font-style: italic;
   white-space: nowrap;
-}
-
-.badge--roll {
-  background: rgba(200, 117, 80, 0.18);
-  border-color: rgba(200, 117, 80, 0.5);
-  color: var(--accent-hover);
 }
 
 .chat__head {
@@ -2308,17 +2297,6 @@ body.is-showcase .map-log {
 }
 
 
-/* Фильтр «только броски» в чате: класс на логе прячет разговоры, броски и
-   системные плашки остаются. Кнопка подсвечивается, пока фильтр включён. */
-.chat__filter.is-active {
-  color: var(--accent);
-}
-
-.chat__log.is-rolls-only .chat__msg:not(.chat__msg--roll):not(.chat__msg--system) {
-  display: none;
-}
-
-
 /* Панель опроса чата: вопрос и кнопки вариантов внизу по центру, поверх
    карты (map-badge ниже). Свой голос подсвечен; в кинорежиме скрыта. */
 .vote {
@@ -2375,3 +2353,146 @@ body.is-showcase .vote {
   display: none;
 }
 
+
+/* ------------------------------------------------------------ Сцены */
+
+/* Окно подготовки поля: список карточек и форма сохранения. */
+.modal--scenes {
+  width: min(820px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.scenes__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scenes__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.scenes__save {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scenes__name {
+  flex: 1 1 220px;
+}
+
+.scenes__hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scenes__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scenes__empty {
+  padding: 20px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  text-align: center;
+}
+
+.scene-card {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.scene-card__thumb {
+  width: 140px;
+  height: 88px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--surface-3);
+}
+
+.scene-card__thumb.is-broken {
+  visibility: hidden;
+}
+
+.scene-card__thumb--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scene-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.scene-card__name-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scene-card__name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.scene-card__badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.scene-card__badge.is-draft {
+  color: var(--muted);
+}
+
+.scene-card__badge.is-shown {
+  border-color: var(--ok-border);
+  background: var(--ok-soft);
+  color: var(--ok-text);
+}
+
+.scene-card__meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scene-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 700px) {
+  .scene-card {
+    grid-template-columns: 1fr;
+  }
+
+  .scene-card__thumb {
+    width: 100%;
+    height: 120px;
+  }
+}

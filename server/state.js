@@ -110,6 +110,10 @@ const LIMITS = {
   maxAbility: 30,
   /** Сколько карт можно держать в одной вкладке (общая / локация / рисунок). */
   maxMapsPerType: 20,
+  /** Подготовленные сцены: карта, туман, свет, стены, сетка и фишки вместе. */
+  maxScenes: 20,
+  maxSceneTokens: 200,
+  maxSceneName: 60,
   /** Импортированное приключение: сколько записей каждого вида. */
   maxAdventureNotes: 300,
   maxAdventureItems: 500,
@@ -1054,13 +1058,17 @@ class RoomState {
      */
     this.showcase = { on: false, kind: '', ref: '', text: '', title: '', watchers: [] };
     /**
-     * Опрос чата и снимок сцены. Оба эфемерны: в кампанию не сохраняются,
-     * и после перезапуска стола опрос пуст, а снимок надо делать заново.
+     * Опрос чата. Эфемерен: в кампанию не сохраняется, после перезапуска
+     * стола опрос пуст.
      * @type {{question: string, options: string[], votes: Record<string, number>}|null}
      */
     this.vote = null;
-    /** @type {{id: string, x: number, y: number, mapType: string, mapId: string}[]|null} */
-    this.sceneSnapshot = null;
+    /**
+     * Подготовленные сцены мастера. В отличие от опроса, они сохраняются в
+     * кампании: подготовка поля должна пережить перезапуск стола.
+     * @type {object[]}
+     */
+    this.scenes = [];
     /**
      * Саундборд стола: кнопки мастера с загруженными звуками. Каждая запись —
      * имя и ссылка на файл в папке кампании; сами файлы живут в files/,
@@ -1163,16 +1171,26 @@ class RoomState {
       .filter((token) => token && token.id)
       .map((token) => this.normalizeToken(token));
 
+    // Сцены нормализуются после карт и фишек: им нужны существующие карты
+    // и тот же разбор фишки, что у живого стола.
+    this.scenes = this.normalizeScenes(data.scenes);
+
     this.diceHistory = Array.isArray(data.diceHistory)
       ? data.diceHistory.slice(-LIMITS.maxDiceHistory)
       : [];
+    // Броски в чате больше не живут: у старых кампаний они выкидываются при
+    // загрузке, иначе лента чата оставалась бы забита числами, а разговор
+    // вытеснялся бы из сохранённых сообщений.
     this.chatHistory = Array.isArray(data.chatHistory)
-      ? data.chatHistory.slice(-LIMITS.maxChatHistory).map((message, index) => ({
-        ...message,
-        // У старых сообщений id не было, а мастеру нужно удалять и их.
-        // Индекс и время дают устойчивый ключ до первого сохранения.
-        id: message && message.id ? String(message.id) : `old-${index}-${(message && message.time) || ''}`
-      }))
+      ? data.chatHistory
+        .filter((message) => !(message && message.isRoll))
+        .slice(-LIMITS.maxChatHistory)
+        .map((message, index) => ({
+          ...message,
+          // У старых сообщений id не было, а мастеру нужно удалять и их.
+          // Индекс и время дают устойчивый ключ до первого сохранения.
+          id: message && message.id ? String(message.id) : `old-${index}-${(message && message.time) || ''}`
+        }))
       : [];
     this.journal = sanitizeText(data.journal, LIMITS.maxJournal);
     this.initiative = normalizeInitiative(data.initiative);
@@ -1990,6 +2008,221 @@ fogMask: normalizeFog(source.fogMask),
     return rested;
   }
 
+  /**
+   * Метаданные сцены для интерфейса: без фишек и тумана, чтобы снимок
+   * состояния и список карточек не разрастались.
+   * @param {object} scene
+   * @returns {object}
+   */
+  sceneSummary(scene) {
+    const slot = scene ? this.maps[scene.mapType] : null;
+    const map = slot && Array.isArray(slot.items)
+      ? slot.items.find((item) => item.id === scene.mapId)
+      : null;
+    return {
+      id: scene.id,
+      name: scene.name,
+      mapType: scene.mapType,
+      mapId: scene.mapId,
+      mapName: map ? map.name : 'Карта',
+      mapUrl: map ? map.url : '',
+      tokenCount: Array.isArray(scene.tokens) ? scene.tokens.length : 0,
+      published: Boolean(map && map.published !== false),
+      createdAt: scene.createdAt,
+      updatedAt: scene.updatedAt
+    };
+  }
+
+  /**
+   * Разбирает сцены из файла кампании. Сцена без живой карты отбрасывается:
+   * иначе она висела бы в списке и не открывалась.
+   * @param {unknown} raw
+   * @returns {object[]}
+   */
+  normalizeScenes(raw) {
+    if (!Array.isArray(raw)) return [];
+    const scenes = [];
+    const ids = new Set();
+    for (const item of raw.slice(0, LIMITS.maxScenes)) {
+      if (!item || typeof item !== 'object') continue;
+      const mapType = MAP_TYPES.includes(item.mapType) ? item.mapType : null;
+      const mapId = sanitizeText(item.mapId, 80);
+      const slot = mapType ? this.maps[mapType] : null;
+      if (!slot || !slot.items.some((map) => map.id === mapId)) continue;
+      let id = sanitizeText(item.id, 40) || newSceneId();
+      if (ids.has(id)) id = newSceneId();
+      ids.add(id);
+      const tokens = (Array.isArray(item.tokens) ? item.tokens : [])
+        .slice(0, LIMITS.maxSceneTokens)
+        .filter((token) => token && token.id)
+        .map((token) => this.normalizeToken(token))
+        .filter((token) => token.mapType === mapType && token.mapId === mapId);
+      const map = item.map && typeof item.map === 'object' ? item.map : {};
+      scenes.push({
+        id,
+        name: sanitizeText(item.name, LIMITS.maxSceneName).trim() || 'Сцена',
+        mapType,
+        mapId,
+        map: {
+          fogMask: normalizeFog(map.fogMask),
+          surface: normalizeSurface(map.surface),
+          walls: normalizeWalls(map.walls),
+          lights: normalizeLights(map.lights),
+          templates: normalizeTemplates(map.templates),
+          pins: normalizePins(map.pins),
+          darkness: normalizeDarkness(map.darkness),
+          autoLight: map.autoLight === true,
+          fogFollow: map.fogFollow === true,
+          visionPerPlayer: map.visionPerPlayer === true,
+          audioRef: normalizeAudioRef(map.audioRef)
+        },
+        grid: normalizeGrid(item.grid),
+        tokens,
+        createdAt: String(item.createdAt || '').slice(0, 40) || new Date().toISOString(),
+        updatedAt: String(item.updatedAt || '').slice(0, 40) || new Date().toISOString()
+      });
+    }
+    return scenes;
+  }
+
+  /**
+   * Снимает текущее поле в сцену: карту, её атмосферу, сетку и фишки этой
+   * карты. Листы, чат и порядок боя не входят.
+   * @param {{name?: string, mapType?: string, mapId?: string}} input
+   * @returns {object|null}
+   */
+  captureScene(input = {}) {
+    const mapType = MAP_TYPES.includes(input.mapType) ? input.mapType : null;
+    const slot = mapType ? this.maps[mapType] : null;
+    const map = slot && Array.isArray(slot.items)
+      ? slot.items.find((item) => item.id === String(input.mapId || ''))
+      : null;
+    if (!map) return null;
+    const now = new Date().toISOString();
+    const tokens = this.tokens
+      .filter((token) => token.mapType === mapType && token.mapId === map.id)
+      .slice(0, LIMITS.maxSceneTokens)
+      .map((token) => JSON.parse(JSON.stringify(token)));
+    return {
+      id: newSceneId(),
+      name: sanitizeText(input.name, LIMITS.maxSceneName).trim() || 'Сцена',
+      mapType,
+      mapId: map.id,
+      map: {
+        fogMask: normalizeFog(map.fogMask),
+        surface: normalizeSurface(map.surface),
+        walls: normalizeWalls(map.walls),
+        lights: normalizeLights(map.lights),
+        templates: normalizeTemplates(map.templates),
+        pins: normalizePins(map.pins),
+        darkness: normalizeDarkness(map.darkness),
+        autoLight: map.autoLight === true,
+        fogFollow: map.fogFollow === true,
+        visionPerPlayer: map.visionPerPlayer === true,
+        audioRef: normalizeAudioRef(map.audioRef)
+      },
+      grid: { ...this.grid },
+      tokens,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  /**
+   * Применяет сцену к столу.
+   *
+   * Предпросмотр не трогает фишки игроков: иначе подготовка молча утащила бы
+   * их с текущей карты. При показе игрокам они переезжают на сцену, а фишки
+   * монстров, которых в сцене нет, с этой карты убираются.
+   * @param {object} scene
+   * @param {{show?: boolean}} [options]
+   * @returns {{ok: boolean, error?: string}}
+   */
+  applyScene(scene, options = {}) {
+    const show = Boolean(options.show);
+    const mapType = scene && MAP_TYPES.includes(scene.mapType) ? scene.mapType : null;
+    const slot = mapType ? this.maps[mapType] : null;
+    const map = slot && Array.isArray(slot.items)
+      ? slot.items.find((item) => item.id === scene.mapId)
+      : null;
+    if (!map) return { ok: false, error: 'Карта сцены не найдена' };
+    this.pushUndo();
+
+    const atmosphere = scene.map && typeof scene.map === 'object' ? scene.map : {};
+    map.fogMask = normalizeFog(atmosphere.fogMask);
+    map.surface = normalizeSurface(atmosphere.surface);
+    map.walls = normalizeWalls(atmosphere.walls);
+    map.lights = normalizeLights(atmosphere.lights);
+    map.templates = normalizeTemplates(atmosphere.templates);
+    map.pins = normalizePins(atmosphere.pins);
+    map.darkness = normalizeDarkness(atmosphere.darkness);
+    map.autoLight = atmosphere.autoLight === true;
+    map.fogFollow = atmosphere.fogFollow === true;
+    map.visionPerPlayer = atmosphere.visionPerPlayer === true;
+    map.audioRef = normalizeAudioRef(atmosphere.audioRef);
+    this.grid = normalizeGrid(scene.grid);
+
+    const saved = new Map();
+    for (const token of Array.isArray(scene.tokens) ? scene.tokens : []) {
+      if (token && token.id) saved.set(String(token.id), token);
+    }
+    const removed = new Set();
+    this.tokens = this.tokens.filter((token) => {
+      const onMap = token.mapType === mapType && token.mapId === map.id;
+      if (!onMap) return true;
+      if (token.assignedPlayerId) return true;
+      if (saved.has(token.id)) return true;
+      removed.add(token.id);
+      return false;
+    });
+    for (const token of saved.values()) {
+      // Игроков двигаем только при показе: предпросмотр не должен менять
+      // их положение на карте, которую они сейчас видят.
+      if (token.assignedPlayerId) continue;
+      const existing = this.tokens.find((item) => item.id === token.id);
+      const normalized = this.normalizeToken(token);
+      if (existing) Object.assign(existing, normalized);
+      else this.tokens.push(normalized);
+    }
+
+    if (show) {
+      let index = 0;
+      for (const token of this.tokens) {
+        if (!token.assignedPlayerId) continue;
+        const savedToken = saved.get(token.id);
+        if (savedToken && savedToken.mapType === mapType && savedToken.mapId === map.id) {
+          token.mapType = mapType;
+          token.mapId = map.id;
+          token.x = savedToken.x;
+          token.y = savedToken.y;
+          continue;
+        }
+        if (token.mapType === mapType && token.mapId === map.id) continue;
+        // Новая фишка игрока, которой не было в сцене: ставим в центр, но
+        // не в одну точку, иначе несколько героев лягут стопкой.
+        token.mapType = mapType;
+        token.mapId = map.id;
+        const angle = index * 1.7;
+        const radius = Math.min(0.2, 0.05 + index * 0.01);
+        token.x = Math.min(0.95, Math.max(0.05, 0.5 + Math.cos(angle) * radius));
+        token.y = Math.min(0.95, Math.max(0.05, 0.5 + Math.sin(angle) * radius));
+        index += 1;
+      }
+      map.published = true;
+      this.activeMap = mapType;
+      this.activeMapId = map.id;
+    }
+
+    // Мастер должен увидеть ту карту, которую открыл, а не соседнюю.
+    slot.activeId = map.id;
+    if (removed.size) {
+      this.initiative.entries = this.initiative.entries.filter(
+        (entry) => !removed.has(entry.refId)
+      );
+    }
+    return { ok: true, removed: removed.size, tokens: saved.size };
+  }
+
   /** @returns {object} сериализуемое состояние для сохранения в кампанию */
   serialize() {
     const players = [];
@@ -2015,6 +2248,8 @@ fogMask: normalizeFog(source.fogMask),
       maps: this.maps,
       activeMap: this.activeMap,
       activeMapId: this.activeMapId,
+      // Сцены переживают перезапуск стола: это подготовка поля, а не undo.
+      scenes: this.scenes,
       grid: this.grid,
       gameTime: this.gameTime,
       timer: this.timer,
@@ -2285,6 +2520,8 @@ fogMask: normalizeFog(source.fogMask),
       // без activeMapId означал бы «вкладка выбрана, но карты на ней нет».
       activeMap: isDm ? this.activeMap : (this.activeMapId ? this.activeMap : null),
       activeMapId: this.activeMapId,
+      // Сцены видит только мастер: в них спрятанные фишки, туман и заготовки.
+      scenes: isDm ? this.scenes.map((scene) => this.sceneSummary(scene)) : [],
       grid: this.grid,
       // Время в игре видят все: по нему мастер объявляет, что стемнело.
       gameTime: this.gameTime,
@@ -2685,6 +2922,10 @@ function newMapId() {
   return `m-${crypto.randomBytes(6).toString('hex')}`;
 }
 
+function newSceneId() {
+  return `sc-${crypto.randomBytes(6).toString('hex')}`;
+}
+
 const JOURNAL_KINDS = ['npc', 'location', 'quest', 'faction', 'item'];
 
 function newJournalId() {
@@ -2907,6 +3148,7 @@ module.exports = {
   emptyMaps,
   emptyTime,
   newMapId,
+  newSceneId,
   newTokenId,
   newSoundId,
   normalizeSheet,

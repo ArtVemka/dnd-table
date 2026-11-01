@@ -1072,14 +1072,24 @@ npx electron scripts/make-shots.js [папка]
 Так же выдаётся и идентификатор шаблона.
 `setGrid` принимает ещё `feetPerCell`.
 
+Сцены подготовки поля: `saveScene {sceneId?, name, mapType, mapId}`,
+`loadScene {sceneId, show}`, `renameScene {sceneId, name}`,
+`duplicateScene {sceneId}`, `deleteScene {sceneId}`. Мастеру приходят
+`scenesUpdated` и `sceneLoaded`; игроки получают обычный снимок после загрузки.
+
 `server → client`:
 `joined {you, state}`, `playersUpdate […]`, `characterSheetData {playerId, sheet}`,
 `characterSheetUpdated {playerId, sheet}`,
 `mapUpdated {type, items, activeId, activeMap, activeMapId}`,
 `gridUpdated {enabled, cell}`,
 `tokenCreated token`, `tokenUpdated token`, `tokenMoved {tokenId, x, y}`,
-`tokenDeleted {tokenId}`, `diceRollResult {playerId, playerName, sides, result, time}`,
-`chatMessage {from, role, text, time, isRoll?}`, `errorMessage {message}`.
+`tokenDeleted {tokenId}`, `diceRollResult {playerId, playerName, sides, result, time, label?, note?}`,
+`chatMessage {from, role, text, time}`, `errorMessage {message}`.
+
+Броски в чат не пишутся: результат приходит только событием `diceRollResult`
+в панель кубиков. `label` — подпись броска, `note` — исход проверки
+(«попадание по КД 12», «успех (СЛ 15)»). Старые строки с `isRoll` отбрасываются
+при загрузке кампании.
 
 Дополнительно: `joined` (полный снимок состояния при входе) и `renameToken`
 (переименование фишки ДМом). Тип карты `type` — один из `world` (общая),

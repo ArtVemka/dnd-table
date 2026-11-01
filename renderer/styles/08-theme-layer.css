@@ -1112,12 +1112,6 @@ body > * {
   border-left-color: var(--gold);
 }
 
-.chat__msg--roll {
-  background: var(--accent-soft);
-  border-left-color: var(--accent);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
 /* Объявления стола, их пишет сервер: режим боя, начало и конец партии.
    От реплик отличаются рамкой и отсутствием автора. */
 .chat__msg--system {
@@ -3001,22 +2995,6 @@ body::after {
 
 /* ------------------------------------------------------------------ Чат */
 
-/* Бросок помечен маленьким ромбом: в ленте он сразу отличается от реплики. */
-.chat__msg--roll {
-  position: relative;
-}
-
-.chat__msg--roll::before {
-  content: '◆';
-  position: absolute;
-  top: 7px;
-  right: 8px;
-  color: var(--gold);
-  font-size: 8px;
-  opacity: 0.55;
-  pointer-events: none;
-}
-
 /* Системное объявление получает «печать» на верхней рамке. */
 .chat__msg--system {
   position: relative;
@@ -3705,3 +3683,82 @@ body::after {
   stroke-linecap: butt;
 }
 
+
+/* ==========================================================================
+ * Материалы стола.
+ *
+ * Текстуры намеренно собраны из градиентов: они масштабируются, не тянут
+ * файлы и легко гаснут в минимализме и офисном режиме. Цвета берутся из
+ * темы, поэтому один и тот же узор по-разному звучит в шести палитрах.
+ * ========================================================================== */
+
+/* Стандарт: тёмная кожа с мелким зерном и бронзовый свет. */
+[data-theme='standart'] {
+  --mat-texture-desk:
+    radial-gradient(72% 54% at 50% -12%, color-mix(in srgb, var(--gold) 16%, transparent), transparent 64%),
+    repeating-linear-gradient(118deg, color-mix(in srgb, var(--text) 7%, transparent) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(28deg, color-mix(in srgb, var(--text) 4%, transparent) 0 2px, transparent 2px 11px);
+  --mat-texture-surface:
+    radial-gradient(90% 130% at 18% 0%, color-mix(in srgb, var(--gold) 10%, transparent), transparent 62%),
+    repeating-linear-gradient(92deg, color-mix(in srgb, var(--text) 6%, transparent) 0 1px, transparent 1px 5px),
+    repeating-linear-gradient(4deg, color-mix(in srgb, var(--bg-deep) 35%, transparent) 0 3px, transparent 3px 13px);
+}
+
+/* Лес: кора, мох и пятна света сквозь кроны. */
+[data-theme='les'] {
+  --mat-texture-desk:
+    radial-gradient(30% 24% at 20% 16%, var(--ok-soft), transparent 70%),
+    repeating-linear-gradient(84deg, rgba(0, 0, 0, 0.07) 0 1px, transparent 1px 26px),
+    repeating-linear-gradient(96deg, rgba(143, 199, 118, 0.035) 0 2px, transparent 2px 34px);
+  --mat-texture-surface:
+    repeating-linear-gradient(88deg, rgba(0, 0, 0, 0.2) 0 4px, transparent 4px 13px),
+    radial-gradient(70% 100% at 20% 0%, rgba(111, 174, 90, 0.12), transparent 62%);
+}
+
+/* Магия: астрал, звёздная пыль и тонкие рунные линии. */
+[data-theme='magiya'] {
+  --mat-texture-desk:
+    radial-gradient(1.6px 1.6px at 18% 24%, rgba(214, 198, 255, 0.8), transparent 60%),
+    radial-gradient(1.4px 1.4px at 72% 16%, rgba(198, 180, 255, 0.65), transparent 60%),
+    radial-gradient(2px 2px at 46% 62%, rgba(190, 172, 255, 0.7), transparent 60%),
+    radial-gradient(1.6px 1.6px at 86% 78%, rgba(214, 198, 255, 0.55), transparent 60%),
+    radial-gradient(34% 30% at 50% 46%, rgba(155, 124, 232, 0.16), transparent 72%);
+  --mat-texture-surface:
+    repeating-linear-gradient(90deg, rgba(155, 124, 232, 0.05) 0 1px, transparent 1px 22px),
+    radial-gradient(80% 120% at 50% 0%, rgba(155, 124, 232, 0.13), transparent 66%);
+}
+
+/* Океан: чешуя, рябь и холодный блик. */
+[data-theme='okean'] {
+  --mat-texture-desk:
+    repeating-radial-gradient(circle at 50% 120%, rgba(78, 163, 196, 0.08) 0 8px, transparent 8px 18px),
+    linear-gradient(180deg, transparent 40%, rgba(78, 163, 196, 0.12) 50%, transparent 60%);
+  --mat-texture-surface:
+    repeating-radial-gradient(circle at 0 0, rgba(78, 163, 196, 0.07) 0 6px, transparent 6px 12px),
+    radial-gradient(80% 120% at 50% 0%, rgba(78, 163, 196, 0.12), transparent 66%);
+  --mat-texture-size: 28px 18px, auto;
+}
+
+/* Трактир: доски, тёплый воск и свет свечей. */
+[data-theme='traktir'] {
+  --mat-texture-desk:
+    radial-gradient(36% 26% at 50% 0%, rgba(224, 181, 82, 0.16), transparent 70%),
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.2) 0 2px, transparent 2px 26px),
+    repeating-linear-gradient(0deg, rgba(255, 226, 190, 0.02) 0 2px, transparent 2px 7px);
+  --mat-texture-surface:
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.22) 0 2px, transparent 2px 24px),
+    radial-gradient(40% 80% at 80% 0%, rgba(224, 181, 82, 0.1), transparent 60%);
+}
+
+/* Стимпанк: латунные пластины, заклёпки и патина. */
+[data-theme='par'] {
+  --mat-texture-desk:
+    radial-gradient(38% 30% at 50% 106%, rgba(224, 168, 70, 0.16), transparent 70%),
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 5px),
+    repeating-linear-gradient(90deg, rgba(255, 226, 190, 0.015) 0 1px, transparent 1px 7px);
+  --mat-texture-surface:
+    radial-gradient(circle at 8px 8px, var(--mat-stud) 0 1.5px, transparent 2px),
+    radial-gradient(circle at calc(100% - 8px) 8px, var(--mat-stud) 0 1.5px, transparent 2px),
+    linear-gradient(180deg, rgba(201, 138, 60, 0.12), transparent 34%, rgba(0, 0, 0, 0.14));
+  --mat-texture-size: auto;
+}

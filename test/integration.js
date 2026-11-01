@@ -2286,11 +2286,11 @@ async function main() {
     // должно: 8d6 минимум 8, половина от успеха минимум 4, а сопротивление
     // огня срезает то, что прошло. Главное, что урон реально дошёл.
     assert(monster.hp < monsterBefore, 'урон по монстру от AoE не пришёл');
-    assert.strictEqual(
-      dm.log.chatMessage.some((message) => /Огр-цель/.test(message.text) && /спасбросок/.test(message.text)),
-      true,
-      'в чате нет объявления о броске монстра'
+    const saveFeed = dm.log.diceRollResult.find(
+      (roll) => /Огненный шар/.test(roll.formula) && /Огр-цель/.test(roll.note)
     );
+    assert.ok(saveFeed, 'в ленте кубиков нет спасброска монстра');
+    assert.match(saveFeed.note, /успех|провал/, 'в броске нет исхода');
   });
 
   p1.log.errorMessage.length = 0;
@@ -2468,13 +2468,16 @@ async function main() {
     assert.strictEqual(room.tokens.filter((token) => token.assignedPlayerId === P2).length, 1);
   });
 
-  /* --- аватар в сообщении о броске --- */
+  /* --- броски не пишутся в чат --- */
   const chatBefore = dm.log.chatMessage.length;
+  const diceMark = dm.log.diceRollResult.length;
   emit(p1, 'rollDice', { sides: 20 });
-  const rollMsg = await waitFor(() => dm.log.chatMessage[chatBefore], 'сообщение о броске');
-  check('в сообщении о броске лежит аватар бросившего', () => {
-    assert.strictEqual(rollMsg.isRoll, true);
-    assert.strictEqual(rollMsg.avatar, listHas('p-test-0001').avatar);
+  await waitFor(() => dm.log.diceRollResult.length > diceMark, 'бросок игрока в ленте кубиков');
+  await wait(100);
+  check('бросок идёт в ленту кубиков, а не в чат', () => {
+    const roll = dm.log.diceRollResult[dm.log.diceRollResult.length - 1];
+    assert.strictEqual(roll.playerName, listHas('p-test-0001').name);
+    assert.strictEqual(dm.log.chatMessage.length, chatBefore, 'в чат добавилась строка броска');
   });
 
   // Возврат игроков к состоянию без портрета: дальше идут проверки перезапуска
@@ -2701,31 +2704,31 @@ async function main() {
 
   // Подпись броска нужна реакции: в ленте видно, что это d20 по конкретной
   // фишке, а не случайный бросок мастера.
-  dm.log.chatMessage.length = 0;
+  dm.log.diceRollResult.length = 0;
   emit(dm, 'rollDice', { formula: 'd20', label: 'Атака по возможности: Волк → Артём' });
   const labeledRoll = await waitFor(
-    () => dm.log.chatMessage.find((message) => message.isRoll && message.text.includes('Атака по возможности')),
-    'подпись броска в чате'
+    () => dm.log.diceRollResult.find((roll) => roll.label && roll.label.includes('Атака по возможности')),
+    'подпись броска в ленте кубиков'
   );
-  check('подпись броска попадает в чат', () => {
-    assert.match(labeledRoll.text, /^Атака по возможности: Волк → Артём — /);
-    assert.match(labeledRoll.text, /d20/);
+  check('подпись броска едет в ленту кубиков', () => {
+    assert.strictEqual(labeledRoll.label, 'Атака по возможности: Волк → Артём');
+    assert.strictEqual(labeledRoll.formula, 'd20');
   });
 
-  dm.log.chatMessage.length = 0;
+  dm.log.diceRollResult.length = 0;
   emit(dm, 'rollDice', { formula: 'd20', label: 'Атака по возможности: Волк → Артём', targetAc: 1 });
   const hitRoll = await waitFor(
-    () => dm.log.chatMessage.find((message) => message.isRoll && message.text.includes('попадание по КД 1')),
+    () => dm.log.diceRollResult.find((roll) => roll.hit === true),
     'попадание по КД'
   );
   emit(dm, 'rollDice', { formula: 'd20', label: 'Атака по возможности: Волк → Артём', targetAc: 60 });
   const missRoll = await waitFor(
-    () => dm.log.chatMessage.find((message) => message.isRoll && message.text.includes('промах по КД 60')),
+    () => dm.log.diceRollResult.find((roll) => roll.hit === false),
     'промах по КД'
   );
   check('сервер сравнивает бросок с КД и пишет исход', () => {
-    assert.match(hitRoll.text, /попадание по КД 1$/);
-    assert.match(missRoll.text, /промах по КД 60$/);
+    assert.strictEqual(hitRoll.note, 'попадание по КД 1');
+    assert.strictEqual(missRoll.note, 'промах по КД 60');
   });
 
   // Реакцию союзной фишки бросает её игрок, а не мастер: сервер передаёт
@@ -2798,12 +2801,9 @@ async function main() {
     assert.strictEqual(results[0].result, null);
     assert.strictEqual(results[0].values, undefined, 'игроку ушли сами броски');
   });
-  const secretText = p1.log.chatMessage.filter((message) => message.isRoll && message.hidden).pop();
-  check('в чате тайный бросок объявляется без числа', () => {
-    assert.ok(secretText, 'нет объявления тайного броска');
-    assert.strictEqual(secretText.from, 'Мастер');
-    assert.match(secretText.text, /тайно$/, `текст: ` + secretText.text);
-    assert.ok(!/\d/.test(secretText.text.replace(/d\d+/g, '')), `в тексте есть число: ${secretText.text}`);
+  check('тайный бросок не объявляется в чате', () => {
+    assert.ok(!p1.log.chatMessage.some((message) => message.isRoll),
+      'в чате появилась строка броска');
   });
   check('в истории бросков сервера число тайного броска остаётся', () => {
     const stored = room.diceHistory.filter((roll) => roll.hidden).pop();
@@ -2863,19 +2863,19 @@ async function main() {
     assert.ok(hidden.length >= 1 && hidden.every((roll) => roll.result >= 1));
   });
 
-  check('бросок объявляется в общем чате (виден и тем, кто подключится позже)', () => {
-    const announcement = p1.log.chatMessage
-      .filter((message) => message.isRoll && message.text.startsWith('бросил 2d6+3')).pop();
-    assert.ok(announcement, 'нет объявления броска 2d6+3 в чате');
-    assert.strictEqual(announcement.from, 'Артём');
-    assert.match(announcement.text, /^бросил 2d6\+3: \d+$/, `текст: ${announcement.text}`);
-    assert.ok(room.chatHistory.some((message) => message.isRoll), 'броска нет в истории чата на сервере');
+  check('бросок уходит в ленту кубиков и не попадает в чат', () => {
+    const feed = p1.log.diceRollResult
+      .filter((roll) => roll.formula === '2d6+3').pop();
+    assert.ok(feed, 'нет броска 2d6+3 в ленте кубиков');
+    assert.strictEqual(feed.playerName, 'Артём');
+    assert.ok(feed.result >= 4, `результат: ${feed.result}`);
+    assert.ok(!room.chatHistory.some((message) => message.isRoll), 'бросок осел в истории чата');
   });
-  check('отброшенные кости видны в тексте броска', () => {
-    const withDrop = p1.log.chatMessage
-      .filter((message) => message.isRoll && message.text.includes('отброшено')).pop();
-    assert.ok(withDrop, 'бросок с отброшенными костями не объяснён в чате');
-    assert.match(withDrop.text, /^бросил 4d6dl1: \d+ \(отброшено \d\)$/, `текст: ${withDrop.text}`);
+  check('отброшенные кости видны в самом броске', () => {
+    const withDrop = p1.log.diceRollResult
+      .filter((roll) => roll.formula === '4d6dl1' && roll.droppedValues.length).pop();
+    assert.ok(withDrop, 'броска с отброшенными костями нет в ленте');
+    assert.strictEqual(withDrop.droppedValues.length, 1, 'отброшенная кость потерялась');
   });
 
   /* ---------------------------------------------------- спасброски смерти */
@@ -2954,11 +2954,11 @@ async function main() {
       assert.strictEqual(deathNow.deathSavesSuccesses, 0, 'счётчики не обнулились');
     }
   });
-  check('спасбросок попадает в чат с названием броска', () => {
-    const note = dm.log.chatMessage.filter((message) => /спасбросок смерти/.test(message.text)).pop();
-    assert(note, 'броска смерти нет в чате');
-    assert(/спасбросок смерти: d20 \d+/.test(note.text), `текст: ${note.text}`);
-    assert(note.text.length > 'спасбросок смерти: d20 '.length, 'в тексте нет исхода броска');
+  check('спасбросок уходит в ленту кубиков с исходом', () => {
+    const note = dm.log.diceRollResult.filter((roll) => roll.isDeathSave).pop();
+    assert(note, 'броска смерти нет в ленте кубиков');
+    assert(note.result >= 1 && note.result <= 20, `результат: ${note.result}`);
+    assert.ok(note.note, 'у броска нет исхода');
   });
 
   // Исходы, которые на живой столе выпадают случайно, проверяются по правилам
@@ -4266,14 +4266,13 @@ async function main() {
     assert.strictEqual(room.chatHistory.length, 0);
     assert.strictEqual(room.snapshotFor({ playerId: P1, role: ROLE_PLAYER }).chatHistory.length, 0);
   });
-  // Оставляем в ленте все три вида сообщений: ниже проверяется, что история
+  // Оставляем в ленте оба вида сообщений: ниже проверяется, что история
   // переживает перезапуск, и пустая лента делала бы эту проверку бессмысленной.
   emit(dm, 'chatMessage', { text: 'Привет, стол!' });
   emit(dm, 'rollDice', { formula: 'd20' });
   emit(dm, 'chatImage', { image: PNG_1PX, text: 'Хендаут после очистки' });
   await waitFor(
-    () => room.chatHistory.some((message) => message.isRoll)
-      && room.chatHistory.some((message) => message.text === 'Привет, стол!')
+    () => room.chatHistory.some((message) => message.text === 'Привет, стол!')
       && room.chatHistory.some((message) => message.image),
     'сообщения после очистки'
   );
@@ -4980,7 +4979,8 @@ async function main() {
   });
   check('история бросков и чата сохраняется', () => {
     assert.ok(restored.diceHistory.length > 0, 'нет истории бросков');
-    assert.ok(restored.chatHistory.some((message) => message.isRoll), 'нет объявления броска в чате');
+    assert.ok(!restored.chatHistory.some((message) => message.isRoll),
+      'броски вернулись в чат после перезапуска');
     assert.ok(restored.chatHistory.some((message) => message.text === 'Привет, стол!'), 'нет обычного сообщения');
     assert.ok(
       restored.chatHistory.some((message) => message.image && /^\/files\//.test(message.image)),

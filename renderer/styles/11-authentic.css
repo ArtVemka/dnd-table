@@ -1,0 +1,563 @@
+/* ==================================================================
+ * Атмосферный слой: материалы, объём, закладки и дневник бросков.
+ *
+ * Файл подключается после 10-perf-mode.css: офисный режим гасит тени и
+ * фильтры через !important, а минимализм отключает текстуры ниже.
+ * Все цвета берутся из токенов, чтобы не спорить с палитрами и проверкой
+ * контраста.
+ *
+ * Правило специфичности: поверхности, которые темы раскрашивают сами
+ * (.panel, .btn, .input в 09-theme-studio.css), здесь не перебиваются.
+ * Если материал обязан выиграть (медальон карточки), селектор получает
+ * префикс [data-theme] или html[data-theme]; без него правило проиграет
+ * теме и элемент останется без нужного цвета.
+ * ================================================================== */
+
+/* ------------------------------------------------------ Светлый тон */
+
+/* Мелкое зерно тёмной темы на светлой бумаге читается как штакетник:
+   стол остаётся почти чистым листом с мягким светом, а текстуры живут
+   на панелях и карточках. */
+[data-tone='light'] {
+  --mat-texture-desk: radial-gradient(72% 54% at 50% -12%, var(--wash), transparent 64%);
+}
+
+/* ------------------------------------------------------------ Иконки */
+
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* ------------------------------------------------------------ Стол */
+
+body {
+  background-image: var(--mat-texture-desk);
+  background-size: var(--mat-texture-size);
+  background-attachment: fixed;
+}
+
+/* ---------------------------------------------------------- Панели */
+
+.panel {
+  border-color: var(--mat-edge);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    inset 0 -2px 0 var(--mat-shadow-soft),
+    0 2px 0 var(--mat-edge),
+    0 8px 18px var(--mat-shadow);
+}
+
+.panel__title {
+  font-family: var(--font-title);
+  letter-spacing: var(--title-tracking);
+  text-shadow: 0 1px 0 var(--mat-shadow), 0 0 10px var(--accent-soft);
+}
+
+/* Бронзовая заклёпка вместо ромба перед названием раздела. */
+.panel__title::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, var(--mat-highlight), var(--mat-stud) 52%, var(--mat-edge) 100%);
+  box-shadow:
+    inset 0 1px 1px var(--mat-highlight),
+    0 1px 0 var(--mat-shadow);
+  opacity: 1;
+}
+
+.panel__fold {
+  border: 1px solid var(--mat-edge);
+  background: var(--mat-leather-2);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    0 1px 0 var(--mat-edge);
+}
+
+.panel__fold:hover {
+  background: var(--mat-leather);
+}
+
+/* --------------------------------------------------------- Кнопки */
+
+.btn {
+  background-image: var(--mat-texture-button), linear-gradient(180deg, var(--surface-3), var(--surface-2));
+  background-blend-mode: soft-light, normal;
+  border-color: var(--mat-edge);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    inset 0 -2px 0 var(--mat-shadow-soft),
+    0 3px 0 var(--mat-edge),
+    0 6px 12px var(--mat-shadow);
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    inset 0 -2px 0 var(--mat-shadow-soft),
+    0 4px 0 var(--mat-edge),
+    0 8px 16px var(--mat-shadow);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow:
+    inset 0 2px 5px var(--mat-shadow),
+    inset 0 -1px 0 var(--mat-highlight),
+    0 1px 0 var(--mat-edge);
+}
+
+.btn--accent {
+  background-image: var(--mat-texture-accent), var(--mat-texture-button);
+  background-blend-mode: normal, soft-light;
+  border-color: color-mix(in srgb, var(--accent) 68%, var(--mat-edge));
+  color: var(--mat-paper-ink);
+  text-shadow: 0 1px 0 var(--mat-highlight);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    inset 0 -2px 0 var(--mat-shadow-soft),
+    0 3px 0 var(--mat-edge),
+    0 8px 18px var(--accent-soft);
+}
+
+.btn--danger {
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--danger) 58%, var(--surface-2)), color-mix(in srgb, var(--danger) 34%, var(--surface))),
+    var(--mat-texture-button);
+}
+
+.btn--ghost {
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.btn--ghost:hover:not(:disabled) {
+  box-shadow: none;
+}
+
+.btn--ghost:active:not(:disabled) {
+  box-shadow: inset 0 2px 4px var(--mat-shadow);
+}
+
+/* ---------------------------------------------------------- Поля */
+
+.input,
+.textarea,
+.select,
+.field__input {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 22%, var(--surface)), var(--surface));
+  border-color: var(--mat-edge);
+  box-shadow:
+    inset 0 2px 4px var(--mat-shadow),
+    inset 0 -1px 0 var(--mat-highlight);
+}
+
+.input:focus,
+.textarea:focus,
+.select:focus,
+.field__input:focus {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 2px 4px var(--mat-shadow),
+    0 0 0 2px var(--accent-soft);
+}
+
+/* ----------------------------------------------------------- Карты */
+
+.card {
+  background:
+    var(--mat-texture-surface),
+    linear-gradient(160deg, var(--mat-paper), color-mix(in srgb, var(--mat-paper) 84%, var(--mat-edge)));
+  background-blend-mode: soft-light, normal;
+  border-color: var(--mat-edge);
+  color: var(--mat-paper-ink);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--mat-paper) 70%, #fff),
+    inset 0 -3px 0 var(--mat-shadow-soft),
+    0 3px 0 var(--mat-edge),
+    0 10px 22px var(--mat-shadow);
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--mat-paper) 70%, #fff),
+    inset 0 -3px 0 var(--mat-shadow-soft),
+    0 4px 0 var(--mat-edge),
+    0 14px 26px var(--mat-shadow);
+}
+
+.card__title {
+  color: var(--mat-paper-ink);
+}
+
+/* Главная пара действий: тот же пергамент, но с акцентной кромкой, чтобы
+ * взгляд цеплялся за неё раньше остальных карточек. */
+.card--primary {
+  border-color: var(--accent);
+  background:
+    var(--mat-texture-surface),
+    linear-gradient(160deg, color-mix(in srgb, var(--mat-paper) 84%, var(--accent)), var(--mat-paper));
+  background-blend-mode: soft-light, normal;
+}
+
+.card--primary .card__title {
+  color: var(--mat-paper-ink);
+}
+
+.card--primary .card__icon {
+  border-color: var(--mat-edge);
+  color: var(--mat-paper-ink);
+}
+
+.card__text {
+  color: color-mix(in srgb, var(--mat-paper-ink) 72%, var(--mat-paper));
+}
+
+/* Медальон в любой теме: пергаментная печать с тёмной гравировкой. Тема
+   задаёт только форму и кромку, иначе в «Лесу» и «Стимпанке» глиф ложится
+   тёмным по тёмному и карточка выглядит сломанной. */
+[data-theme] .card__icon {
+  color: var(--mat-paper-ink);
+  background:
+    radial-gradient(circle at 34% 26%, color-mix(in srgb, var(--mat-paper) 60%, #fff), var(--mat-paper) 58%, color-mix(in srgb, var(--mat-paper) 76%, var(--mat-edge)) 100%);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--mat-paper) 80%, #fff),
+    inset 0 -2px 3px var(--mat-shadow-soft),
+    0 2px 0 var(--mat-edge);
+}
+
+/* Знак на карточке читается как оттиск печати, а не как мелкая пиктограмма. */
+.card__icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.home__title {
+  font-family: var(--font-title);
+  text-shadow: 0 2px 0 var(--mat-shadow), 0 0 18px var(--accent-soft);
+}
+
+/* Монограмма D&D латиницей: единственное место, где MedievalSharp читается
+   полностью, кириллицы в нём нет. */
+.home__logo {
+  font-family: var(--font-fantasy);
+}
+
+/* ---------------------------------------------------------- Вкладки */
+
+.tabs {
+  background-image: var(--mat-texture-surface);
+  background-blend-mode: soft-light;
+  border-color: var(--mat-edge);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    0 2px 0 var(--mat-edge);
+}
+
+.tabs__btn {
+  background-image: var(--mat-texture-button);
+  background-blend-mode: soft-light;
+  color: var(--text-dim);
+  box-shadow:
+    inset 0 0 0 1px var(--mat-edge),
+    inset 0 1px 0 var(--mat-highlight),
+    0 2px 0 var(--mat-edge);
+}
+
+.tabs__btn:hover {
+  color: var(--text);
+  background-color: var(--mat-leather-2);
+}
+
+.tabs__btn.is-active {
+  color: var(--mat-paper-ink);
+  background-image: var(--mat-texture-accent), var(--mat-texture-button);
+  background-blend-mode: normal, soft-light;
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    inset 0 -2px 0 var(--mat-shadow-soft),
+    0 3px 0 var(--mat-edge);
+  transform: translateY(-1px);
+}
+
+/* ----------------------------------------------------------- Шапка */
+
+.topbar {
+  background-image: var(--mat-texture-surface);
+  background-blend-mode: soft-light;
+  border-bottom-color: var(--mat-edge);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    0 2px 0 var(--mat-shadow-soft),
+    0 4px 14px var(--mat-shadow);
+}
+
+.topbar__title {
+  font-family: var(--font-title);
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 0 var(--mat-shadow);
+}
+
+/* ------------------------------------------------------- Карта */
+
+.panel--map {
+  border-width: 2px;
+  border-color: var(--mat-edge);
+  box-shadow:
+    inset 0 0 0 1px var(--mat-shadow-soft),
+    inset 0 2px 8px var(--mat-shadow),
+    0 3px 0 var(--mat-edge),
+    0 12px 26px var(--mat-shadow);
+}
+
+.map-toolbar .map-tool {
+  background-image: var(--mat-texture-button);
+  background-blend-mode: soft-light;
+  border-color: var(--mat-edge);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    0 2px 0 var(--mat-edge);
+}
+
+.map-tool.is-on {
+  background-image: var(--mat-texture-accent), var(--mat-texture-button);
+  background-blend-mode: normal, soft-light;
+}
+
+/* --------------------------------------------------- Кубики и дневник */
+
+.dice__quick-btn {
+  background-image: var(--mat-texture-button), linear-gradient(180deg, var(--surface-3), var(--surface-2));
+  background-blend-mode: soft-light, normal;
+  border-color: var(--mat-edge);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    inset 0 -2px 0 var(--mat-shadow-soft),
+    0 3px 0 var(--mat-edge);
+  font-family: var(--font-fantasy);
+}
+
+.dice__quick-btn:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: inset 0 2px 4px var(--mat-shadow), 0 1px 0 var(--mat-edge);
+}
+
+.dice__controls .btn--accent {
+  min-height: 42px;
+  padding-inline: 22px;
+  font-family: var(--font-title);
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background-image: var(--mat-texture-accent), var(--mat-texture-button);
+  background-blend-mode: normal, soft-light;
+  box-shadow:
+    inset 0 2px 0 var(--mat-highlight),
+    inset 0 -3px 0 var(--mat-shadow-soft),
+    0 5px 0 var(--mat-edge),
+    0 9px 16px var(--mat-shadow);
+}
+
+.dice__controls .btn--accent:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 3px 6px var(--mat-shadow),
+    0 1px 0 var(--mat-edge);
+}
+
+.dice__history {
+  padding: 12px 14px 12px 30px;
+  border: 1px solid var(--mat-edge);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, var(--mat-paper), color-mix(in srgb, var(--mat-paper) 84%, var(--mat-edge)));
+  box-shadow:
+    inset 0 0 18px var(--mat-shadow-soft),
+    inset 14px 0 0 color-mix(in srgb, var(--mat-paper-ink) 6%, transparent);
+  color: var(--mat-paper-ink);
+  font-family: var(--font-hand);
+}
+
+.dice__row {
+  border-bottom: 1px dashed var(--mat-rule);
+  background: none;
+  border-radius: 0;
+  color: var(--mat-paper-ink);
+  /* 12.5 px рукописью на бумаге читаются впритык: строка дневника должна
+     читаться, а не разбираться. */
+  font-size: 13.5px;
+  padding: 6px 8px;
+}
+
+.dice__row-name {
+  font-family: var(--font-hand);
+  color: var(--mat-paper-ink);
+}
+
+.dice__row-time {
+  color: color-mix(in srgb, var(--mat-paper-ink) 62%, var(--mat-paper));
+}
+
+.dice__row-die,
+.dice__row-result {
+  font-family: var(--font-num);
+  color: var(--mat-paper-ink);
+}
+
+.dice__row-result {
+  font-weight: 600;
+}
+
+.dice__history-section .section__title {
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------- Окна */
+
+.modal,
+.dialog {
+  background-image: var(--mat-texture-surface);
+  background-blend-mode: soft-light;
+  border-color: var(--mat-edge);
+  box-shadow:
+    inset 0 1px 0 var(--mat-highlight),
+    0 4px 0 var(--mat-edge),
+    0 18px 40px var(--mat-shadow);
+}
+
+.modal__title,
+.dialog__title {
+  font-family: var(--font-title);
+  text-shadow: 0 1px 0 var(--mat-shadow);
+}
+
+/* --------------------------------------------------- Минимализм */
+
+/* Минимализм оставляет палитру, но убирает материал, объём и рукопись. */
+[data-focus='on'] {
+  --font-title: var(--font);
+  --font-num: var(--font);
+  --font-hand: var(--font);
+  --font-fantasy: var(--font);
+  --mat-texture-desk: none;
+  --mat-texture-surface: none;
+  --mat-texture-button: none;
+  --mat-texture-accent: none;
+}
+
+[data-focus='on'] body,
+[data-focus='on'] .panel,
+[data-focus='on'] .card,
+[data-focus='on'] .tabs,
+[data-focus='on'] .topbar,
+[data-focus='on'] .modal,
+[data-focus='on'] .dialog,
+[data-focus='on'] .dice__history,
+[data-focus='on'] .dice__quick-btn,
+[data-focus='on'] .btn,
+[data-focus='on'] .input,
+[data-focus='on'] .textarea,
+[data-focus='on'] .select,
+[data-focus='on'] .field__input {
+  background-image: none !important;
+}
+
+[data-focus='on'] .panel,
+[data-focus='on'] .card,
+[data-focus='on'] .tabs,
+[data-focus='on'] .topbar,
+[data-focus='on'] .modal,
+[data-focus='on'] .dialog,
+[data-focus='on'] .dice__quick-btn,
+[data-focus='on'] .btn {
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+[data-focus='on'] .card {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* В плоском режиме акцент остаётся, но без металла и объёма: иначе тёмные
+   чернила ложатся на тёмную заливку и подпись исчезает. */
+[data-focus='on'] .btn--accent {
+  background-color: var(--accent);
+  color: var(--mat-paper-ink);
+}
+
+[data-focus='on'] .tabs__btn.is-active {
+  background-color: var(--accent-soft);
+  color: var(--text);
+}
+
+[data-focus='on'] .tabs__btn {
+  background-image: none !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+[data-focus='on'] .card .card__icon {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+[data-focus='on'] .card__title {
+  color: var(--text);
+}
+
+[data-focus='on'] .card__text {
+  color: var(--muted);
+}
+
+[data-focus='on'] .dice__history {
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font);
+}
+
+[data-focus='on'] .dice__row,
+[data-focus='on'] .dice__row-name,
+[data-focus='on'] .dice__row-time,
+[data-focus='on'] .dice__row-die,
+[data-focus='on'] .dice__row-result {
+  color: var(--text);
+}
+
+/* ------------------------------------------------------ Офисный ПК */
+
+html[data-perf='on'] body,
+html[data-perf='on'] .panel,
+html[data-perf='on'] .card,
+html[data-perf='on'] .tabs,
+html[data-perf='on'] .topbar,
+html[data-perf='on'] .modal,
+html[data-perf='on'] .dialog,
+html[data-perf='on'] .dice__history,
+html[data-perf='on'] .dice__quick-btn,
+html[data-perf='on'] .btn,
+html[data-perf='on'] .input,
+html[data-perf='on'] .textarea,
+html[data-perf='on'] .select,
+html[data-perf='on'] .field__input {
+  background-image: none !important;
+}
+
+@media (max-width: 760px) {
+  .card {
+    box-shadow:
+      inset 0 1px 0 var(--mat-highlight),
+      0 2px 0 var(--mat-edge);
+  }
+
+  .dice__history {
+    padding-left: 20px;
+  }
+}

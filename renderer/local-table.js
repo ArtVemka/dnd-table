@@ -1196,20 +1196,12 @@
           modifier: 0,
           result: die,
           isDeathSave: true,
+          note: outcome,
           hidden: false,
           time
         };
         state.diceHistory.push(roll);
         emitTo('diceRollResult', roll);
-        pushChat({
-          from: playerName,
-          playerId,
-          role: 'player',
-          avatar: state.avatar || null,
-          text: `спасбросок смерти: d20 ${die} — ${outcome}`,
-          isRoll: true,
-          time
-        });
       },
 
       resetDeathSaves() {
@@ -1245,15 +1237,6 @@
           state.diceHistory = state.diceHistory.slice(-MAX_DICE_HISTORY);
         }
         emitTo('diceRollResult', roll);
-        pushChat({
-          from: playerName,
-          playerId,
-          role: 'player',
-          avatar: state.avatar || null,
-          text: DnDDice.describeRoll(roll),
-          isRoll: true,
-          time
-        });
       },
 
       setAvatar(payload) {

@@ -63,36 +63,31 @@
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
-  /** Иконка панели карты из тех же штриховых контуров, что и вкладки. */
-  function mapIcon(paths) {
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('viewBox', '0 0 16 16');
-    svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('focusable', 'false');
-    for (const d of paths) {
-      const path = document.createElementNS(SVG_NS, 'path');
-      path.setAttribute('d', d);
-      svg.appendChild(path);
-    }
-    return svg;
+  /**
+   * Иконка панели карты из общего спрайта: имя символа без префикса `i-`.
+   * @param {string} glyph
+   * @returns {SVGElement}
+   */
+  function mapIcon(glyph) {
+    return window.DnDIcons.use(glyph);
   }
 
   /**
    * Компактная кнопка панели карты: иконка и подпись, спрятанная от глаз,
    * но оставленная для экранного диктора и поиска по тексту.
    */
-  function fillMapTool(node, label, title, paths) {
+  function fillMapTool(node, label, title, glyph) {
     node.title = title;
     node.setAttribute('aria-label', label);
-    node.appendChild(mapIcon(paths));
+    node.appendChild(mapIcon(glyph));
     node.appendChild(el('span', 'map-tool__label', label));
     return node;
   }
 
-  function mapTool(label, title, paths) {
+  function mapTool(label, title, glyph) {
     const button = el('button', 'btn btn--ghost map-tool');
     button.type = 'button';
-    return fillMapTool(button, label, title, paths);
+    return fillMapTool(button, label, title, glyph);
   }
 
   /**
@@ -2315,6 +2310,20 @@
     }
 
     /**
+     * Показать карту сцены мастеру, не меняя того, что видят игроки:
+     * activeMap остаётся прежним до кнопки «Показать игрокам».
+     * @param {string} type
+     */
+    showMap(type) {
+      if (!DnD.MAP_TYPES.includes(type)) return;
+      this.viewedMap = type;
+      this.playerPeek = null;
+      this.lightTabOpen = false;
+      if (this.editing) this.closeEditor();
+      this.render();
+    }
+
+    /**
      * Вкладка «Свет»: та же карта под ней, но вместо управления картой мастер
      * видит настройки освещения.
      *
@@ -2510,7 +2519,7 @@
         this.fogMode
           ? 'Рисуем открытые участки. Выключите, чтобы двигать фишки'
           : 'Включить режим тумана и открывать участки карты',
-        ['M4 11h7a2.5 2.5 0 0 0 .3-5 3.5 3.5 0 0 0-6.7-.7A2.6 2.6 0 0 0 4 11z']
+        'cloud'
       );
       mode.classList.add('btn--tiny');
       mode.classList.toggle('btn--accent', this.fogMode);
@@ -2572,10 +2581,7 @@
       visionLabel.appendChild(el('span', null, 'зрение по фишке'));
       box.appendChild(visionLabel);
 
-      const openAll = mapTool('Открыть всё', 'Убрать туман с карты целиком', [
-        'M1.8 8s2.3-3.8 6.2-3.8S14.2 8 14.2 8s-2.3 3.8-6.2 3.8S1.8 8 1.8 8z',
-        'M8 6.4a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z'
-      ]);
+      const openAll = mapTool('Открыть всё', 'Убрать туман с карты целиком', 'eye');
       openAll.classList.add('btn--tiny');
       openAll.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -2583,11 +2589,7 @@
       });
       box.appendChild(openAll);
 
-      const coverAll = mapTool('Закрыть всё', 'Снова закрыть карту целиком', [
-        'M2 2l12 12',
-        'M6.2 4.5A7.6 7.6 0 0 1 8 4.2c3.9 0 6.2 3.8 6.2 3.8a9 9 0 0 1-2 2.3',
-        'M4 6.1A9.6 9.6 0 0 0 1.8 8S4.1 11.8 8 11.8c.7 0 1.3-.1 1.9-.3'
-      ]);
+      const coverAll = mapTool('Закрыть всё', 'Снова закрыть карту целиком', 'eye-off');
       coverAll.classList.add('btn--tiny');
       coverAll.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -5242,7 +5244,7 @@
         el('label', 'btn btn--ghost map-tool'),
         count ? 'Загрузить ещё карту' : 'Загрузить карту',
         'Добавить карту в эту вкладку',
-        ['M8 11V3', 'M5 6l3-3 3 3', 'M3 12v1.5h10V12']
+        'upload'
       );
       const file = el('input');
       file.type = 'file';
@@ -5262,16 +5264,29 @@
         const draw = mapTool(
           map ? 'Рисовать поверх карты' : 'Нарисовать карту',
           map ? 'Открыть холст поверх этой карты' : 'Создать карту на холсте',
-          ['M3 13l1-3 7-7 2 2-7 7z', 'M9 4l2 2']
+          'quill'
         );
         draw.addEventListener('click', () => this.openEditor());
         this.toolbar.appendChild(draw);
+
+        const scenes = mapTool(
+          'Сцены',
+          'Подготовленные поля: сохранить, открыть у себя и показать игрокам',
+          'scroll'
+        );
+        scenes.classList.add('map-scenes__toggle');
+        scenes.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (this.handlers.onOpenScenes) this.handlers.onOpenScenes();
+        });
+        this.scenesButton = scenes;
+        this.toolbar.appendChild(scenes);
       }
 
       const gridButton = mapTool(
         this.grid.enabled ? 'Сетка: вкл' : 'Сетка: выкл',
         `Клетка ${this.grid.cell}×${this.grid.cell} px — ровно по размеру фишки`,
-        ['M2 6h12M2 10h12M6 2v12M10 2v12']
+        'grid'
       );
       gridButton.classList.add('toggle');
       gridButton.classList.toggle('is-on', this.grid.enabled);
@@ -5306,7 +5321,7 @@
         this.combat.enabled
           ? 'Бой идёт: фишка идёт по клеткам. Нажмите на клетку, чтобы отправить её туда'
           : 'Включить режим боя: ход по клеткам с подсчётом расстояния',
-        ['M3 3l10 10M13 3L3 13', 'M3 3h2M11 3h2']
+        'swords'
       );
       combatButton.classList.add('toggle');
       combatButton.classList.toggle('is-on', this.combat.enabled);
@@ -5330,7 +5345,7 @@
         const templateButton = mapTool(
           'Шаблон',
           'Поставить шаблон заклинания: сфера, конус или линия',
-          ['M8 2v2M8 12v2M2 8h2M12 8h2', 'M8 5.4a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2z']
+          'rune'
         );
         templateButton.classList.add('map-template__toggle');
         templateButton.classList.toggle('is-on', Boolean(this.templateMenu && !this.templateMenu.hidden));
@@ -5350,7 +5365,7 @@
         const soundButton = mapTool(
           map && map.audioRef ? 'Звук карты: есть' : 'Звук',
           'Саундборд, эмбиент этой карты и боевой луп',
-          ['M2.5 6.5h2.5L8.5 3v10L5 9.5H2.5z', 'M11 6a3.2 3.2 0 0 1 0 4']
+          'horn'
         );
         soundButton.classList.add('map-sound__toggle');
         soundButton.classList.toggle('is-on', Boolean(this.soundMenu && !this.soundMenu.hidden));
@@ -5369,7 +5384,7 @@
         const activate = mapTool(
           shown ? '● Показана игрокам' : 'Показать игрокам',
           shown ? 'Эту карту сейчас видят игроки' : 'Показать эту карту всем игрокам',
-          ['M2.5 3h11v8h-11z', 'M6 13h4', 'M6.8 6.2l3 1.8-3 1.8z']
+          'eye'
         );
         activate.disabled = shown;
         activate.addEventListener('click', () => {
@@ -5380,7 +5395,7 @@
         const remove = mapTool(
           'Удалить карту',
           count > 1 ? `Останется карт во вкладке: ${count - 1}` : 'Вкладка станет пустой',
-          ['M4 5h8M6.5 5V3h3v2M5.5 5l.7 8h3.6l.7-8']
+          'trash'
         );
         remove.classList.add('btn--danger');
         remove.addEventListener('click', () => {
@@ -6444,19 +6459,6 @@
       });
       this.clearButton = wipe;
       search.appendChild(wipe);
-
-      // Фильтр «только броски»: скрывает разговоры через CSS-класс лога,
-      // поэтому перерисовка истории не нужна и живые сообщения тоже работают.
-      const filter = el('button', 'btn btn--ghost btn--tiny chat__filter', 'Только броски');
-      filter.type = 'button';
-      filter.title = 'Показывать в ленте одни броски: разговоры прячутся';
-      filter.addEventListener('click', () => {
-        this.filterRolls = !this.filterRolls;
-        filter.classList.toggle('is-active', this.filterRolls);
-        this.log.classList.toggle('is-rolls-only', this.filterRolls);
-      });
-      this.filterButton = filter;
-      search.appendChild(filter);
       this.root.appendChild(search);
 
       const log = el('div', 'chat__log');
@@ -6673,7 +6675,6 @@
       const row = el('div', 'chat__msg');
       if (message.id) row.dataset.messageId = message.id;
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
-      if (message.isRoll) row.classList.add('chat__msg--roll');
       if (message.whisper) row.classList.add('chat__msg--whisper');
       // Служебные объявления стола, например о режиме боя: их пишет сервер, а
       // не человек, и подпись автора у них лишняя.
@@ -6685,17 +6686,10 @@
         return;
       }
       if (message.role === 'dm') row.classList.add('chat__msg--dm');
-      if (message.isRoll) row.classList.add('chat__msg--roll');
       const resolve = this.handlers.resolveUrl || ((url) => url || '');
       const head = el('div', 'chat__head');
-      // Портрет только у бросков: он отвечает на «кто именно бросил», а у
-      // обычной реплики автор и так виден по имени.
-      if (message.isRoll && message.avatar) {
-        head.appendChild(avatarNode(resolve(message.avatar), message.from, 'chat__avatar'));
-      }
       head.appendChild(el('span', 'chat__author', message.from));
       if (message.role === 'dm') head.appendChild(el('span', 'badge badge--dm', 'ДМ'));
-      if (message.isRoll) head.appendChild(el('span', 'badge badge--roll', 'бросок'));
       if (message.whisper) {
         // Игрок шепчет мастеру, мастер — выбранному игроку: подпись говорит,
         // кому именно адресована тайна.
@@ -6711,7 +6705,7 @@
       // Правка и удаление одного сообщения: только мастер. Карандаш и крестик
       // живут в шапке строки, чтобы не отнимать место у текста.
       if (this.handlers.canManage && this.handlers.canManage() && message.id
-        && !message.system && !message.isRoll) {
+        && !message.system) {
         const edit = el('button', 'chat__edit', '✎');
         edit.type = 'button';
         edit.title = 'Изменить сообщение';
@@ -6746,7 +6740,7 @@
         row.appendChild(open);
       }
       if (message.text) {
-        row.appendChild(el('div', 'chat__text', message.isRoll ? `🎲 ${message.text}` : message.text));
+        row.appendChild(el('div', 'chat__text', message.text));
       }
       parent.appendChild(row);
       if (parent !== this.log) return;
@@ -7012,7 +7006,7 @@
      * @returns {string}
      */
     rollLabel(roll) {
-      return roll.formula || `d${roll.sides}`;
+      return roll.label || roll.formula || `d${roll.sides}`;
     }
 
     /**
@@ -7132,6 +7126,9 @@
       if (!known) value.classList.add('is-secret');
       value.classList.add('is-pop');
       this.last.appendChild(value);
+      // Исход проверки: «попадание по КД 12», «успех (СЛ 15)». Раньше это
+      // писала строка чата, теперь бросок объясняет себя сам.
+      if (roll.note) this.last.appendChild(el('span', 'dice__verdict', roll.note));
 
       // Отдельные грани: видно, что выпало на каждой кости, а не только сумму.
       // Отброшенные (dl/kh) гаснут, оставленные идут в итог.
@@ -7201,6 +7198,7 @@
      */
     appendRow(roll, parent = this.history) {
       const row = el('div', 'dice__row');
+      if (roll.note) row.title = roll.note;
       row.appendChild(el('span', 'dice__row-name', roll.playerName));
       const known = this.showsResult(roll);
       const label = el('span', 'dice__row-die', this.rollLabel(roll));
@@ -7754,27 +7752,6 @@
       this.moveAllButton = moveAll;
       this.root.appendChild(moveAll);
 
-      // Снимок сцены: сохранить раскладку и один кликом вернуть её назад.
-      // Эфемерные события, но откат через Ctrl+Z сцена восстановит дёшево.
-      const snapshot = el('button', 'btn btn--ghost btn--tiny', 'Снимок сцены');
-      snapshot.type = 'button';
-      snapshot.title = 'Запомнить раскладку всех фишек: откуда, на какой карте';
-      snapshot.hidden = true;
-      snapshot.addEventListener('click', () => {
-        if (this.handlers.onCreateSceneSnapshot) this.handlers.onCreateSceneSnapshot();
-      });
-      this.snapshotButton = snapshot;
-      this.root.appendChild(snapshot);
-      const restore = el('button', 'btn btn--ghost btn--tiny', 'Вернуть снимок');
-      restore.type = 'button';
-      restore.title = 'Вернуть фишки на сохранённые места одним Ctrl+Z назад';
-      restore.hidden = true;
-      restore.addEventListener('click', () => {
-        if (this.handlers.onRestoreSceneSnapshot) this.handlers.onRestoreSceneSnapshot();
-      });
-      this.restoreButton = restore;
-      this.root.appendChild(restore);
-
       this.note = el('div', 'muted', 'Правый клик по фишке на карте или по строке ниже — переименовать, назначить игроку, задать изображение или удалить.');
       this.root.appendChild(this.note);
 
@@ -7913,8 +7890,6 @@
       // Кнопка массового вывода сцен: только мастеру и только при показанной
       // карте, иначе сервер всё равно откажет.
       this.moveAllButton.hidden = !isDm || training;
-      this.snapshotButton.hidden = !isDm || training;
-      this.restoreButton.hidden = !isDm || training;
       this.note.textContent = isDm
         ? 'Вкладки «Союзники» и «Враги» делят стол: сторона задаёт, кто по кому бьёт реакцией. Новая фишка появляется скрытой: расставьте её и нажмите «Видна». Правый клик по фишке — переименовать, назначить, сменить сторону, изображение, скрыть или удалить.'
         : 'Проверка без сети: созданная фишка сразу ваша — её можно двигать по карте и задать картинку.';

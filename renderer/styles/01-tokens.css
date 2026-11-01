@@ -116,6 +116,33 @@
   --focus-ring: var(--ring);
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
+
+  /* --- Материалы интерфейса --------------------------------------------- */
+  /* Свет и тени материалов выводятся из темы: одна и та же кожа, пергамент
+     и металл по-разному звучат в шести палитрах. */
+  --mat-highlight: color-mix(in srgb, var(--text) 14%, transparent);
+  --mat-shadow: color-mix(in srgb, var(--bg-deep) 72%, transparent);
+  --mat-shadow-soft: color-mix(in srgb, var(--bg-deep) 42%, transparent);
+  --mat-edge: color-mix(in srgb, var(--border-strong) 74%, var(--gold));
+  --mat-stud: color-mix(in srgb, var(--gold) 68%, var(--surface));
+  --mat-leather: color-mix(in srgb, var(--surface) 72%, var(--bg-deep));
+  --mat-leather-2: color-mix(in srgb, var(--surface-2) 76%, var(--bg-deep));
+  /* Дневник бросков — светлая страница на тёмном столе, как вставленный лист. */
+  --mat-paper: #e8d5ad;
+  --mat-paper-ink: #2a1c10;
+  --mat-rule: color-mix(in srgb, #2a1c10 16%, transparent);
+  --mat-texture-desk: none;
+  --mat-texture-surface: none;
+  --mat-texture-button: linear-gradient(180deg, color-mix(in srgb, var(--text) 9%, transparent), transparent 42%, color-mix(in srgb, var(--bg-deep) 20%, transparent));
+  /* Металл акцентной кнопки: узкий блик сверху, дальше металл темнеет к
+     нижней кромке. Белый цвет только в блике, иначе кнопка становится
+     пастельной и текст на ней теряет контраст. */
+  --mat-texture-accent: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 84%, #fff) 0 8%,
+    color-mix(in srgb, var(--accent) 88%, #000) 34%,
+    color-mix(in srgb, var(--accent) 68%, #000) 74%,
+    color-mix(in srgb, var(--accent) 52%, #000) 100%);
+  --mat-texture-size: auto;
 }
 
 /*
@@ -270,17 +297,20 @@
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 10px 30px var(--shadow-press);
-  /* Основной шрифт: книжная антиква — интерфейс читается как рукопись,
-     а не как оконный диалог. Шрифт системный (Constantia/Georgia есть в
-     Windows), чтобы не тащить файл и не зависеть от загрузки. */
-  --font: Constantia, "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  /* Заголовочный шрифт: тонкая антиква в духе надписи на старинной книге.
-     Лежит рядом с интерфейсом (renderer/fonts) и содержит кириллицу,
-     поэтому русские заголовки набираются той же гарнитурой. */
-  --font-title: "Cormorant", Constantia, "Palatino Linotype", Georgia, serif;
+  /* Основной шрифт: читаемая антиква с кириллицей. Lora лежит рядом с
+     интерфейсом, поэтому одинаково выглядит на Windows и Linux. */
+  --font: "Lora", Constantia, "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  /* Заголовочный шрифт: Cinzel для латиницы и цифр, Cormorant для кириллицы.
+     Cinzel не содержит русских букв, поэтому стек сознательно составной. */
+  --font-title: "Cinzel", "Cormorant", Constantia, "Palatino Linotype", Georgia, serif;
   /* Числа: та же антиква, но цифры в ней старшего покроя — кубик и
      характеристика выглядят как вписанные в лист от руки. */
-  --font-num: "Cormorant", Constantia, Georgia, serif;
+  --font-num: "Cinzel", "Cormorant", Constantia, Georgia, serif;
+  /* Рукописный шрифт для дневника бросков: только в атмосферном режиме. */
+  --font-hand: "Marck Script", "Cormorant", cursive;
+  /* Декоративный шрифт для коротких латинских надписей: монограмма D&D и
+     грани кубиков. Кириллицы в нём нет, поэтому в заголовки он не годится. */
+  --font-fantasy: "MedievalSharp", "Cinzel", serif;
   /* Характер заголовков: тема меняет начертание и разрядку, а не
      сам шрифт. Так все темы звучат по-разному, но читаются одинаково. */
   --title-weight: 600;
@@ -333,17 +363,20 @@
   --radius-sm: 8px;
   --title-glow: none;
   --title-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
-  /* Основной шрифт: книжная антиква — интерфейс читается как рукопись,
-     а не как оконный диалог. Шрифт системный (Constantia/Georgia есть в
-     Windows), чтобы не тащить файл и не зависеть от загрузки. */
-  --font: Constantia, "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  /* Заголовочный шрифт: тонкая антиква в духе надписи на старинной книге.
-     Лежит рядом с интерфейсом (renderer/fonts) и содержит кириллицу,
-     поэтому русские заголовки набираются той же гарнитурой. */
-  --font-title: "Cormorant", Constantia, "Palatino Linotype", Georgia, serif;
+  /* Основной шрифт: читаемая антиква с кириллицей. Lora лежит рядом с
+     интерфейсом, поэтому одинаково выглядит на Windows и Linux. */
+  --font: "Lora", Constantia, "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  /* Заголовочный шрифт: Cinzel для латиницы и цифр, Cormorant для кириллицы.
+     Cinzel не содержит русских букв, поэтому стек сознательно составной. */
+  --font-title: "Cinzel", "Cormorant", Constantia, "Palatino Linotype", Georgia, serif;
   /* Числа: та же антиква, но цифры в ней старшего покроя — кубик и
      характеристика выглядят как вписанные в лист от руки. */
-  --font-num: "Cormorant", Constantia, Georgia, serif;
+  --font-num: "Cinzel", "Cormorant", Constantia, Georgia, serif;
+  /* Рукописный шрифт для дневника бросков: только в атмосферном режиме. */
+  --font-hand: "Marck Script", "Cormorant", cursive;
+  /* Декоративный шрифт для коротких латинских надписей: монограмма D&D и
+     грани кубиков. Кириллицы в нём нет, поэтому в заголовки он не годится. */
+  --font-fantasy: "MedievalSharp", "Cinzel", serif;
   /* Характер заголовков: тема меняет начертание и разрядку, а не
      сам шрифт. Так все темы звучат по-разному, но читаются одинаково. */
   --title-weight: 600;

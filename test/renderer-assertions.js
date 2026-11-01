@@ -361,7 +361,7 @@
       assert(roll.result >= 1 && roll.result <= 20, `результат броска: ${roll.result}`);
       assert(roll.playerName === 'Артём', 'в броске нет имени игрока');
       assert(train.chat.some((message) => message.text === 'Проверка связи'), 'сообщение чата не прошло');
-      assert(train.chat.some((message) => message.isRoll), 'бросок не попал в чат');
+      assert(!train.chat.some((message) => message.isRoll), 'бросок попал в чат');
       assert(train.errors.length === 1, `неизвестное действие должно ругаться: ${train.errors.join(' | ')}`);
     });
     check('тренировочный стол считает формулы тем же модулем, что и сервер', () => {
@@ -370,8 +370,8 @@
       assert(formula.values.length === 2, `бросков: ${formula.values.length}`);
       const sum = formula.values.reduce((acc, value) => acc + value, 0);
       assert(formula.result === sum + 3, `итог ${formula.result} не равен сумме костей и модулю`);
-      assert(train.chat.some((message) => message.isRoll && message.text.includes('2d6+3')),
-        'формульный бросок не попал в чат');
+      assert(!train.chat.some((message) => message.isRoll && message.text.includes('2d6+3')),
+        'формульный бросок попал в чат');
     });
     trainTable.disconnect();
 

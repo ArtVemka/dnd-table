@@ -24,7 +24,11 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 
 /** Семейство: какие подмножества и начертания забираем. */
 const FAMILIES = [
-  { css: 'Cormorant:wght@500;600;700', label: 'cormorant' }
+  { css: 'Cormorant:wght@500;600;700', label: 'cormorant' },
+  { css: 'Cinzel:wght@500;600;700', label: 'cinzel' },
+  { css: 'MedievalSharp', label: 'medievalsharp' },
+  { css: 'Lora:wght@400;500;600', label: 'lora' },
+  { css: 'Marck+Script', label: 'marck' }
 ];
 
 /** Подмножества, которые берём. Вьетнамский не нужен: этих букв в игре нет. */

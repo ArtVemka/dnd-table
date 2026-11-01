@@ -1016,7 +1016,7 @@ let chosenSheetId = null;
     if (app.role !== 'dm' || app.training) return;
     const answer = await modal({
       title: 'Очистить чат?',
-      message: 'Все сообщения и броски исчезнут из ленты у всех участников. Картинки из чата удалятся вместе с ними при следующем сохранении.',
+      message: 'Все сообщения исчезнут из ленты у всех участников. Картинки из чата удалятся вместе с ними при следующем сохранении.',
       confirmLabel: 'Очистить',
       danger: true
     });
@@ -1025,7 +1025,7 @@ let chosenSheetId = null;
 
   /** Правка сообщения: только мастер, только текст, служебные строки не трогаем. */
   async function editChatMessage(message) {
-    if (!message || app.role !== 'dm' || app.training || message.system || message.isRoll) return;
+    if (!message || app.role !== 'dm' || app.training || message.system) return;
     const answer = await modal({
       title: 'Изменить сообщение',
       fields: [{
@@ -1065,6 +1065,8 @@ let chosenSheetId = null;
       maps: normalizeMapSlots(state.maps),
       activeMap: state.activeMap || null,
       activeMapId: state.activeMapId || null,
+      // Сцены приходят только мастеру; у игрока список пуст.
+      scenes: state.scenes || [],
       grid: state.grid || { enabled: false, cell: DnD.GRID.defaultCell, columns: 0 },
       // Часы стола: старые кампании приходят без поля, и стол начинает с утра.
       gameTime: state.gameTime || { day: 1, hour: 8 },
@@ -1413,6 +1415,19 @@ let chosenSheetId = null;
       syncReactionPrompts(state.reactions);
       renderAll();
       updateConnBadge(true);
+    });
+
+    // Сцены подготовки поля: список видит только мастер, после загрузки его
+    // клиент переключается на карту сцены.
+    socket.on('scenesUpdated', (scenes) => {
+      app.room.scenes = Array.isArray(scenes) ? scenes : [];
+      refreshScenesModal();
+    });
+
+    socket.on('sceneLoaded', ({ mapType, show } = {}) => {
+      if (mapView && mapType) mapView.showMap(mapType);
+      closeScenesModal();
+      toast(show ? 'Сцена показана игрокам' : 'Сцена открыта для подготовки', 'ok');
     });
 
     // Записи журнала приходят только мастеру. Окно журнала в отдельной вкладке
@@ -2248,28 +2263,8 @@ let chosenSheetId = null;
           });
           if (answer) emit('moveAllTokensToActiveMap', {});
         },
-        // Снимок и восстановление сцены: раскладка всех фишек одним кликом.
-        onCreateSceneSnapshot: () => {
-          if (app.training) return;
-          emit('setSceneSnapshot', {}, (result) => {
-            if (!result || !result.ok) return toast((result && result.error) || 'Снимок не удался', 'error');
-            toast(`Снимок сделан: ${result.count} фишек`);
-          });
-        },
-        onRestoreSceneSnapshot: async () => {
-          if (app.training) return;
-          const answer = await modal({
-            title: 'Вернуть снимок сцены?',
-            message: 'Фишки вернутся на места из последнего снимка. Откат — Ctrl+Z.',
-            confirmLabel: 'Вернуть'
-          });
-          if (answer) {
-            emit('restoreSceneSnapshot', {}, (result) => {
-              if (!result || !result.ok) return toast((result && result.error) || 'Восстановление не удалось', 'error');
-              toast(`Сцена восстановлена: ${result.count} фишек`);
-            });
-          }
-        },
+        // Сцены подготовки поля: список именованных полей одним окном.
+        onOpenScenes: () => openScenes(),
         activeMapInfo: () => ({ activeMap: app.room.activeMap, activeMapId: app.room.activeMapId }),
         onSetTokenImage: async (tokenId, file) => {
           const result = await readImageFile(file);
@@ -5974,6 +5969,239 @@ let chosenSheetId = null;
    * Окно настроек — одно и то же на главном экране и за столом.
    * Здесь же будет выбор языка, когда в приложении появится второй.
    */
+  /* ------------------------------------------------------------------ *
+   * Сцены подготовки поля
+   * ------------------------------------------------------------------ */
+
+  let scenesOverlay = null;
+  let scenesBody = null;
+  let scenesCleanup = null;
+
+  /** Список сцен мастера; приходит только ему. */
+  function scenesList() {
+    return Array.isArray(app.room && app.room.scenes) ? app.room.scenes : [];
+  }
+
+  /** Закрывает окно сцен, если оно открыто. */
+  function closeScenesModal() {
+    if (scenesCleanup) {
+      const cleanup = scenesCleanup;
+      scenesCleanup = null;
+      cleanup();
+    }
+    if (scenesOverlay) {
+      scenesOverlay.remove();
+      scenesOverlay = null;
+    }
+    scenesBody = null;
+  }
+
+  /** Перерисовывает список после ответа сервера. */
+  function refreshScenesModal() {
+    if (scenesOverlay && scenesBody) renderScenesBody(scenesBody);
+  }
+
+  /** Короткий вызов события сцены с общим разбором ошибки. */
+  function sceneAction(event, payload, success) {
+    emit(event, payload, (result) => {
+      if (!result || !result.ok) {
+        toast((result && result.error) || 'Не удалось выполнить действие', 'error');
+        return;
+      }
+      if (success) toast(success, 'ok');
+    });
+  }
+
+  /**
+   * Окно сцен: сохранить текущее поле, открыть готовое, показать игрокам.
+   * Список приходит только мастеру и обновляется событием `scenesUpdated`.
+   */
+  function openScenes() {
+    if (app.role !== 'dm' || app.training || !app.connected) {
+      toast('Сцены доступны мастеру за столом', 'error');
+      return;
+    }
+    closeScenesModal();
+    const overlay = el('div', 'modal-overlay');
+    overlay.id = 'scenes-overlay';
+    const box = el('div', 'modal modal--scenes');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Сцены');
+    const release = trapFocus(box);
+    const close = () => closeScenesModal();
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        // Если сверху открыт подтверждающий диалог, Escape закрывает его,
+        // а окно сцен должно остаться.
+        if (document.querySelectorAll('.modal-overlay').length > 1) return;
+        event.preventDefault();
+        close();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    scenesCleanup = () => {
+      document.removeEventListener('keydown', onKey);
+      release();
+    };
+    overlay.addEventListener('pointerdown', (event) => {
+      if (event.target === overlay) close();
+    });
+
+    const head = el('div', 'scenes__head');
+    head.appendChild(el('div', 'modal__title', 'Сцены'));
+    const closeButton = el('button', 'btn btn--ghost btn--tiny', '✕');
+    closeButton.type = 'button';
+    closeButton.title = 'Закрыть';
+    closeButton.setAttribute('aria-label', 'Закрыть сцены');
+    closeButton.addEventListener('click', close);
+    head.appendChild(closeButton);
+    box.appendChild(head);
+
+    scenesBody = el('div', 'scenes__body');
+    box.appendChild(scenesBody);
+    renderScenesBody(scenesBody);
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    scenesOverlay = overlay;
+    closeButton.focus();
+  }
+
+  /** Содержимое окна сцен: сохранение и карточки. */
+  function renderScenesBody(root) {
+    root.innerHTML = '';
+    const type = mapView && mapView.viewedMap;
+    const currentMap = type && mapView ? mapView.mapOf(type) : null;
+
+    const form = el('form', 'scenes__save');
+    const input = el('input', 'input scenes__name');
+    input.type = 'text';
+    input.maxLength = 60;
+    input.placeholder = currentMap ? `Название сцены (${currentMap.name})` : 'Сначала откройте карту';
+    input.setAttribute('aria-label', 'Название сцены');
+    const save = el('button', 'btn btn--accent', 'Сохранить текущее поле');
+    save.type = 'submit';
+    save.disabled = !currentMap;
+    save.title = currentMap
+      ? 'Запомнить карту, туман, свет, стены, поверхность, шаблоны, сетку и фишки'
+      : 'Нужна открытая карта';
+    form.appendChild(input);
+    form.appendChild(save);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!currentMap) return toast('Сначала откройте карту на столе', 'error');
+      const name = input.value.trim() || currentMap.name || 'Сцена';
+      sceneAction('saveScene', { name, mapType: type, mapId: currentMap.id }, 'Сцена сохранена');
+      input.value = '';
+    });
+    root.appendChild(form);
+    root.appendChild(el('div', 'scenes__hint',
+      'Сцена хранит карту, туман, свет, стены, поверхность, шаблоны, сетку и фишки. '
+      + 'Листы, чат и порядок боя в неё не входят.'));
+
+    const list = el('div', 'scenes__list');
+    const scenes = scenesList();
+    if (!scenes.length) {
+      list.appendChild(el('div', 'scenes__empty',
+        'Сцен пока нет. Загрузите карту, расставьте фишки, туман и свет, затем сохраните поле.'));
+    } else {
+      for (const scene of scenes) list.appendChild(sceneCard(scene));
+    }
+    root.appendChild(list);
+  }
+
+  /** Карточка одной сцены с действиями мастера. */
+  function sceneCard(scene) {
+    const card = el('div', 'scene-card');
+    if (scene.mapUrl) {
+      const thumb = el('img', 'scene-card__thumb');
+      thumb.src = scene.mapUrl;
+      thumb.alt = '';
+      thumb.loading = 'lazy';
+      thumb.addEventListener('error', () => thumb.classList.add('is-broken'));
+      card.appendChild(thumb);
+    } else {
+      card.appendChild(el('div', 'scene-card__thumb scene-card__thumb--empty', 'Без карты'));
+    }
+
+    const body = el('div', 'scene-card__body');
+    const nameRow = el('div', 'scene-card__name-row');
+    nameRow.appendChild(el('div', 'scene-card__name', scene.name));
+    nameRow.appendChild(el('span',
+      `scene-card__badge ${scene.published ? 'is-shown' : 'is-draft'}`,
+      scene.published ? 'показана игрокам' : 'черновик'));
+    body.appendChild(nameRow);
+    body.appendChild(el('div', 'scene-card__meta',
+      `${scene.mapName || 'Карта'} · фишек: ${scene.tokenCount} · ${formatDateTime(scene.updatedAt)}`));
+
+    const actions = el('div', 'scene-card__actions');
+    const add = (label, title, onClick, primary) => {
+      const button = el('button', `btn btn--tiny ${primary ? 'btn--accent' : 'btn--ghost'}`, label);
+      button.type = 'button';
+      button.title = title;
+      button.addEventListener('click', onClick);
+      actions.appendChild(button);
+      return button;
+    };
+    add('Открыть', 'Показать сцену мастеру, игроки останутся на прежней карте', async () => {
+      if (scene.published) {
+        const answer = await modal({
+          title: 'Открыть показанную сцену?',
+          message: 'Эта карта уже видна игрокам. Открытие сразу изменит поле у всех. '
+            + 'Для тихой подготовки загрузите карту как черновик.',
+          confirmLabel: 'Открыть'
+        });
+        if (!answer) return;
+      }
+      sceneAction('loadScene', { sceneId: scene.id, show: false });
+    }, true);
+    add('Показать игрокам', 'Загрузить сцену и открыть её всем участникам', () => {
+      sceneAction('loadScene', { sceneId: scene.id, show: true });
+    });
+    add('Обновить', 'Перезаписать сцену текущим состоянием её карты', async () => {
+      const answer = await modal({
+        title: 'Обновить сцену?',
+        message: `Сцена «${scene.name}» будет перезаписана текущим состоянием карты.`,
+        confirmLabel: 'Обновить'
+      });
+      if (!answer) return;
+      sceneAction('saveScene', {
+        sceneId: scene.id,
+        name: scene.name,
+        mapType: scene.mapType,
+        mapId: scene.mapId
+      }, 'Сцена обновлена');
+    });
+    add('Переименовать', 'Изменить имя сцены', async () => {
+      const name = await modal({
+        title: 'Имя сцены',
+        message: 'Как называть это поле в списке.',
+        input: { placeholder: scene.name, maxLength: 60 },
+        confirmLabel: 'Сохранить'
+      });
+      if (name === null) return;
+      const clean = String(name || '').trim();
+      if (!clean) return toast('Пустое имя сцены', 'error');
+      sceneAction('renameScene', { sceneId: scene.id, name: clean }, 'Сцена переименована');
+    });
+    add('Копировать', 'Сделать копию сцены', () => {
+      sceneAction('duplicateScene', { sceneId: scene.id }, 'Сцена скопирована');
+    });
+    add('Удалить', 'Удалить сцену, карта и фишки останутся на столе', async () => {
+      const answer = await modal({
+        title: 'Удалить сцену?',
+        message: `Сцена «${scene.name}» исчезнет из списка. Сама карта и фишки останутся.`,
+        confirmLabel: 'Удалить'
+      });
+      if (answer) sceneAction('deleteScene', { sceneId: scene.id }, 'Сцена удалена');
+    });
+
+    body.appendChild(actions);
+    card.appendChild(body);
+    return card;
+  }
+
   function openSettings() {
     const overlay = el('div', 'modal-overlay');
     const box = el('div', 'modal modal--settings');
